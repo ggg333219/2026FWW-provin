@@ -1,0 +1,62 @@
+# Logs
+logs/
+*.log
+*.err.log
+
+# Node & Frontend
+node_modules/
+dist/
+.vite/
+.playwright-mcp/
+.playwright-*/
+
+# Python environment
+venv/
+.venv/
+env/
+ai_engine/__pycache__
+ai_engine/debug_output/
+ai_engine/tests/mocks/_tmp_*
+*.py[cod]
+.pytest_cache/
+*.pyc
+
+# Go & Binaries
+backend/main
+backend/api/main
+backend/student-server
+backend/teacher-server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Project Specific
+scripts/pids.json
+tmp/
+uploads/
+
+# Config files
+.env
+.env.local
+backend/.env
+backend/.env.local
+backend/config/config.yaml
+backend/config/config.local.yaml
+!backend/config/config.yaml.example
+!backend/config/config.local.yaml.example
+!backend/.env.example
+!backend/.env.local.example
+
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.sublime-workspace
+.deepseek/
+.agents
+docs-selected/
+projects/
