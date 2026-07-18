@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(npx @larksuite/cli@latest --help)",
+      "Bash(npx *)",
+      "Bash(python3 -m pytest tests/test_core.py -v)",
+      "Bash(pip uninstall *)",
+      "Bash(python3 -c \"import fitz; print\\(fitz.__version__\\)\")",
+      "Bash(PYTHONPATH=/mnt/d/Desktop/FuWuWaiBao/ai_engine python3 -m pytest ai_engine/tests/test_core.py -v)",
+      "Bash(pip install *)",
+      "Bash(PYTHONPATH=/mnt/d/Desktop/FuWuWaiBao/ai_engine python3 -m pytest /mnt/d/Desktop/FuWuWaiBao/ai_engine/tests/test_core.py -v)",
+      "Bash(PYTHONPATH=/mnt/d/Desktop/FuWuWaiBao python3 -m pytest ai_engine/tests/test_core.py -v)",
+      "Bash(python3 *)"
+    ],
+    "defaultMode": "bypassPermissions"
+  }
+}
