@@ -1,0 +1,36 @@
+graph TD
+    subgraph "泛雅平台 (宿主)"
+        direction TB
+        Frontend[Vue3 前端 - ai-vue-frontend]
+    end
+
+    subgraph "业务中枢层 (Go - 8C16G)"
+        direction TB
+        API_GW[Go API Gateway]
+        SessionMgr[Redis 状态机/Session]
+        TaskQueue[Redis 异步任务队列]
+        OSS[MinIO 对象存储]
+        DB[(MySQL/Postgres)]
+    end
+
+    subgraph "AI 算力编排层 (Python - Worker)"
+        direction TB
+        Orchestrator[Python AI Engine]
+        VectorStore[(FAISS/LanceDB 轻量向量库)]
+        PromptEngine[Prompt 模板管理]
+    end
+
+    subgraph "外部 AI 资源 (商业 API)"
+        VisionLLM[视觉模型 API - 版面解析/公式]
+        TextLLM[文本大模型 API - 答疑/脚本生成]
+        ASR_TTS[语音转文字/合成 API]
+    end
+
+    %% 交互流图
+    Frontend -- "1. 上传/提问 (SSE流)" --> API_GW
+    API_GW -- "2. 读写上下文/锁定" --> SessionMgr
+    API_GW -- "3. 下发任务/RPC" --> Orchestrator
+    Orchestrator -- "4. 多模态解析/生成" --> VisionLLM
+    Orchestrator -- "5. 知识检索与答疑" --> TextLLM
+    Orchestrator -- "6. 向量存储" --> VectorStore
+    API_GW -- "7. 文件存取" --> OSS

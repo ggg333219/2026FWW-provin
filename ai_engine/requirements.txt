@@ -1,0 +1,8 @@
+PyMuPDF==1.27.1
+python-pptx==1.0.2
+openai==1.109.1
+fastapi==0.134.0
+uvicorn==0.41.0
+python-multipart==0.0.22
+aiofiles==25.1.0
+python-dotenv==1.1.1

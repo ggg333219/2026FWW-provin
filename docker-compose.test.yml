@@ -1,0 +1,141 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: teaching-test-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-teaching_test}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    ports:
+      - "${POSTGRES_PORT:-25432}:5432"
+    volumes:
+      - postgres-test-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: teaching-test-redis
+    ports:
+      - "${REDIS_PORT:-26379}:6379"
+    volumes:
+      - redis-test-data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio
+    container_name: teaching-test-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-29000}:9000"
+      - "${MINIO_CONSOLE_PORT:-29001}:9001"
+    volumes:
+      - minio-test-data:/data
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+
+  minio-init:
+    image: minio/mc
+    container_name: teaching-test-minio-init
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-teaching-test}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+          sleep 1
+        done
+        mc mb --ignore-existing local/"$$MINIO_BUCKET" >/dev/null 2>&1 || true
+        mc anonymous set download local/"$$MINIO_BUCKET" >/dev/null 2>&1 || true
+    restart: "no"
+
+  ai-engine:
+    build:
+      context: ./ai_engine
+      dockerfile: Dockerfile
+    container_name: teaching-test-ai-engine
+    environment:
+      AI_GEN_MODE: ${AI_GEN_MODE:-mock}
+      AI_BASE_URL: ${AI_BASE_URL:-http://ai-engine:8000}
+      AI_PUBLIC_BASE_URL: http://localhost:${AI_ENGINE_PORT:-28000}
+      PYTHONUNBUFFERED: 1
+    ports:
+      - "${AI_ENGINE_PORT:-28000}:8000"
+    volumes:
+      - ai-engine-test-data:/app/uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.api
+    container_name: teaching-test-backend
+    environment:
+      GIN_MODE: release
+      SERVER_PORT: 18080
+      SERVER_MODE: release
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+      DB_NAME: ${POSTGRES_DB:-teaching_test}
+      DB_SSLMODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: 0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-teaching-test}
+      MINIO_USE_SSL: false
+      AI_ENGINE_BASE_URL: http://ai-engine:8000
+      AI_BASE_URL: http://ai-engine:8000
+      AI_GEN_MODE: ${AI_GEN_MODE:-mock}
+    ports:
+      - "${BACKEND_PORT:-28080}:18080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      ai-engine:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:18080/health >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-test-data:
+  redis-test-data:
+  minio-test-data:
+  ai-engine-test-data:

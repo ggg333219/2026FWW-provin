@@ -1,0 +1,42 @@
+# 依赖
+vendor/
+go.sum
+
+# 编译输出
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 日志
+logs/
+*.log
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+test.json
+
+# 配置文件（敏感信息，不要提交）
+config/config.yaml
+!config/config.example.yaml
+
+# 上传的文件
+uploads/
+*.pdf
+*.pptx
+*.ppt
+
+# 二进制文件
+smart-teaching-backend

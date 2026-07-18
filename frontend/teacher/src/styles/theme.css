@@ -1,0 +1,30 @@
+:root {
+  --bg-page: #F4F7F7;
+  --bg-card: #ffffff;
+  --text-main: #1f2a37;
+  --text-sub: #64748b;
+  --primary: #2F605A;
+  --primary-soft: #E8F0EF;
+  --success: #2F605A;
+  --danger: #dc2626;
+  --border: #e2e8f0;
+  --shadow-soft: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  font-family: 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: var(--text-main);
+  background: var(--bg-page);
+}
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+}

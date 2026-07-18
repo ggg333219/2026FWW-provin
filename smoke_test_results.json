@@ -1,0 +1,186 @@
+{
+  "meta": {
+    "backend": "http://127.0.0.1:8082",
+    "ai": "http://127.0.0.1:8000",
+    "file": "index.html",
+    "ts": 1779845815397
+  },
+  "steps": [
+    {
+      "name": "upload",
+      "ok": true,
+      "duration_ms": 53,
+      "status_code": 200,
+      "body": {
+        "code": 200,
+        "data": {
+          "id": "f6125e4e-490d-40d9-9ccd-07f994bed7dc",
+          "created_at": "2026-05-27T01:36:55.407701852Z",
+          "updated_at": "2026-05-27T01:36:55.444801857Z",
+          "title": "index.html",
+          "file_url": "http://teaching-minio:9000/teaching/courses/f6125e4e-490d-40d9-9ccd-07f994bed7dc/index.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=minioadmin%2F20260527%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260527T013655Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=bddb7fcb09e612477d545ac0ab6848957ac2374f729182db73ff5958ec06007f",
+          "file_type": "html",
+          "total_page": 1,
+          "teaching_course_id": "",
+          "teaching_course_title": "",
+          "course_class_id": "",
+          "course_class_name": "",
+          "is_published": false,
+          "publish_scope": "all"
+        },
+        "message": "上传成功"
+      }
+    },
+    {
+      "name": "generate_script",
+      "ok": true,
+      "duration_ms": 10478,
+      "status_code": 200,
+      "body": {
+        "code": 200,
+        "data": {
+          "content": "同学们，今天我们要讨论的是课件解析服务的问题。首先，我要告诉大家一个消息，目前我们的课件解析服务暂时是不可用的，也就是说，我们无法通过这个服务来解析课件内容。现在我们所看到的是一种占位预览，它只是提供了一个基本的框架，并不能真正展示课件的具体内容。这可能会给大家的学习带来一些不便，但请大家不要担心，我们正在努力解决这个问题。一旦解析服务恢复正常，我们就能更方便地获取课件信息。现在，请大家专注于手头的资料，我们可以通过其他方式来学习今天的课程内容。最后，我想强调的是，虽然课件解析服务暂时不可用，但我们的学习进程不会因此受到影响，希望大家保持积极的学习态度。",
+          "courseId": "f6125e4e-490d-40d9-9ccd-07f994bed7dc",
+          "mindmapMarkdown": "- 课件解析服务暂不可用\n  - 当前为占位预览\n  - 学习进程可能受到影响\n  - 需要保持积极学习态度",
+          "pageNum": 1
+        }
+      }
+    },
+    {
+      "name": "generate_audio",
+      "ok": true,
+      "duration_ms": 4,
+      "status_code": 400,
+      "body": {
+        "code": 400,
+        "message": "当前页暂无可生成音频的教学节点"
+      }
+    },
+    {
+      "name": "put_nodes",
+      "ok": true,
+      "duration_ms": 10,
+      "status_code": 200,
+      "body": {
+        "code": 200,
+        "data": {
+          "content": "同学们，今天我们要讨论的是课件解析服务的问题。首先，我要告诉大家一个消息，目前我们的课件解析服务暂时是不可用的，也就是说，我们无法通过这个服务来解析课件内容。现在我们所看到的是一种占位预览，它只是提供了一个基本的框架，并不能真正展示课件的具体内容。这可能会给大家的学习带来一些不便，但请大家不要担心，我们正在努力解决这个问题。一旦解析服务恢复正常，我们就能更方便地获取课件信息。现在，请大家专注于手头的资料，我们可以通过其他方式来学习今天的课程内容。最后，我想强调的是，虽然课件解析服务暂时不可用，但我们的学习进程不会因此受到影响，希望大家保持积极的学习态度。",
+          "courseId": "f6125e4e-490d-40d9-9ccd-07f994bed7dc",
+          "mappingCoverage": {
+            "coverageRate": 1,
+            "coveredNodes": 1,
+            "totalNodes": 1,
+            "uncoveredNodeIds": []
+          },
+          "nodes": [
+            {
+              "estimatedDuration": 30,
+              "id": "e1d52ec6-7347-4360-9030-89bbe8d0d858",
+              "knowledgeNodes": [
+                {
+                  "coverage_span": [
+                    "s1_1"
+                  ],
+                  "level": 1,
+                  "node_id": "p1_n1",
+                  "prerequisites": [],
+                  "tags": [],
+                  "title": "知识点 1"
+                }
+              ],
+              "knowledgeNodesJson": "[{\"coverage_span\":[\"s1_1\"],\"level\":1,\"node_id\":\"p1_n1\",\"prerequisites\":[],\"tags\":[],\"title\":\"知识点 1\"}]",
+              "nodeId": "p1_n1",
+              "page": 1,
+              "reteachScript": "",
+              "schemaVersion": 2,
+              "scriptSegments": [
+                {
+                  "end_sec": 30,
+                  "node_ids": [
+                    "p1_n1"
+                  ],
+                  "segment_id": "s1_1",
+                  "start_sec": 0,
+                  "text": "同学们，今天我们要讨论的是课件解析服务的问题。首先，我要告诉大家一个消息，目前我们的课件解析服务暂时是不可用的，也就是说，我们无法通过这个服务来解析课件内容。现在我们所看到的是一种占位预览，它只是提供了一个基本的框架，并不能真正展示课件的具体内容。这可能会给大家的学习带来一些不便，但请大家不要担心，我们正在努力解决这个问题。一旦解析服务恢复正常，我们就能更方便地获取课件信息。现在，请大家专注于手头的资料，我们可以通过其他方式来学习今天的课程内容。最后，我想强调的是，虽然课件解析服务暂时不可用，但我们的学习进程不会因此受到影响，希望大家保持积极的学习态度。"
+                }
+              ],
+              "scriptSegmentsJson": "[{\"end_sec\":30,\"node_ids\":[\"p1_n1\"],\"segment_id\":\"s1_1\",\"start_sec\":0,\"text\":\"同学们，今天我们要讨论的是课件解析服务的问题。首先，我要告诉大家一个消息，目前我们的课件解析服务暂时是不可用的，也就是说，我们无法通过这个服务来解析课件内容。现在我们所看到的是一种占位预览，它只是提供了一个基本的框架，并不能真正展示课件的具体内容。这可能会给大家的学习带来一些不便，但请大家不要担心，我们正在努力解决这个问题。一旦解析服务恢复正常，我们就能更方便地获取课件信息。现在，请大家专注于手头的资料，我们可以通过其他方式来学习今天的课程内容。最后，我想强调的是，虽然课件解析服务暂时不可用，但我们的学习进程不会因此受到影响，希望大家保持积极的学习态度。\"}]",
+              "scriptText": "同学们，今天我们要讨论的是课件解析服务的问题。首先，我要告诉大家一个消息，目前我们的课件解析服务暂时是不可用的，也就是说，我们无法通过这个服务来解析课件内容。现在我们所看到的是一种占位预览，它只是提供了一个基本的框架，并不能真正展示课件的具体内容。这可能会给大家的学习带来一些不便，但请大家不要担心，我们正在努力解决这个问题。一旦解析服务恢复正常，我们就能更方便地获取课件信息。现在，请大家专注于手头的资料，我们可以通过其他方式来学习今天的课程内容。最后，我想强调的是，虽然课件解析服务暂时不可用，但我们的学习进程不会因此受到影响，希望大家保持积极的学习态度。",
+              "sortOrder": 1,
+              "structuredMarkdown": "",
+              "summary": "",
+              "title": "段落 1",
+              "transitionText": "",
+              "type": "opening"
+            }
+          ],
+          "pageNum": 1
+        },
+        "message": "保存成功"
+      }
+    },
+    {
+      "name": "generate_audio_retry",
+      "ok": true,
+      "duration_ms": 71,
+      "status_code": 200,
+      "body": {
+        "code": 200,
+        "data": {
+          "audio_id": "audio_f6125e4e-490d-40d9-9ccd-07f994bed7dc_1",
+          "audio_url": "",
+          "course_id": "f6125e4e-490d-40d9-9ccd-07f994bed7dc",
+          "format": "wav",
+          "generated_at": "2026-05-27T01:37:05.996201Z",
+          "has_audio": true,
+          "page": 1,
+          "playback_mode": "audio_timeline",
+          "provider": "mock-tts",
+          "sections": [
+            {
+              "audio_duration_sec": 30,
+              "audio_end_sec": 30,
+              "audio_start_sec": 0,
+              "audio_url": "http://127.0.0.1:8000/generated-audio/f6125e4e-490d-40d9-9ccd-07f994bed7dc_p1_01_4c06b623.wav",
+              "duration_sec": 30,
+              "end_sec": 30,
+              "has_audio": true,
+              "node_id": "p1_n1",
+              "start_sec": 0,
+              "text": "同学们，今天我们要讨论的是课件解析服务的问题。首先，我要告诉大家一个消息，目前我们的课件解析服务暂时是不可用的，也就是说，我们无法通过这个服务来解析课件内容。现在我们所看到的是一种占位预览，它只是提供了一个基本的框架，并不能真正展示课件的具体内容。这可能会给大家的学习带来一些不便，但请大家不要担心，我们正在努力解决这个问题。一旦解析服务恢复正常，我们就能更方便地获取课件信息。现在，请大家专注于手头的资料，我们可以通过其他方式来学习今天的课程内容。最后，我想强调的是，虽然课件解析服务暂时不可用，但我们的学习进程不会因此受到影响，希望大家保持积极的学习态度。",
+              "title": "段落 1",
+              "tts_status": "ready"
+            }
+          ],
+          "status": "ready",
+          "total_duration_sec": 30,
+          "voice_type": "standard_female"
+        },
+        "message": "音频元数据已生成"
+      }
+    },
+    {
+      "name": "ai_ask_with_context",
+      "ok": true,
+      "duration_ms": 5156,
+      "status_code": 200,
+      "body": {
+        "question": "请简要说明本页课件的核心教学目标",
+        "source_page": 1,
+        "source_excerpt": "测试上下文：这是一个用于 smoke 测试的上下文示例",
+        "intent": {
+          "need_reteach": true,
+          "understanding_level": "partial",
+          "reason": "llm_prediction"
+        },
+        "answer": "确认学生问题：你希望了解本页课件的核心教学目标是什么。\n\n引导问题：你认为在讲解测试上下文时，哪些内容对于理解其核心教学目标至关重要？\n\n提示或类比：可以类比于烹饪一道菜，核心教学目标就像是菜品的最终口味，而测试上下文则是烹饪过程中的各种配料和步骤。\n\n问题：那么，你认为这些配料和步骤如何共同作用，形成了我们想要的核心教学目标呢？",
+        "used_fallback": false,
+        "fallback_reason": "",
+        "resume_page": 1,
+        "resume_node_id": "p1_n1",
+        "resume_sec": 5,
+        "follow_up_suggestion": "我可以：1) 用更生活化的例子重新解释；2) 按步骤分解并配上简短练习；3) 给出一个可操作的小实验/图示帮助理解。你想先听哪个？"
+      }
+    }
+  ]
+}

@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>泛雅 AI 智课 — 服创大赛 A12</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+--bg:#F1F4F8;--card:#fff;--sf:#EEF2FB;
+--B:#1E6FE0;--Bb:rgba(30,111,224,.08);--Bd:rgba(30,111,224,.15);
+--P:#7B5BE0;--Pb:rgba(123,91,224,.08);--Pd:rgba(123,91,224,.15);
+--T:#0E8C80;--Tb:rgba(14,140,128,.08);--Td:rgba(14,140,128,.15);
+--R:#E8553C;--Rb:rgba(232,85,60,.08);--Rd:rgba(232,85,60,.15);
+--LT:#17B3A3;
+--t1:#1D2433;--t2:#5A6478;--t3:#9AA3B5;
+--bd:rgba(30,35,51,.06);
+--r:14px;--rs:8px;
+--font:'Noto Sans SC',system-ui,sans-serif;
+--mono:'JetBrains Mono',monospace;
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--t1);font-family:var(--font);-webkit-font-smoothing:antialiased}
+.deck{position:relative;width:100%;height:100%}
+.slide{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;opacity:0;transform:translateX(30px);transition:opacity .5s,transform .5s;pointer-events:none;padding:48px 64px}
+.slide.active{opacity:1;transform:translateX(0);pointer-events:auto}
+.slide.leaving{opacity:0;transform:translateX(-30px)}
+.si{width:100%;max-width:1180px;position:relative}
+
+/* topbar */
+.topbar{position:fixed;top:0;left:0;right:0;height:42px;display:flex;align-items:center;justify-content:space-between;padding:0 36px;z-index:20;background:rgba(241,244,248,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--bd)}
+.topbar-logo{font-size:12px;font-weight:700;letter-spacing:.3px}
+.topbar-nav{display:flex;gap:20px}
+.topbar-nav span{font-size:11px;color:var(--t3);cursor:pointer;font-weight:500;letter-spacing:.3px;transition:color .2s}
+.topbar-nav span.on{color:var(--B);font-weight:600}
+.pbar{position:fixed;top:42px;left:0;height:2px;z-index:20;transition:width .5s,background .5s}
+.pnum{position:fixed;bottom:22px;right:36px;font-family:var(--mono);font-size:11px;color:var(--t3);z-index:20;letter-spacing:2px}
+.ndots{position:fixed;right:22px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:7px;z-index:20}
+.nd{width:7px;height:7px;border-radius:50%;background:var(--t3);opacity:.2;cursor:pointer;transition:all .3s}
+.nd.on{opacity:1;background:var(--B);transform:scale(1.4)}
+.khint{position:fixed;bottom:22px;left:36px;font-family:var(--mono);font-size:10px;color:var(--t3);opacity:.4;z-index:20}
+
+/* anim */
+.slide.active .a{animation:fi .5s ease both}
+.slide.active .d1{animation-delay:.03s}.slide.active .d2{animation-delay:.08s}.slide.active .d3{animation-delay:.13s}.slide.active .d4{animation-delay:.18s}.slide.active .d5{animation-delay:.23s}.slide.active .d6{animation-delay:.28s}.slide.active .d7{animation-delay:.33s}.slide.active .d8{animation-delay:.38s}.slide.active .d9{animation-delay:.43s}.slide.active .d10{animation-delay:.48s}
+@keyframes fi{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+.slide.active .lr{animation:sLR .5s ease both}
+@keyframes sLR{from{opacity:0;transform:translateX(-20px)}to{opacity:1;transform:translateX(0)}}
+.slide.active .bu{animation:sU .5s ease both}
+@keyframes sU{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+.slide.active .pop{animation:popI .4s cubic-bezier(.34,1.56,.64,1) both}
+@keyframes popI{from{opacity:0;transform:scale(.85)}to{opacity:1;transform:scale(1)}}
+
+/* typog */
+.stag{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:2px;color:var(--B);margin-bottom:10px}
+.stag::before{content:'';width:18px;height:2px;background:var(--B);border-radius:1px}
+.stit{font-size:36px;font-weight:900;line-height:1.25;margin-bottom:14px}
+.hlb{color:var(--B)}.hlp{color:var(--P)}.hlt{color:var(--T)}.hlr{color:var(--R)}
+.ssub{font-size:14px;line-height:1.7;color:var(--t2);max-width:640px;margin-bottom:22px}
+
+/* blobs */
+.blob{position:absolute;border-radius:50%;filter:blur(80px);pointer-events:none;opacity:.4}
+
+@media(max-width:1100px){.slide{padding:36px 40px}.stit{font-size:28px}}
+@media(max-width:700px){.slide{padding:20px}.stit{font-size:22px}.ndots{display:none}}
+</style>
+</head>
+<body>
+<div class="topbar" id="topBar"><div class="topbar-logo">泛雅 AI 智课</div><div class="topbar-nav" id="topNav"><span data-s="3">项目背景</span><span data-s="5">解决方案</span><span data-s="9">系统实现</span><span data-s="14">项目总结</span></div></div>
+<div class="pbar" id="pbar"></div>
+<div class="deck" id="deck">
+
+<!-- S1: HERO — asymmetric, big type, accent line -->
+<div class="slide active" id="s1">
+<div class="blob" style="width:500px;height:500px;top:-140px;right:-100px;background:rgba(30,111,224,.1)"></div>
+<div class="blob" style="width:380px;height:380px;bottom:-100px;left:-80px;background:rgba(123,91,224,.08)"></div>
+<div class="si" style="max-width:900px">
+<div class="a d1" style="display:inline-flex;align-items:center;gap:8px;padding:6px 16px;border-radius:100px;background:var(--Bb);border:1px solid var(--Bd);font-family:var(--mono);font-size:11px;color:var(--B);margin-bottom:18px">服创大赛 A12 · 智能计算赛道</div>
+<div class="a d2" style="font-size:54px;font-weight:900;line-height:1.1;margin-bottom:8px">泛雅 <span style="background:linear-gradient(135deg,var(--B),var(--P));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">AI 互动</span>智课系统</div>
+<div class="a d3" style="font-size:20px;color:var(--t2);line-height:1.5;margin-bottom:24px">把静态课件变成<span style="color:var(--T);font-weight:600">可讲授 · 可问答 · 可续接</span>的 AI 学习伙伴</div>
+<div class="a d4" style="display:flex;gap:36px;margin-top:16px">
+<div><div style="font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:2px">命题企业</div><div style="font-size:14px;font-weight:600">超星集团</div></div>
+<div><div style="font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:2px">应用场景</div><div style="font-size:14px;font-weight:600">高校通识课自主学习</div></div>
+<div><div style="font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:2px">参赛团队</div><div style="font-size:14px;font-weight:600">DeepCore</div></div>
+</div>
+</div>
+</div>
+
+<!-- S2: OVERVIEW — flow diagram + five-ring -->
+<div class="slide" id="s2">
+<div class="si">
+<div class="a d1"><div class="stag">Overview</div></div>
+<div class="a d2"><h2 class="stit">一份课件，秒变<span class="hlb">会讲课</span>、<span class="hlp">能答疑</span>、<span class="hlt">可续接</span>的智课</h2></div>
+<div class="a d3">
+<div style="display:flex;align-items:center;gap:0;margin:20px 0">
+<div style="flex:1;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--R);text-align:center"><div style="font-size:15px;font-weight:700;color:var(--R)">静态 PPT / PDF 课件</div><div style="font-size:11px;color:var(--t3);margin-top:2px">可看不可讲 · 互动缺失</div></div>
+<div style="padding:0 10px;font-family:var(--mono);font-size:20px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--P);text-align:center"><div style="font-size:15px;font-weight:700;color:var(--P)">AI 引擎</div><div style="font-size:11px;color:var(--t3);margin-top:2px">五环闭环</div></div>
+<div style="padding:0 10px;font-family:var(--mono);font-size:20px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--B);text-align:center"><div style="font-size:15px;font-weight:700;color:var(--B)">AI 互动智课</div><div style="font-size:11px;color:var(--t2);margin-top:2px">结构化讲授 · 上下文问答 · 断点续学</div></div>
+</div>
+</div>
+<!-- Five-ring flow -->
+<div class="a d4" style="margin-bottom:18px">
+<div style="display:flex;align-items:center;gap:0;justify-content:center">
+<div style="padding:6px 14px;border-radius:100px;background:var(--Bb);border:1px solid var(--Bd);font-size:12px;color:var(--B);font-weight:600">课件解析</div>
+<div style="padding:0 6px;font-size:12px;color:var(--t3)">→</div>
+<div style="padding:6px 14px;border-radius:100px;background:var(--Bb);border:1px solid var(--Bd);font-size:12px;color:var(--B);font-weight:600">内容重构</div>
+<div style="padding:0 6px;font-size:12px;color:var(--t3)">→</div>
+<div style="padding:6px 14px;border-radius:100px;background:var(--Bb);border:1px solid var(--Bd);font-size:12px;color:var(--B);font-weight:600">智能讲授</div>
+<div style="padding:0 6px;font-size:12px;color:var(--t3)">→</div>
+<div style="padding:6px 14px;border-radius:100px;background:var(--Bb);border:1px solid var(--Bd);font-size:12px;color:var(--B);font-weight:600">实时问答</div>
+<div style="padding:0 6px;font-size:12px;color:var(--t3)">→</div>
+<div style="padding:6px 14px;border-radius:100px;background:var(--Bb);border:1px solid var(--Bd);font-size:12px;color:var(--B);font-weight:600">进度续接</div>
+<div style="padding:0 10px;font-size:12px;color:var(--LT)">↺</div>
+<div style="padding:6px 14px;border-radius:100px;background:var(--Tb);border:1px solid var(--Td);font-size:12px;color:var(--LT);font-weight:600">学情反馈</div>
+</div>
+</div>
+<div class="a d5" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+<div style="padding:20px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--B)"><div style="font-size:10px;font-family:var(--mono);letter-spacing:1.5px;color:var(--B);font-weight:600;margin-bottom:8px">01</div><div style="font-size:15px;font-weight:700;margin-bottom:4px">上传即生成讲稿</div><div style="font-size:12px;color:var(--t2);line-height:1.6">教师上传课件，自动解析并输出结构化教学节点脚本。</div></div>
+<div style="padding:20px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--P)"><div style="font-size:10px;font-family:var(--mono);letter-spacing:1.5px;color:var(--P);font-weight:600;margin-bottom:8px">02</div><div style="font-size:15px;font-weight:700;margin-bottom:4px">问答秒级响应</div><div style="font-size:12px;color:var(--t2);line-height:1.6">流式 SSE 输出，结合当前页上下文，回答可溯源。</div></div>
+<div style="padding:20px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--T)"><div style="font-size:10px;font-family:var(--mono);letter-spacing:1.5px;color:var(--T);font-weight:600;margin-bottom:8px">03</div><div style="font-size:15px;font-weight:700;margin-bottom:4px">打断后自动续接</div><div style="font-size:12px;color:var(--t2);line-height:1.6">判断理解程度，定位原节点，续讲或重讲，进度不丢。</div></div>
+</div>
+</div>
+</div>
+
+<!-- S3: BACKGROUND — left highlight + right cards -->
+<div class="slide" id="s3">
+<div class="si" style="display:grid;grid-template-columns:280px 1fr;gap:32px;align-items:start">
+<div class="a d1" style="position:sticky;top:0">
+<div class="stag">01 项目背景</div>
+<div style="font-size:36px;font-weight:900;line-height:1.25;margin-bottom:10px">泛雅沉淀海量课件，却<span style="color:var(--B)">"可看不可讲"</span></div>
+<div style="margin-top:20px;padding:16px 20px;background:linear-gradient(135deg,var(--Bb),var(--Pb));border:1px solid var(--Bd);border-radius:var(--r)">
+<div style="font-size:18px;font-weight:700;color:var(--B);line-height:1.4"><span style="color:var(--t1)">教育数字化转型</span></div>
+<div style="font-size:18px;font-weight:700;color:var(--LT);line-height:1.4;margin-top:2px">正在加速</div>
+<div style="font-size:12px;color:var(--t2);line-height:1.6;margin-top:8px">个性化学习与高效知识传递，成为高校教学的核心需求；课件具备从"静态"升级为"AI 互动智课"的技术条件。</div>
+</div>
+<div style="margin-top:16px;padding:10px 16px;background:var(--Tb);border:1px solid var(--Td);border-radius:var(--rs);font-size:12px;color:var(--T);font-weight:600;text-align:center">核心目标：让静态课件变成可讲授、可提问、可续接的智能学习内容</div>
+</div>
+<div>
+<div style="display:flex;flex-direction:column;gap:14px">
+<div class="a d2" style="padding:22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-left:3px solid var(--B)">
+<div style="font-size:16px;font-weight:700;margin-bottom:6px">📚 海量课程资源已沉淀</div>
+<div style="font-size:12px;color:var(--t2);line-height:1.65">超星泛雅平台已服务大量高校、教师与学生，积累了大量优质 PPT / PDF 课件，但仍以静态形式呈现。</div>
+</div>
+<div class="a d3" style="padding:22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-left:3px solid var(--R)">
+<div style="font-size:16px;font-weight:700;margin-bottom:6px">⚡ 讲授、互动、续接能力缺失</div>
+<div style="font-size:12px;color:var(--t2);line-height:1.65">静态课件需教师额外录制讲解视频才能"可听可学"，学生遇到疑问难获上下文答疑，打断后又难以续接进度。</div>
+</div>
+<div class="a d4" style="padding:22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-left:3px solid var(--T)">
+<div style="font-size:16px;font-weight:700;margin-bottom:6px">🧠 AI 技术已具备升级基础</div>
+<div style="font-size:12px;color:var(--t2);line-height:1.65">大语言模型、语音合成、多模态处理逐渐成熟，使课件解析、内容生成、问答与讲授真正可落地。</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<!-- S4: PAIN — three columns with accent headers -->
+<div class="slide" id="s4">
+<div class="si">
+<div class="a d1"><div class="stag">01 项目背景</div></div>
+<div class="a d2"><h2 class="stit">三类角色，<span class="hlr">三道断点</span></h2></div>
+<div class="a d3" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:4px">
+<!-- Teacher -->
+<div style="background:var(--card);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden">
+<div style="padding:14px 18px;background:var(--Bb);border-bottom:1px solid var(--Bd)">
+<div style="font-size:16px;font-weight:800;color:var(--B)">👨‍🏫 教师</div>
+<div style="font-size:10px;color:var(--t3);margin-top:2px">备课与内容生产负担重</div>
+</div>
+<div style="padding:14px 18px">
+<div style="margin-bottom:10px"><div style="font-size:13px;font-weight:700">备课与录课成本高</div><div style="font-size:11px;color:var(--t2);line-height:1.55;margin-top:2px">需逐字撰写讲稿、重复录制讲解视频。</div></div>
+<div style="margin-bottom:10px"><div style="font-size:13px;font-weight:700">讲授结构弱</div><div style="font-size:11px;color:var(--t2);line-height:1.55;margin-top:2px">内容零散，缺少开场、讲解、过渡的教学脚本结构。</div></div>
+<div><div style="font-size:13px;font-weight:700">反馈不足</div><div style="font-size:11px;color:var(--t2);line-height:1.55;margin-top:2px">难及时掌握学生自主学习中的疑问与理解困难。</div></div>
+</div>
+</div>
+<!-- Student -->
+<div style="background:var(--card);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden">
+<div style="padding:14px 18px;background:var(--Pb);border-bottom:1px solid var(--Pd)">
+<div style="font-size:16px;font-weight:800;color:var(--P)">🎓 学生</div>
+<div style="font-size:10px;color:var(--t3);margin-top:2px">自主学习缺少即时帮助</div>
+</div>
+<div style="padding:14px 18px">
+<div style="margin-bottom:10px"><div style="font-size:13px;font-weight:700">问答不精准</div><div style="font-size:11px;color:var(--t2);line-height:1.55;margin-top:2px">问答难关联当前课件上下文，答案针对性不足。</div></div>
+<div style="margin-bottom:10px"><div style="font-size:13px;font-weight:700">进度易脱节</div><div style="font-size:11px;color:var(--t2);line-height:1.55;margin-top:2px">打断提问后，系统无法精准续接原有讲授进度。</div></div>
+<div><div style="font-size:13px;font-weight:700">缺个性化补讲</div><div style="font-size:11px;color:var(--t2);line-height:1.55;margin-top:2px">无法按理解程度补充讲解或动态调整节奏。</div></div>
+</div>
+</div>
+<!-- Platform -->
+<div style="background:var(--card);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden">
+<div style="padding:14px 18px;background:var(--Tb);border-bottom:1px solid var(--Td)">
+<div style="font-size:16px;font-weight:800;color:var(--T)">🖥️ 平台</div>
+<div style="font-size:10px;color:var(--t3);margin-top:2px">轻量集成与可扩展诉求</div>
+</div>
+<div style="padding:14px 18px">
+<div style="margin-bottom:10px"><div style="font-size:13px;font-weight:700">静态课件智化难</div><div style="font-size:11px;color:var(--t2);line-height:1.55;margin-top:2px">解析多停留在文本提取，难识别知识点逻辑。</div></div>
+<div style="margin-bottom:10px"><div style="font-size:13px;font-weight:700">改造成本敏感</div><div style="font-size:11px;color:var(--t2);line-height:1.55;margin-top:2px">需轻量集成，不增加平台侧过重改造负担。</div></div>
+<div><div style="font-size:13px;font-weight:700">接口标准缺位</div><div style="font-size:11px;color:var(--t2);line-height:1.55;margin-top:2px">缺乏标准化、可异步对接的接口与学情数据。</div></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<!-- S5: DUAL ARCHITECTURE — center hub + detail layers -->
+<div class="slide" id="s5">
+<div class="si">
+<div class="a d1"><div class="stag">02 解决方案</div></div>
+<div class="a d2"><h2 class="stit">一套底座，<span class="hlb">两端分工</span></h2></div>
+<div class="a d3" style="display:flex;gap:16px;align-items:stretch;margin-bottom:20px">
+<div style="flex:1;padding:22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:3px solid var(--B);text-align:center">
+<div style="font-size:18px;font-weight:800;color:var(--B);margin-bottom:6px">教师端</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.5">智课生成 · 脚本编辑 · 发布 · 学情</div>
+</div>
+<div style="flex:1.2;padding:22px;background:linear-gradient(135deg,var(--Bb),var(--Pb));border:1px solid var(--Bd);border-radius:var(--r);text-align:center">
+<div style="font-size:13px;font-weight:800;background:linear-gradient(135deg,var(--B),var(--P));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:6px">一套 AI 底座 · 统一能力中枢</div>
+<div style="font-size:10px;color:var(--t2);line-height:1.5">三层协同 · 大模型外部化</div>
+</div>
+<div style="flex:1;padding:22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:3px solid var(--P);text-align:center">
+<div style="font-size:18px;font-weight:800;color:var(--P);margin-bottom:6px">学生端</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.5">课程学习 · 上下文问答 · 续学 · 强化</div>
+</div>
+</div>
+<!-- Four layers with sub-items -->
+<div class="a d4">
+<div style="display:flex;flex-direction:column;gap:0">
+<div style="padding:16px 20px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r) var(--r) 0 0;border-left:3px solid var(--B);display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:center">
+<div><div style="font-size:14px;font-weight:700;color:var(--B)">前端交互层</div><div style="font-size:10px;color:var(--t2)">Vue 3 + TypeScript</div></div>
+<div style="font-size:11px;color:var(--t2);line-height:1.5"><span style="font-weight:600;color:var(--t1)">教师 Web 端</span>：课件管理 · 脚本编辑 · 学情<br><span style="font-weight:600;color:var(--t1)">学生 Web 端</span>：课程学习 · 问答 · 断点续学</div>
+<div style="text-align:right"><span style="padding:3px 10px;border-radius:100px;font-size:9px;font-family:var(--mono);font-weight:600;background:var(--Bb);color:var(--B)">前端层</span></div>
+</div>
+<div style="padding:16px 20px;background:var(--card);border:1px solid var(--bd);border-left:3px solid var(--P);display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:center">
+<div><div style="font-size:14px;font-weight:700;color:var(--P)">业务编排层</div><div style="font-size:10px;color:var(--t2)">Go 后端（薄业务、强编排）</div></div>
+<div style="font-size:11px;color:var(--t2);line-height:1.5"><span style="font-weight:600;color:var(--t1)">鉴权与会话</span>：用户态 · 权限 · <span style="font-weight:600;color:var(--t1)">学习状态机</span>：讲授 · 问答 · 续接 · <span style="font-weight:600;color:var(--t1)">SSE 流式代理</span>：实时转发 AI 输出 · <span style="font-weight:600;color:var(--t1)">OpenAPI 适配</span>：对接 Dify 工作流</div>
+<div style="text-align:right"><span style="padding:3px 10px;border-radius:100px;font-size:9px;font-family:var(--mono);font-weight:600;background:var(--Pb);color:var(--P)">编排层</span></div>
+</div>
+<div style="padding:16px 20px;background:var(--card);border:1px solid var(--bd);border-left:3px solid var(--T);display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:center">
+<div><div style="font-size:14px;font-weight:700;color:var(--T)">AI 能力中台</div><div style="font-size:10px;color:var(--t2)">Dify 编排 + Python 引擎 + 外部大模型</div></div>
+<div style="font-size:11px;color:var(--t2);line-height:1.5"><span style="font-weight:600;color:var(--t1)">Dify 编排</span>：工作流 · RAG · <span style="font-weight:600;color:var(--t1)">Python 解析引擎</span>：课件多模态解析 · <span style="font-weight:600;color:var(--t1)">通义千问 LLM</span>：外部大模型 API · <span style="font-weight:600;color:var(--t1)">TTS 语音合成</span>：讲授语音生成</div>
+<div style="text-align:right"><span style="padding:3px 10px;border-radius:100px;font-size:9px;font-family:var(--mono);font-weight:600;background:var(--Tb);color:var(--T)">AI 层</span></div>
+</div>
+<div style="padding:16px 20px;background:var(--card);border:1px solid var(--bd);border-radius:0 0 var(--r) var(--r);border-left:3px solid var(--LT);display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:center">
+<div><div style="font-size:14px;font-weight:700;color:var(--LT)">基础设施</div><div style="font-size:10px;color:var(--t2)">数据与存储</div></div>
+<div style="font-size:11px;color:var(--t2);line-height:1.5"><span style="font-weight:600;color:var(--t1)">PostgreSQL</span>：结构化数据 · <span style="font-weight:600;color:var(--t1)">Redis</span>：会话与缓存 · <span style="font-weight:600;color:var(--t1)">MinIO</span>：课件与音频对象存储</div>
+<div style="text-align:right"><span style="padding:3px 10px;border-radius:100px;font-size:9px;font-family:var(--mono);font-weight:600;background:rgba(23,179,163,.08);color:var(--LT)">设施</span></div>
+</div>
+</div>
+</div>
+<div class="a d5" style="margin-top:14px;padding:10px 16px;background:var(--Tb);border:1px solid var(--Td);border-radius:var(--rs);font-size:12px;color:var(--T);font-weight:500;text-align:center">通过 OpenAPI 适配层与泛雅平台轻量集成 —— 底座统一沉淀能力，向教师端、学生端两端分发。</div>
+</div>
+</div>
+
+<!-- S6: TEACHER FLOW — horizontal step pipeline -->
+<div class="slide" id="s6">
+<div class="si">
+<div class="a d1"><div class="stag">02 解决方案 · 教师端</div></div>
+<div class="a d2"><h2 class="stit">教师端：把备课从<span class="hlb">"逐字撰写"</span>变成<span class="hlb">"编辑确认"</span></h2></div>
+<div class="a d3" style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:18px">上传课件即自动生成结构化讲授脚本，教师编辑确认后一键发布；五项能力覆盖从备课到学情的完整闭环。</div>
+<div class="a d4" style="display:flex;gap:0;overflow-x:auto">
+<div style="flex:1;min-width:170px;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:3px solid var(--B);position:relative">
+<div style="font-size:10px;font-family:var(--mono);letter-spacing:1.5px;color:var(--B);font-weight:600;margin-bottom:8px">STEP 01</div>
+<div style="font-size:15px;font-weight:700;margin-bottom:6px">课件上传</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6">支持 PPT / PDF 课件上传，自动触发后台解析任务。</div>
+</div>
+<div style="display:flex;align-items:center;padding:0 8px;font-family:var(--mono);font-size:18px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;min-width:170px;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:3px solid var(--P)">
+<div style="font-size:10px;font-family:var(--mono);letter-spacing:1.5px;color:var(--P);font-weight:600;margin-bottom:8px">STEP 02</div>
+<div style="font-size:15px;font-weight:700;margin-bottom:6px">智课生成</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6">AI 生成开场、讲解、过渡的结构化脚本与配套语音。</div>
+</div>
+<div style="display:flex;align-items:center;padding:0 8px;font-family:var(--mono);font-size:18px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;min-width:170px;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:3px solid var(--T)">
+<div style="font-size:10px;font-family:var(--mono);letter-spacing:1.5px;color:var(--T);font-weight:600;margin-bottom:8px">STEP 03</div>
+<div style="font-size:15px;font-weight:700;margin-bottom:6px">脚本编辑</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6">在线增删改讲授节点、调整顺序与表述，确认教学内容。</div>
+</div>
+<div style="display:flex;align-items:center;padding:0 8px;font-family:var(--mono);font-size:18px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;min-width:170px;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:3px solid var(--B)">
+<div style="font-size:10px;font-family:var(--mono);letter-spacing:1.5px;color:var(--B);font-weight:600;margin-bottom:8px">STEP 04</div>
+<div style="font-size:15px;font-weight:700;margin-bottom:6px">课程发布</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6">一键发布为可学习的互动智课，向学生端开放学习。</div>
+</div>
+<div style="display:flex;align-items:center;padding:0 8px;font-family:var(--mono);font-size:18px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;min-width:170px;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:3px solid var(--P)">
+<div style="font-size:10px;font-family:var(--mono);letter-spacing:1.5px;color:var(--P);font-weight:600;margin-bottom:8px">STEP 05</div>
+<div style="font-size:15px;font-weight:700;margin-bottom:6px">学情查看</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6">查看学习进度、提问记录与薄弱知识点分布。</div>
+</div>
+</div>
+</div>
+</div>
+
+<!-- S7: STUDENT — five capabilities -->
+<div class="slide" id="s7">
+<div class="si">
+<div class="a d1"><div class="stag">02 解决方案 · 学生端</div></div>
+<div class="a d2"><h2 class="stit">学生端：<span class="hlp">边听讲边提问</span>，问完自动接着学</h2></div>
+<div class="a d3" style="font-size:13px;color:var(--t2);line-height:1.6;margin-bottom:18px">学生像看一节"会讲课"的课程一样学习，随时就当前页提问，AI 判断理解程度后自动续接进度并强化薄弱点。</div>
+<div class="a d4" style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">
+<div style="padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--P)"><div style="font-family:var(--mono);font-size:10px;color:var(--P);font-weight:600;letter-spacing:1.5px;margin-bottom:8px">LEARN</div><div style="font-size:14px;font-weight:700;margin-bottom:5px">课程学习</div><div style="font-size:11px;color:var(--t2);line-height:1.6">按结构化节点逐步观看 AI 讲授，像上一节真人课。</div></div>
+<div style="padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--T)"><div style="font-family:var(--mono);font-size:10px;color:var(--T);font-weight:600;letter-spacing:1.5px;margin-bottom:8px">ASK</div><div style="font-size:14px;font-weight:700;margin-bottom:5px">上下文问答</div><div style="font-size:11px;color:var(--t2);line-height:1.6">随时就当前页提问，AI 结合本页内容溯源作答。</div></div>
+<div style="padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--B)"><div style="font-family:var(--mono);font-size:10px;color:var(--B);font-weight:600;letter-spacing:1.5px;margin-bottom:8px">LISTEN</div><div style="font-size:14px;font-weight:700;margin-bottom:5px">语音播放</div><div style="font-size:11px;color:var(--t2);line-height:1.6">讲授脚本配 TTS 语音，支持边听边看，解放双眼。</div></div>
+<div style="padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--P)"><div style="font-family:var(--mono);font-size:10px;color:var(--P);font-weight:600;letter-spacing:1.5px;margin-bottom:8px">RESUME</div><div style="font-size:14px;font-weight:700;margin-bottom:5px">断点续学</div><div style="font-size:11px;color:var(--t2);line-height:1.6">提问打断后，自动定位原节点，续讲或重讲衔接。</div></div>
+<div style="padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--T)"><div style="font-family:var(--mono);font-size:10px;color:var(--T);font-weight:600;letter-spacing:1.5px;margin-bottom:8px">FOCUS</div><div style="font-size:14px;font-weight:700;margin-bottom:5px">薄弱点强化</div><div style="font-size:11px;color:var(--t2);line-height:1.6">依据理解程度针对薄弱知识点补充讲解与练习。</div></div>
+</div>
+</div>
+</div>
+
+<!-- S8: LOOP — circular SVG diagram -->
+<div class="slide" id="s8">
+<div class="si" style="max-width:900px">
+<div class="a d1"><div class="stag">02 解决方案 · 闭环</div></div>
+<div class="a d2" style="text-align:center"><h2 class="stit" style="text-align:center">一条故事链，把两端串成<span class="hlb">真实学习闭环</span></h2></div>
+<div class="a d3" style="text-align:center;font-size:13px;color:var(--t2);margin-bottom:8px">学情反馈回流教师端，驱动下一轮内容优化 —— 教师端与学生端形成持续闭环。</div>
+<div class="a d4" style="display:flex;justify-content:center;margin-top:8px">
+<svg viewBox="0 0 760 260" width="760" style="max-width:100%">
+<!-- Arrows -->
+<defs><marker id="aB" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#1E6FE0"/></marker><marker id="aP" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#7B5BE0"/></marker><marker id="aT" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#0E8C80"/></marker><marker id="aR" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#E8553C"/></marker></defs>
+<!-- Step labels along the path -->
+<text x="190" y="35" text-anchor="middle" font-size="11" fill="#5A6478" font-family="Noto Sans SC,sans-serif">教师上传课件</text>
+<path d="M250,55 Q320,20 380,55" fill="none" stroke="#1E6FE0" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#aB)"/>
+<text x="380" y="35" text-anchor="middle" font-size="11" fill="#5A6478" font-family="Noto Sans SC,sans-serif">AI 生成智课</text>
+<path d="M440,55 Q510,20 560,55" fill="none" stroke="#1E6FE0" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#aB)"/>
+<text x="560" y="35" text-anchor="middle" font-size="11" fill="#5A6478" font-family="Noto Sans SC,sans-serif">教师编辑确认</text>
+<!-- Main nodes -->
+<rect x="30" y="55" width="160" height="55" rx="10" fill="#fff" stroke="rgba(30,111,224,.2)" stroke-width="1.5"/>
+<text x="110" y="78" text-anchor="middle" fill="#1E6FE0" font-size="14" font-weight="700" font-family="Noto Sans SC,sans-serif">教师端</text>
+<text x="110" y="98" text-anchor="middle" fill="#5A6478" font-size="10" font-family="Noto Sans SC,sans-serif">智课生成 · 编辑发布 · 学情</text>
+<!-- Arrow: Teacher → AI -->
+<path d="M190,82 L280,82" fill="none" stroke="#7B5BE0" stroke-width="1.5" marker-end="url(#aP)"/>
+<!-- AI hub -->
+<rect x="280" y="60" width="140" height="45" rx="10" fill="linear-gradient(135deg,#EAF1FE,#F1ECFE)" stroke="rgba(30,111,224,.15)" stroke-width="1"/>
+<text x="350" y="87" text-anchor="middle" fill="#7B5BE0" font-size="12" font-weight="700" font-family="Noto Sans SC,sans-serif">AI 底座</text>
+<!-- Arrow: AI → Student -->
+<path d="M420,82 L490,82" fill="none" stroke="#0E8C80" stroke-width="1.5" marker-end="url(#aT)"/>
+<!-- Student node -->
+<rect x="490" y="55" width="160" height="55" rx="10" fill="#fff" stroke="rgba(14,140,128,.2)" stroke-width="1.5"/>
+<text x="570" y="78" text-anchor="middle" fill="#0E8C80" font-size="14" font-weight="700" font-family="Noto Sans SC,sans-serif">学生端</text>
+<text x="570" y="98" text-anchor="middle" fill="#5A6478" font-size="10" font-family="Noto Sans SC,sans-serif">学习 · 问答 · 续学 · 强化</text>
+<!-- Bottom flow: Student → Feedback → Teacher -->
+<text x="570" y="145" text-anchor="middle" font-size="11" fill="#5A6478" font-family="Noto Sans SC,sans-serif">实时上下文问答</text>
+<path d="M570,110 L570,130 L460,130 L460,145" fill="none" stroke="#0E8C80" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#aT)"/>
+<text x="380" y="145" text-anchor="middle" font-size="11" fill="#5A6478" font-family="Noto Sans SC,sans-serif">自动续接进度</text>
+<!-- Feedback node -->
+<rect x="300" y="160" width="160" height="55" rx="10" fill="#fff" stroke="rgba(232,85,60,.2)" stroke-width="1.5"/>
+<text x="380" y="183" text-anchor="middle" fill="#E8553C" font-size="14" font-weight="700" font-family="Noto Sans SC,sans-serif">学情回流</text>
+<text x="380" y="203" text-anchor="middle" fill="#5A6478" font-size="10" font-family="Noto Sans SC,sans-serif">进度 · 提问 · 薄弱点数据</text>
+<!-- Arrow: Student → Feedback -->
+<path d="M570,110 L570,155 L460,155 L460,175" fill="none" stroke="#E8553C" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#aR)"/>
+<!-- Arrow: Feedback → Teacher -->
+<path d="M300,187 L190,110" fill="none" stroke="#E8553C" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#aR)"/>
+<text x="220" y="145" text-anchor="middle" font-size="11" fill="#5A6478" font-family="Noto Sans SC,sans-serif">学情反馈驱动优化</text>
+<!-- Step 5-6 labels at bottom -->
+<text x="570" y="145" text-anchor="middle" font-size="11" fill="#5A6478" font-family="Noto Sans SC,sans-serif" x="570" y="145"></text>
+<!-- Center highlight -->
+<rect x="250" y="115" width="200" height="30" rx="8" fill="#EEF2FB" stroke="rgba(30,111,224,.1)" stroke-width="1"/>
+<text x="350" y="134" text-anchor="middle" fill="#1E6FE0" font-size="10" font-weight="600" font-family="Noto Sans SC,sans-serif">持续闭环驱动 · 内容优化</text>
+</svg>
+</div>
+</div>
+</div>
+
+<!-- S9: ARCHITECTURE — reuse S5's layered detail, same content -->
+<div class="slide" id="s9">
+<div class="si">
+<div class="a d1"><div class="stag">03 系统实现</div></div>
+<div class="a d2"><h2 class="stit">薄业务、重编排：<span class="hlb">四层清晰组织</span></h2></div>
+<!-- Same layered architecture as S5 but this is the "system implementation" view -->
+<div class="a d3" style="display:flex;flex-direction:column;gap:0;margin-top:8px">
+<div class="bu d3" style="padding:18px 22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r) var(--r) 0 0;border-left:3px solid var(--B);display:grid;grid-template-columns:1fr 1.5fr auto;gap:12px;align-items:center">
+<div><div style="font-size:14px;font-weight:700;color:var(--B)">前端交互层</div><div style="font-size:10px;color:var(--t2);font-family:var(--mono)">Vue 3 + TypeScript</div></div>
+<div style="font-size:11px;color:var(--t2);line-height:1.55"><span style="font-weight:600;color:var(--t1)">教师 Web 端</span>：课件管理 · 脚本编辑 · 学情 &nbsp;|&nbsp; <span style="font-weight:600;color:var(--t1)">学生 Web 端</span>：课程学习 · 问答 · 断点续学 &nbsp;|&nbsp; <span style="font-weight:600;color:var(--t1)">泛雅集成入口</span>：OpenAPI 轻量接入</div>
+<div><span style="padding:3px 10px;border-radius:100px;font-size:9px;font-family:var(--mono);font-weight:600;background:var(--Bb);color:var(--B)">前端层</span></div>
+</div>
+<div class="bu d4" style="padding:18px 22px;background:var(--card);border:1px solid var(--bd);border-left:3px solid var(--P);display:grid;grid-template-columns:1fr 1.5fr auto;gap:12px;align-items:center">
+<div><div style="font-size:14px;font-weight:700;color:var(--P)">业务编排层</div><div style="font-size:10px;color:var(--t2);font-family:var(--mono)">Go 后端（薄业务、强编排）</div></div>
+<div style="font-size:11px;color:var(--t2);line-height:1.55"><span style="font-weight:600;color:var(--t1)">鉴权与会话</span>：用户态 · 权限 &nbsp;|&nbsp; <span style="font-weight:600;color:var(--t1)">学习状态机</span>：讲授 · 问答 · 续接 &nbsp;|&nbsp; <span style="font-weight:600;color:var(--t1)">SSE 流式代理</span>：实时转发 AI 输出 &nbsp;|&nbsp; <span style="font-weight:600;color:var(--t1)">OpenAPI 适配</span>：对接 Dify 工作流</div>
+<div><span style="padding:3px 10px;border-radius:100px;font-size:9px;font-family:var(--mono);font-weight:600;background:var(--Pb);color:var(--P)">编排层</span></div>
+</div>
+<div class="bu d5" style="padding:18px 22px;background:var(--card);border:1px solid var(--bd);border-left:3px solid var(--T);display:grid;grid-template-columns:1fr 1.5fr auto;gap:12px;align-items:center">
+<div><div style="font-size:14px;font-weight:700;color:var(--T)">AI 能力中台</div><div style="font-size:10px;color:var(--t2);font-family:var(--mono)">Dify + Python + 外部大模型</div></div>
+<div style="font-size:11px;color:var(--t2);line-height:1.55"><span style="font-weight:600;color:var(--t1)">Dify 编排</span>：工作流 · RAG &nbsp;|&nbsp; <span style="font-weight:600;color:var(--t1)">Python 解析引擎</span>：课件多模态解析 &nbsp;|&nbsp; <span style="font-weight:600;color:var(--t1)">通义千问 LLM</span>：外部大模型 API &nbsp;|&nbsp; <span style="font-weight:600;color:var(--t1)">TTS 语音合成</span>：讲授语音生成</div>
+<div><span style="padding:3px 10px;border-radius:100px;font-size:9px;font-family:var(--mono);font-weight:600;background:var(--Tb);color:var(--T)">AI 层</span></div>
+</div>
+<div class="bu d6" style="padding:18px 22px;background:var(--card);border:1px solid var(--bd);border-radius:0 0 var(--r) var(--r);border-left:3px solid var(--LT);display:grid;grid-template-columns:1fr 1.5fr auto;gap:12px;align-items:center">
+<div><div style="font-size:14px;font-weight:700;color:var(--LT)">基础设施</div><div style="font-size:10px;color:var(--t2);font-family:var(--mono)">数据与存储</div></div>
+<div style="font-size:11px;color:var(--t2);line-height:1.55"><span style="font-weight:600;color:var(--t1)">PostgreSQL</span>：结构化数据 &nbsp;|&nbsp; <span style="font-weight:600;color:var(--t1)">Redis</span>：会话与缓存 &nbsp;|&nbsp; <span style="font-weight:600;color:var(--t1)">MinIO</span>：课件与音频对象存储</div>
+<div><span style="padding:3px 10px;border-radius:100px;font-size:9px;font-family:var(--mono);font-weight:600;background:rgba(23,179,163,.08);color:var(--LT)">设施</span></div>
+</div>
+</div>
+</div>
+</div>
+
+<!-- S10: ALGORITHM 1 — four-step pipeline with output labels -->
+<div class="slide" id="s10">
+<div class="si">
+<div class="a d1"><div class="stag">03 系统实现 · 算法一</div></div>
+<div class="a d2"><h2 class="stit">课件解析：不止提文本，更提<span class="hlb">教学逻辑</span></h2></div>
+<div class="a d3" style="font-size:13px;color:var(--t2);margin-bottom:14px">算法一：多模态课件解析管道，逐级产出"可被教学使用"的结构化内容与知识点层级树。</div>
+<div class="a d4" style="display:flex;gap:0;align-items:stretch">
+<div style="flex:1;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--B)">
+<div style="font-family:var(--mono);font-size:10px;color:var(--B);letter-spacing:1.5px;font-weight:600;margin-bottom:6px">01</div>
+<div style="font-size:15px;font-weight:700;margin-bottom:6px">拆页渲染</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6;margin-bottom:10px">PPT / PDF 分页<br>高清图像渲染<br>版面布局保真</div>
+<div style="padding:6px 10px;background:var(--Bb);border:1px solid var(--Bd);border-radius:var(--rs);display:inline-block"><span style="font-family:var(--mono);font-size:11px;color:var(--B);font-weight:600">页图像序列</span></div>
+<div style="font-size:9px;color:var(--t3);margin-top:3px">逐页高清图 + 元数据</div>
+</div>
+<div style="display:flex;align-items:center;padding:0 6px;font-family:var(--mono);font-size:20px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--P)">
+<div style="font-family:var(--mono);font-size:10px;color:var(--P);letter-spacing:1.5px;font-weight:600;margin-bottom:6px">02</div>
+<div style="font-size:15px;font-weight:700;margin-bottom:6px">VLM 结构化</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6;margin-bottom:10px">标题 / 正文识别<br>阅读顺序还原<br>图表语义理解</div>
+<div style="padding:6px 10px;background:var(--Pb);border:1px solid var(--Pd);border-radius:var(--rs);display:inline-block"><span style="font-family:var(--mono);font-size:11px;color:var(--P);font-weight:600">页级结构化 JSON</span></div>
+<div style="font-size:9px;color:var(--t3);margin-top:3px">元素 + 层级 + 位置</div>
+</div>
+<div style="display:flex;align-items:center;padding:0 6px;font-family:var(--mono);font-size:20px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--T)">
+<div style="font-family:var(--mono);font-size:10px;color:var(--T);letter-spacing:1.5px;font-weight:600;margin-bottom:6px">03</div>
+<div style="font-size:15px;font-weight:700;margin-bottom:6px">标准化校验</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6;margin-bottom:10px">字段规范化<br>知识点抽取<br>质量与一致性校验</div>
+<div style="padding:6px 10px;background:var(--Tb);border:1px solid var(--Td);border-radius:var(--rs);display:inline-block"><span style="font-family:var(--mono);font-size:11px;color:var(--T);font-weight:600">标准化知识树</span></div>
+<div style="font-size:9px;color:var(--t3);margin-top:3px">知识点层级关系</div>
+</div>
+<div style="display:flex;align-items:center;padding:0 6px;font-family:var(--mono);font-size:20px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--B)">
+<div style="font-family:var(--mono);font-size:10px;color:var(--B);letter-spacing:1.5px;font-weight:600;margin-bottom:6px">04</div>
+<div style="font-size:15px;font-weight:700;margin-bottom:6px">结构预览</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6;margin-bottom:10px">层级树可视化<br>教师确认 / 回改<br>进入讲稿生成</div>
+<div style="padding:6px 10px;background:var(--Bb);border:1px solid var(--Bd);border-radius:var(--rs);display:inline-block"><span style="font-family:var(--mono);font-size:11px;color:var(--B);font-weight:600">可编辑教学结构</span></div>
+<div style="font-size:9px;color:var(--t3);margin-top:3px">供脚本生成使用</div>
+</div>
+</div>
+<div class="a d5" style="margin-top:14px;padding:10px 16px;background:var(--Bb);border:1px solid var(--Bd);border-radius:var(--rs);font-size:12px;color:var(--B);font-weight:500;text-align:center;line-height:1.6">最终产出：页级结构化内容 + 知识点层级树 —— 支撑后续讲稿生成、上下文问答与进度续接</div>
+</div>
+</div>
+
+<!-- S11: ALGORITHM 2 — RAG flow + fields + 3-state -->
+<div class="slide" id="s11">
+<div class="si">
+<div class="a d1"><div class="stag">03 系统实现 · 算法二</div></div>
+<div class="a d2"><h2 class="stit">本页优先的 RAG 问答，<span class="hlp">可溯源、可续接</span></h2></div>
+<div class="a d3" style="font-size:13px;color:var(--t2);margin-bottom:12px">算法二：以"当前页上下文优先"的检索增强问答，并用结构化字段驱动学习进度续接。</div>
+<!-- RAG flow -->
+<div class="a d4" style="display:flex;gap:0;margin-bottom:14px">
+<div style="flex:1;padding:16px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--B)">
+<div style="font-size:13px;font-weight:700;color:var(--B);margin-bottom:3px">意图识别</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.5">判断问题类型与所属知识点。</div>
+</div>
+<div style="display:flex;align-items:center;padding:0 6px;font-family:var(--mono);font-size:16px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;padding:16px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--P)">
+<div style="font-size:13px;font-weight:700;color:var(--P);margin-bottom:3px">本页优先召回</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.5">优先检索当前页与邻近上下文。</div>
+</div>
+<div style="display:flex;align-items:center;padding:0 6px;font-family:var(--mono);font-size:16px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;padding:16px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--T)">
+<div style="font-size:13px;font-weight:700;color:var(--T);margin-bottom:3px">带溯源生成</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.5">LLM 生成答案并标注来源页 / 知识点。</div>
+</div>
+<div style="display:flex;align-items:center;padding:0 6px;font-family:var(--mono);font-size:16px;color:var(--t3);flex-shrink:0">→</div>
+<div style="flex:1;padding:16px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--B)">
+<div style="font-size:13px;font-weight:700;color:var(--B);margin-bottom:3px">结构化输出</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.5">答案 + 续接控制字段。</div>
+</div>
+</div>
+<!-- Structured fields -->
+<div class="a d5" style="padding:12px 16px;background:var(--Pb);border:1px solid var(--Pd);border-radius:var(--rs);margin-bottom:14px">
+<div style="font-family:var(--mono);font-size:10px;color:var(--P);font-weight:600;letter-spacing:1px;margin-bottom:8px">结构化输出字段 → 驱动进度续接</div>
+<div style="display:flex;flex-wrap:wrap;gap:8px">
+<span style="padding:4px 12px;background:var(--card);border:1px solid var(--Pd);border-radius:100px;font-family:var(--mono);font-size:11px;color:var(--P);font-weight:500">understandingLevel</span>
+<span style="padding:4px 12px;background:var(--card);border:1px solid var(--Pd);border-radius:100px;font-family:var(--mono);font-size:11px;color:var(--P);font-weight:500">needReteach</span>
+<span style="padding:4px 12px;background:var(--card);border:1px solid var(--Pd);border-radius:100px;font-family:var(--mono);font-size:11px;color:var(--P);font-weight:500">resumeNodeId</span>
+<span style="padding:4px 12px;background:var(--card);border:1px solid var(--Pd);border-radius:100px;font-family:var(--mono);font-size:11px;color:var(--P);font-weight:500">resumeMode</span>
+</div>
+</div>
+<!-- 3-state -->
+<div class="a d6">
+<div style="font-size:14px;font-weight:700;margin-bottom:10px">进度续接三态策略（resumeMode）</div>
+<div style="display:flex;gap:12px">
+<div style="flex:1;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--T)">
+<div style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--T);margin-bottom:2px">full</div>
+<div style="font-size:14px;font-weight:700;margin-bottom:4px">续讲</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6">理解到位，从原节点之后继续讲授，无缝衔接。</div>
+</div>
+<div style="flex:1;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--B)">
+<div style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--B);margin-bottom:2px">partial</div>
+<div style="font-size:14px;font-weight:700;margin-bottom:4px">补充</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6">部分理解，先补充讲解薄弱点，再继续讲授。</div>
+</div>
+<div style="flex:1;padding:18px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--R)">
+<div style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--R);margin-bottom:2px">none</div>
+<div style="font-size:14px;font-weight:700;margin-bottom:4px">重讲</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6">未理解，回到原节点重新讲授该知识点。</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+
+<!-- S12: METRICS — big numbers -->
+<div class="slide" id="s12">
+<div class="si">
+<div class="a d1"><div class="stag">03 系统实现 · 对齐指标</div></div>
+<div class="a d2"><h2 class="stit">对齐赛题<span class="hlb">硬指标</span></h2></div>
+<div class="a d3" style="display:flex;gap:14px">
+<div class="pop" style="flex:1;padding:28px 22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:3px solid var(--B);text-align:center">
+<div style="font-size:44px;font-weight:900;font-family:var(--mono);color:var(--B);line-height:1">≤ 2<span style="font-size:16px;font-weight:400"> min</span></div>
+<div style="font-size:12px;font-weight:600;color:var(--t1);margin-top:6px">课件解析速度</div>
+<div style="font-size:10px;color:var(--t3);margin-top:2px">单份课件端到端解析耗时</div>
+<div style="margin-top:8px;font-size:11px;font-family:var(--mono);font-weight:600;color:var(--B)">赛题要求 ≤ 2min ✓</div>
+</div>
+<div class="pop" style="flex:1;padding:28px 22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:3px solid var(--T);text-align:center">
+<div style="font-size:44px;font-weight:900;font-family:var(--mono);color:var(--T);line-height:1">≤ 5<span style="font-size:16px;font-weight:400"> 秒</span></div>
+<div style="font-size:12px;font-weight:600;color:var(--t1);margin-top:6px">问答响应速度</div>
+<div style="font-size:10px;color:var(--t3);margin-top:2px">流式问答首响应时延</div>
+<div style="margin-top:8px;font-size:11px;font-family:var(--mono);font-weight:600;color:var(--T)">赛题要求 ≤ 5s ✓</div>
+</div>
+<div class="pop" style="flex:1;padding:28px 22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:3px solid var(--P);text-align:center">
+<div style="font-size:44px;font-weight:900;font-family:var(--mono);color:var(--P);line-height:1">≥ 80<span style="font-size:16px;font-weight:400"> %</span></div>
+<div style="font-size:12px;font-weight:600;color:var(--t1);margin-top:6px">知识点识别率</div>
+<div style="font-size:10px;color:var(--t3);margin-top:2px">关键知识点识别准确率</div>
+<div style="margin-top:8px;font-size:11px;font-family:var(--mono);font-weight:600;color:var(--P)">赛题要求 ≥ 80% ✓</div>
+</div>
+<div class="pop" style="flex:1;padding:28px 22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:3px solid var(--B);text-align:center">
+<div style="font-size:44px;font-weight:900;font-family:var(--mono);color:var(--B);line-height:1">≥ 85<span style="font-size:16px;font-weight:400"> %</span></div>
+<div style="font-size:12px;font-weight:600;color:var(--t1);margin-top:6px">问答答案准确率</div>
+<div style="font-size:10px;color:var(--t3);margin-top:2px">基于课件上下文的答案准确率</div>
+<div style="margin-top:8px;font-size:11px;font-family:var(--mono);font-weight:600;color:var(--B)">赛题要求 ≥ 85% ✓</div>
+</div>
+</div>
+<div class="a d4" style="text-align:center;margin-top:18px;font-size:12px;color:var(--t2)">并发 ≥ 10 路 · 8C16G 单机轻量部署 · 大模型外部化，算力按需弹性扩展</div>
+</div>
+</div>
+
+<!-- S13: MODULE TABLE -->
+<div class="slide" id="s13">
+<div class="si">
+<div class="a d1"><div class="stag">03 系统实现 · 模块对齐</div></div>
+<div class="a d2"><h2 class="stit">三大模块<span class="hlb">全覆盖</span></h2></div>
+<div class="a d3">
+<table style="width:100%;border-collapse:collapse;font-size:12px;background:var(--card);border-radius:var(--r);overflow:hidden;box-shadow:0 1px 3px rgba(29,36,51,.04)">
+<thead><tr style="background:var(--sf)">
+<th style="padding:10px 16px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:600;color:var(--B);border-bottom:1px solid var(--bd)">赛题模块</th>
+<th style="padding:10px 16px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:600;color:var(--t2);border-bottom:1px solid var(--bd)">核心要求</th>
+<th style="padding:10px 16px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:600;color:var(--P);border-bottom:1px solid var(--bd)">项目实现</th>
+<th style="padding:10px 16px;text-align:center;font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:600;color:var(--T);border-bottom:1px solid var(--bd);width:70px">对齐</th>
+</tr></thead>
+<tbody>
+<tr><td style="padding:14px 16px;border-bottom:1px solid var(--bd);color:var(--B);font-weight:700;width:90px">智课生成</td>
+<td style="padding:14px 16px;border-bottom:1px solid var(--bd);color:var(--t2);line-height:1.6">将静态课件智化为可讲授的结构化教学内容。</td>
+<td style="padding:14px 16px;border-bottom:1px solid var(--bd);color:var(--t2);line-height:1.6">多模态解析 + 知识点层级树 + 结构化讲稿生成 + TTS 语音。</td>
+<td style="padding:14px 16px;border-bottom:1px solid var(--bd);text-align:center"><span style="padding:2px 8px;border-radius:100px;background:var(--Tb);color:var(--T);font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.5px">✓ 覆盖</span></td></tr>
+<tr><td style="padding:14px 16px;border-bottom:1px solid var(--bd);color:var(--P);font-weight:700">实时问答</td>
+<td style="padding:14px 16px;border-bottom:1px solid var(--bd);color:var(--t2);line-height:1.6">结合上下文的精准答疑，秒级响应。</td>
+<td style="padding:14px 16px;border-bottom:1px solid var(--bd);color:var(--t2);line-height:1.6">本页优先 RAG 检索 + 带溯源生成 + SSE 流式输出。</td>
+<td style="padding:14px 16px;border-bottom:1px solid var(--bd);text-align:center"><span style="padding:2px 8px;border-radius:100px;background:var(--Tb);color:var(--T);font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.5px">✓ 覆盖</span></td></tr>
+<tr><td style="padding:14px 16px;color:var(--T);font-weight:700">进度续接</td>
+<td style="padding:14px 16px;color:var(--t2);line-height:1.6">提问打断后，自动续接原有学习进度。</td>
+<td style="padding:14px 16px;color:var(--t2);line-height:1.6">understandingLevel 判定 + resumeMode 三态续接（续/补/重）。</td>
+<td style="padding:14px 16px;text-align:center"><span style="padding:2px 8px;border-radius:100px;background:var(--Tb);color:var(--T);font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.5px">✓ 覆盖</span></td></tr>
+</tbody></table>
+</div>
+<div class="a d4" style="margin-top:14px;padding:10px 16px;background:var(--Tb);border:1px solid var(--Td);border-radius:var(--rs);font-size:12px;color:var(--T);font-weight:500;text-align:center">四项硬指标（解析 ≤2min / 问答 ≤5s / 识别 ≥80% / 准确 ≥85%）均已对齐，三大模块端到端打通。</div>
+</div>
+</div>
+
+<!-- S14: INNOVATIONS -->
+<div class="slide" id="s14">
+<div class="si">
+<div class="a d1"><div class="stag">04 项目总结</div></div>
+<div class="a d2"><h2 class="stit">三个创新点，以及我们<span class="hlb">诚实的边界</span></h2></div>
+<div class="a d3" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+<div style="padding:22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--B)">
+<div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--B);font-weight:600;margin-bottom:8px">创新 01</div>
+<div style="font-size:16px;font-weight:800;margin-bottom:8px">结构化讲授节点</div>
+<div style="font-size:12px;color:var(--t2);line-height:1.65;margin-bottom:8px">讲授以"教学节点"组织，而非整页大段文本，天然支持逐点续接与精准定位。</div>
+<div style="padding:8px 12px;border-left:2px solid var(--B);font-size:11px;color:var(--B);line-height:1.5">节点是讲授、问答、续接三者共享的统一锚点。</div>
+</div>
+<div style="padding:22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--P)">
+<div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--P);font-weight:600;margin-bottom:8px">创新 02</div>
+<div style="font-size:16px;font-weight:800;margin-bottom:8px">可驱动的问答</div>
+<div style="font-size:12px;color:var(--t2);line-height:1.65;margin-bottom:8px">本页优先 + 答案溯源 + 续接游标，问答不止"答得准"，更能直接驱动学习进度。</div>
+<div style="padding:8px 12px;border-left:2px solid var(--P);font-size:11px;color:var(--P);line-height:1.5">结构化字段让"问完之后"的动作变得确定。</div>
+</div>
+<div style="padding:22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--T)">
+<div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--T);font-weight:600;margin-bottom:8px">创新 03</div>
+<div style="font-size:16px;font-weight:800;margin-bottom:8px">OpenAPI 适配层</div>
+<div style="font-size:12px;color:var(--t2);line-height:1.65;margin-bottom:8px">适配层独立演进，与泛雅平台、AI 中台解耦，便于轻量集成与能力扩展。</div>
+<div style="padding:8px 12px;border-left:2px solid var(--T);font-size:11px;color:var(--T);line-height:1.5">更换底层模型或工作流，上层无感。</div>
+</div>
+</div>
+<div class="a d4" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+<div style="padding:16px;background:var(--Bb);border:1px solid var(--Bd);border-radius:var(--rs)">
+<div style="font-size:13px;font-weight:700;color:var(--B);margin-bottom:4px">⚖️ 设计取舍</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6">大模型外部化：牺牲部分自主可控与数据闭环，换取轻量部署、快速迭代与算力弹性；让团队聚焦教学编排而非模型训练。</div>
+</div>
+<div style="padding:16px;background:var(--Rb);border:1px solid var(--Rd);border-radius:var(--rs)">
+<div style="font-size:13px;font-weight:700;color:var(--R);margin-bottom:4px">🔍 能力边界</div>
+<div style="font-size:11px;color:var(--t2);line-height:1.6">Dify 自托管需多容器编排，运维有一定门槛；大规模样本压测、极端复杂版面的解析鲁棒性，仍需持续打磨与数据积累。</div>
+</div>
+</div>
+</div>
+</div>
+
+<!-- S15: ROADMAP — timeline -->
+<div class="slide" id="s15">
+<div class="si">
+<div class="a d1"><div class="stag">04 项目总结 · 路线图</div></div>
+<div class="a d2"><h2 class="stit">从<span class="hlb">可用</span>到<span class="hlp">好用</span>，再到<span class="hlt">规模化</span></h2></div>
+<div class="a d3" style="display:flex;gap:14px">
+<div style="flex:1;padding:22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--B)">
+<div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--B);font-weight:600;margin-bottom:4px">近期</div>
+<div style="font-size:10px;color:var(--t3);margin-bottom:10px">夯实可用性</div>
+<div style="margin-bottom:5px;font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 解析鲁棒性提升：大规模样本压测与稳定性</div>
+<div style="margin-bottom:5px;font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 教师可视化编辑增强</div>
+<div style="margin-bottom:5px;font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 解析准确率持续调优</div>
+<div style="font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 问答溯源体验打磨</div>
+</div>
+<div style="flex:1;padding:22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--P)">
+<div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--P);font-weight:600;margin-bottom:4px">中期</div>
+<div style="font-size:10px;color:var(--t3);margin-bottom:10px">迈向好用</div>
+<div style="margin-bottom:5px;font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 学情画像与个性化推荐</div>
+<div style="margin-bottom:5px;font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 多学科知识库扩充</div>
+<div style="margin-bottom:5px;font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 移动端与多终端适配</div>
+<div style="margin-bottom:5px;font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 教学数据看板</div>
+<div style="font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 语音交互增强</div>
+</div>
+<div style="flex:1;padding:22px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);border-top:2px solid var(--T)">
+<div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--T);font-weight:600;margin-bottom:4px">远期</div>
+<div style="font-size:10px;color:var(--t3);margin-bottom:10px">走向规模化</div>
+<div style="margin-bottom:5px;font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 自适应学习路径</div>
+<div style="margin-bottom:5px;font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 规模化校级部署</div>
+<div style="margin-bottom:5px;font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 生态开放 API</div>
+<div style="margin-bottom:5px;font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 教研协同与共享</div>
+<div style="font-size:12px;color:var(--t2);line-height:1.5"><span style="color:var(--t1);font-weight:600">›</span> 数据驱动的教学闭环</div>
+</div>
+</div>
+</div>
+</div>
+
+<!-- S16: CLOSING -->
+<div class="slide" id="s16">
+<div class="blob" style="width:500px;height:500px;top:-140px;right:-100px;background:rgba(30,111,224,.1)"></div>
+<div class="blob" style="width:380px;height:380px;bottom:-100px;left:-80px;background:rgba(123,91,224,.08)"></div>
+<div class="si" style="text-align:center">
+<div class="a d1" style="display:inline-flex;align-items:center;gap:8px;padding:6px 16px;border-radius:100px;background:var(--Bb);border:1px solid var(--Bd);font-family:var(--mono);font-size:11px;color:var(--B);margin-bottom:18px">泛雅 AI 智课</div>
+<div class="a d2" style="font-size:44px;font-weight:900;line-height:1.15">谢谢观看</div>
+<div class="a d3" style="font-size:18px;color:var(--B);line-height:1.5;margin:14px auto 0;max-width:520px;font-weight:600">让每一页课件，都成为一位会讲、会答、会续接的 AI 老师。</div>
+<div class="a d4" style="font-family:var(--mono);font-size:11px;color:var(--t3);margin-top:28px;letter-spacing:1px">泛雅 AI 互动智课系统 · 欢迎交流与试用<br>参赛作品演示 | 2026</div>
+</div>
+</div>
+
+</div>
+
+<div class="ndots" id="ndots"></div>
+<div class="pnum" id="pnum">01 / 16</div>
+<div class="khint"><span style="display:inline-flex;padding:1px 5px;border:1px solid var(--bd);border-radius:3px;font-size:9px;background:var(--card)">←</span><span style="display:inline-flex;padding:1px 5px;border:1px solid var(--bd);border-radius:3px;font-size:9px;background:var(--card)">→</span> 切换页面</div>
+
+<script>
+const T=16;let c=1;
+const ds=document.getElementById('ndots'),pb=document.getElementById('pbar'),pm=document.getElementById('pnum'),ns=document.querySelectorAll('#topNav span');
+const sm={3:0,4:0,5:1,6:1,7:1,8:1,9:2,10:2,11:2,12:2,13:2,14:3,15:3};
+const sc=[{s:'#1E6FE0',e:'#7B5BE0'},{s:'#1E6FE0',e:'#0E8C80'},{s:'#7B5BE0',e:'#0E8C80'},{s:'#1E6FE0',e:'#E8553C'}];
+for(let i=1;i<=T;i++){const d=document.createElement('div');d.className='nd'+(i===1?' on':'');d.addEventListener('click',()=>goTo(i));ds.appendChild(d)}
+function goTo(n){if(n<1||n>T||n===c)return;const o=document.getElementById('s'+c),nw=document.getElementById('s'+n);o.classList.remove('active');o.classList.add('leaving');setTimeout(()=>o.classList.remove('leaving'),500);nw.classList.add('active');c=n;pm.textContent=String(n).padStart(2,'0')+' / '+T;document.querySelectorAll('.nd').forEach((d,i)=>d.classList.toggle('on',i+1===n));const si=sm[n];pb.style.background=si!==undefined?`linear-gradient(90deg,${sc[si].s},${sc[si].e})`:`linear-gradient(90deg,${sc[0].s},${sc[0].e})`;pb.style.width=(n/T*100)+'%';ns.forEach((s,i)=>s.classList.toggle('on',i===si))}
+document.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key===' '||e.key==='Enter'){e.preventDefault();goTo(c+1)}else if(e.key==='ArrowLeft'||e.key==='Backspace'){e.preventDefault();goTo(c-1)}else if(e.key==='Home'){e.preventDefault();goTo(1)}else if(e.key==='End'){e.preventDefault();goTo(T)}});
+let tx=0;document.addEventListener('touchstart',e=>{tx=e.changedTouches[0].screenX});document.addEventListener('touchend',e=>{const d=tx-e.changedTouches[0].screenX;if(Math.abs(d)>50){d>0?goTo(c+1):goTo(c-1)}});
+let wl=false;document.addEventListener('wheel',e=>{if(wl)return;wl=true;setTimeout(()=>wl=false,600);(e.deltaY>0||e.deltaX>0)?goTo(c+1):(e.deltaY<0||e.deltaX<0)?goTo(c-1):0},{passive:true});
+ns.forEach(s=>s.addEventListener('click',()=>goTo(parseInt(s.dataset.s))));
+pb.style.width=(1/T*100)+'%';pb.style.background=`linear-gradient(90deg,${sc[0].s},${sc[0].e})`;
+</script>
+</body>
+</html>
