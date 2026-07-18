@@ -1,0 +1,19 @@
+# 这是本地机器覆盖示例，只填写你需要覆盖的字段。
+# 使用方式：复制为 backend/config/config.local.yaml，按你的电脑环境修改。
+
+database:
+  host: localhost
+  port: 5432
+
+redis:
+  host: localhost
+  port: 6379
+
+oss:
+  endpoint: localhost:9000
+  access_key: minioadmin
+  secret_key: minioadmin
+  bucket: teaching
+
+ai:
+  base_url: http://127.0.0.1:8000

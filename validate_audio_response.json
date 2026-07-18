@@ -1,0 +1,42 @@
+{
+  "request": {
+    "url": "http://127.0.0.1:8082/api/v1/teacher/coursewares/2ffb5367-77fa-47fe-a590-6a3c89ac7c51/pages/1/audio",
+    "course": "2ffb5367-77fa-47fe-a590-6a3c89ac7c51",
+    "page": 1,
+    "ts": 1779818081840
+  },
+  "response": {
+    "code": 200,
+    "data": {
+      "audio_id": "audio_2ffb5367-77fa-47fe-a590-6a3c89ac7c51_1",
+      "audio_url": "",
+      "course_id": "2ffb5367-77fa-47fe-a590-6a3c89ac7c51",
+      "format": "wav",
+      "generated_at": "2026-05-26T17:54:41.768868Z",
+      "has_audio": true,
+      "page": 1,
+      "playback_mode": "audio_timeline",
+      "provider": "mock-tts",
+      "sections": [
+        {
+          "audio_duration_sec": 30,
+          "audio_end_sec": 30,
+          "audio_start_sec": 0,
+          "audio_url": "http://127.0.0.1:8000/generated-audio/2ffb5367-77fa-47fe-a590-6a3c89ac7c51_p1_01_e5daf3b4.wav",
+          "duration_sec": 30,
+          "end_sec": 30,
+          "has_audio": true,
+          "node_id": "p1_n1",
+          "start_sec": 0,
+          "text": "这是用于生成音频的示例文本。",
+          "title": "示例段落",
+          "tts_status": "ready"
+        }
+      ],
+      "status": "ready",
+      "total_duration_sec": 30,
+      "voice_type": "standard_female"
+    },
+    "message": "音频元数据已生成"
+  }
+}

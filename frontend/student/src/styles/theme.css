@@ -1,0 +1,27 @@
+:root {
+  --student-bg: #f5f7fb;
+  --student-card: #ffffff;
+  --student-text: #1f2937;
+  --student-sub: #64748b;
+  --student-primary: #2563eb;
+  --student-border: #e5e7eb;
+  --student-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--student-bg);
+  color: var(--student-text);
+  font-family: 'PingFang SC', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+}
