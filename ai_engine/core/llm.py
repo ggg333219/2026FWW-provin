@@ -1,0 +1,337 @@
+"""
+统一 LLM 客户端 (core/llm.py)
+
+封装 OpenAI 兼容客户端初始化和调用，供所有 Skill 模块使用。
+
+使用方式：
+    from ai_engine.core import LLMClient
+
+    client = LLMClient(model="qwen-turbo", temperature=0.1)
+    response = client.chat("你是助教", "帮我写大纲")
+    # -> "好的，以下是大纲..."
+
+    # JSON 模式（强制结构化输出）
+    result = client.chat_json(
+        system="你是一个意图提取器，输出 JSON",
+        user="用户说了...",
+        schema={...}  # OpenAI response_format 的 schema
+    )
+    # -> {"topic": "排序算法", ...}
+"""
+
+import json
+import os
+import re
+from dataclasses import dataclass, field
+from typing import Any, Optional
+from urllib.parse import urlparse
+
+from .config import settings
+
+# ---- 常量 ----
+
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_COMPAT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+# ---- 公共工具函数（从 qa.py 提取，保持签名兼容） ----
+
+def resolve_llm_base_url(model: str) -> tuple[str, str]:
+    """
+    确定 LLM API base URL。
+
+    返回 (base_url, reason):
+      - base_url: 实际的 API 端点
+      - reason: 为空表示正常，非空表示 fallback 原因（用于日志/调试）
+
+    与旧版 qa.resolve_llm_base_url 签名和返回值完全兼容。
+    """
+    raw_base_url = (os.getenv("AI_BASE_URL") or "").strip()
+    if raw_base_url:
+        parsed = urlparse(raw_base_url)
+        host = (parsed.netloc or parsed.path).lower()
+        if "example.com" not in host:
+            return raw_base_url, ""
+        reason = "placeholder_base_url"
+    else:
+        reason = ""
+
+    if (model or "").strip().lower().startswith("gpt-"):
+        return DEFAULT_OPENAI_BASE_URL, reason
+    return DEFAULT_COMPAT_BASE_URL, reason
+
+
+def extract_json(text: str) -> dict[str, Any]:
+    """
+    从 LLM 返回文本中提取并解析 JSON。
+
+    处理 ```json ... ``` 包裹、前后空白、多段文本含多个 JSON 等情况。
+    与旧版 QAResponder._extract_json 兼容，增强为独立函数。
+    """
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        cleaned = cleaned.replace("json\n", "", 1).replace("json", "", 1).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError(f"模型返回内容中未找到有效 JSON: {text[:200]}")
+    return json.loads(cleaned[start : end + 1])
+
+
+# ---- LLM 客户端 ----
+
+@dataclass
+class LLMResponse:
+    """LLM 调用的统一返回结构。"""
+    content: str
+    model: str
+    usage: Optional[dict[str, int]] = None
+    used_fallback: bool = False
+    fallback_reason: str = ""
+
+
+class LLMClient:
+    """
+    统一的 LLM 调用客户端。
+
+    封装 OpenAI 兼容客户端，提供 chat / chat_json 两种调用方式，
+    自动处理 API key 获取、base URL 解析、超时、JSON 提取与回退。
+    """
+
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        timeout: int = 60,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
+        self.model = model or settings.MODEL
+        self.temperature = temperature if temperature is not None else settings.TEMPERATURE
+        self.timeout = timeout
+        self._api_key = api_key
+        self._base_url = base_url
+
+    # ---- 属性（懒解析） ----
+
+    @property
+    def api_key(self) -> str:
+        key = self._api_key or settings.API_KEY or (os.getenv("AI_API_KEY") or "")
+        return key.strip()
+
+    @property
+    def base_url(self) -> str:
+        if self._base_url:
+            return self._base_url
+        url, _ = resolve_llm_base_url(self.model)
+        return url
+
+    # ---- 核心调用 ----
+
+    def chat(
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: Optional[float] = None,
+        model: Optional[str] = None,
+    ) -> LLMResponse:
+        """
+        普通文本聊天调用。
+
+        Args:
+            system: 系统提示词
+            user: 用户消息
+            temperature: 覆盖默认温度
+            model: 覆盖默认模型
+
+        Returns:
+            LLMResponse 包含 content
+        """
+        return self._call(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=temperature,
+            model=model,
+        )
+
+    def chat_json(
+        self,
+        system: str,
+        user: str,
+        schema: Optional[dict[str, Any]] = None,
+        *,
+        temperature: Optional[float] = None,
+        model: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        JSON 模式调用，返回解析后的字典。
+
+        Args:
+            system: 系统提示词
+            user: 用户消息
+            schema: OpenAI response_format 的 schema（strict=True 时需提供）
+            temperature: 覆盖默认温度
+            model: 覆盖默认模型
+
+        Returns:
+            解析后的 JSON 字典
+        """
+        kwargs: dict[str, Any] = {}
+        if schema:
+            kwargs["response_format"] = {"type": "json_object"}
+            # 如果 schema 中包含 "name" 和 "strict"，构造 structured output 格式
+            if "name" in schema or "strict" in schema:
+                kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": schema,
+                }
+
+        response = self._call(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=temperature or 0.1,
+            model=model,
+            **kwargs,
+        )
+
+        if response.used_fallback:
+            # 回退模式下尝试从文本提取 JSON
+            try:
+                return extract_json(response.content)
+            except (ValueError, json.JSONDecodeError):
+                return {"error": response.fallback_reason, "_raw": response.content[:500]}
+
+        try:
+            return json.loads(response.content)
+        except (json.JSONDecodeError, TypeError):
+            try:
+                return extract_json(response.content)
+            except (ValueError, json.JSONDecodeError):
+                return {"error": "json_parse_failed", "_raw": response.content[:500]}
+
+    def chat_messages(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: Optional[float] = None,
+        model: Optional[str] = None,
+    ) -> LLMResponse:
+        """
+        自定义消息列表调用（多轮对话等复杂场景）。
+
+        Args:
+            messages: 完整消息列表 [{"role": "...", "content": "..."}, ...]
+            temperature: 覆盖默认温度
+            model: 覆盖默认模型
+        """
+        return self._call(messages=messages, temperature=temperature, model=model)
+
+    # ---- 内部实现 ----
+
+    def _call(
+        self,
+        messages: list[dict[str, str]],
+        temperature: Optional[float] = None,
+        model: Optional[str] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """底层 LLM 调用，处理统一异常、回退和日志。"""
+        # Mock 模式
+        if settings.is_mock:
+            return LLMResponse(
+                content=self._mock_response(messages),
+                model=model or self.model,
+                used_fallback=True,
+                fallback_reason="mock_mode",
+            )
+
+        # 检查 API key
+        api_key = self.api_key
+        if not api_key:
+            return LLMResponse(
+                content=self._fallback_text(messages),
+                model=model or self.model,
+                used_fallback=True,
+                fallback_reason="missing_api_key",
+            )
+
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(
+                api_key=api_key,
+                base_url=self.base_url,
+                timeout=self.timeout,
+            )
+
+            actual_model = model or self.model
+            actual_temperature = temperature if temperature is not None else self.temperature
+
+            response = client.chat.completions.create(
+                model=actual_model,
+                messages=messages,
+                temperature=actual_temperature,
+                **kwargs,
+            )
+
+            content = response.choices[0].message.content or ""
+            usage = None
+            if hasattr(response, "usage") and response.usage:
+                usage = {
+                    "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+                    "completion_tokens": getattr(response.usage, "completion_tokens", 0),
+                    "total_tokens": getattr(response.usage, "total_tokens", 0),
+                }
+
+            return LLMResponse(
+                content=content,
+                model=actual_model,
+                usage=usage,
+                used_fallback=False,
+                fallback_reason="",
+            )
+
+        except Exception as e:
+            return LLMResponse(
+                content=self._fallback_text(messages),
+                model=model or self.model,
+                used_fallback=True,
+                fallback_reason=str(e),
+            )
+
+    # ---- 回退 ----
+
+    def _fallback_text(self, messages: list[dict[str, str]]) -> str:
+        """LLM 不可用时的回退响应。"""
+        return (
+            f"[{self.__class__.__name__}] AI 服务暂时不可用。"
+            f" 请检查 API_KEY 和网络连接。"
+        )
+
+    def _mock_response(self, messages: list[dict[str, str]]) -> str:
+        """Mock 模式下的假响应。"""
+        last_user = ""
+        for m in reversed(messages):
+            if m["role"] == "user":
+                last_user = m["content"][:100]
+                break
+        return json.dumps({
+            "mock": True,
+            "reply": f"（Mock 回应）已收到您的输入: {last_user}",
+        }, ensure_ascii=False, indent=2)
+
+
+# ---- 便捷单例工厂 ----
+
+def create_llm_client(
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+) -> LLMClient:
+    """创建一个新的 LLMClient 实例。"""
+    return LLMClient(model=model, temperature=temperature)
