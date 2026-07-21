@@ -105,22 +105,29 @@ RAG 索引       Agent Orchestrator
 
 | 格式 | 解析策略 | 第三方依赖 |
 |------|---------|-----------|
-| PDF | PyMuPDF (fitz) 提取文本 + 表格；pdfplumber 补充 | PyMuPDF, pdfplumber |
-| PPTX | python-pptx 提取幻灯片文本 + 形状 + 备注 | python-pptx |
-| DOCX | python-docx 提取段落 + 表格 + 样式 | python-docx |
-| 图片 | OCR (PaddleOCR/Tesseract) + 版面分析 | paddleocr/tesseract |
-| 视频 | FFmpeg 抽取关键帧 + Whisper ASR + VLM 理解 | ffmpeg, whisper, GLM-4V |
+| PDF | Marker 转为高质量 Markdown（含 LaTeX 公式、表格） | marker-pdf |
+| PPTX | Unstructured 提取结构化元素（标题、正文、图表、备注） | unstructured[pptx] |
+| DOCX | Unstructured 提取段落 + 表格 + 样式 | unstructured[docx] |
+| 图片 | PaddleOCR 文字识别 + 内置版面分析 | paddleocr |
+| 视频 | FFmpeg 抽取关键帧 + Faster-Whisper ASR + Qwen-VL 视觉 Caption | faster-whisper, ffmpeg |
 
 ## 7. 依赖关系
 
-- **依赖**: MinIO、FFmpeg、ASR 服务、VLM (GLM-4V)
-- **依赖**: `parse-knowledge` 和 `reconstruct-document` 现有端点
+- **系统依赖**: FFmpeg（含 ffprobe，用于视频抽帧与时长获取）
+- **Python 依赖**:
+  - `marker-pdf` — PDF → 高质量 Markdown（LaTeX 公式、表格）
+  - `unstructured[pptx,docx]` — PPTX/DOCX 结构化元素提取
+  - `paddleocr` — 图片 OCR 中文识别 + 版面分析
+  - `faster-whisper` — 视频 ASR（比原版 Whisper 快 4-6 倍）
+  - `minio` — MinIO 对象存储客户端
+- **VLM**: Qwen-VL-Chat / Qwen-VL-Plus（通过 `AI_VLM_MODEL` 环境变量指定）
 - **被调用**: Agent Orchestrator（当意图含 `materials_refs` 时）
 - **产出消费**: RAG 索引（块→向量化→存储）、生成器（块→上下文）
 
 ## 8. 现有代码复用
 
-- **复用** `ai_engine/document_parser.py` 的 PDF/PPTX 解析
 - **复用** Go 后端的 MinIO 上传管道
 - **复用** `parse-knowledge` 端点结构
-- **新增** 视频处理管道、Word 解析器、OCR 模块、分块标准化器
+- **替换** PDF/PPTX/DOCX 解析为 Marker + Unstructured（替代 PyMuPDF / python-pptx / python-docx）
+- **替换** Whisper 为 Faster-Whisper（ASR 速度提升 4-6 倍）
+- **新增** 视频处理管道、PaddleOCR 模块、分块标准化器
