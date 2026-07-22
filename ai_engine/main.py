@@ -36,6 +36,10 @@ app = FastAPI(title="泛雅 AI 智课系统后端", description="为前端提供
 app.include_router(recommendation_router)
 app.include_router(intent_router)
 
+# ---- Phase 4: Skill 模块注册（新增，互不冲突） ----
+from ai_engine.parse.router import router as parse_router
+app.include_router(parse_router)
+
 # 启用跨域支持，让前端 Vue/React 能访问
 app.add_middleware(
     CORSMiddleware,
