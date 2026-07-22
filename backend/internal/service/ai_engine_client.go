@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
+// AIEngine 定义所有向后端 AI Engine 的调用契约。
+// 旧接口继续保持向后兼容，新 Skill 接口按功能域分组。
 type AIEngine interface {
+	// ---- 旧接口（向后兼容） ----
 	ParseDocument(ctx context.Context, file *multipart.FileHeader) (*ParseDocumentResponse, error)
 	ReconstructDocument(ctx context.Context, req ReconstructDocumentRequest) (*ReconstructDocumentResponse, error)
 	GenerateNodeScript(ctx context.Context, req GenerateNodeScriptRequest) (*GenerateNodeScriptResponse, error)
@@ -21,6 +24,32 @@ type AIEngine interface {
 	GenerateAudio(ctx context.Context, req GenerateAudioRequest) (*GenerateAudioResponse, error)
 	AskWithContext(ctx context.Context, req AskWithContextRequest) (*AskWithContextResponse, error)
 	ParseKnowledge(ctx context.Context, req ParseKnowledgeRequest) (*ParseKnowledgeResponse, error)
+
+	// ---- S1: 意图理解 ----
+	IntentExtract(ctx context.Context, req IntentExtractRequest) (*IntentExtractResponse, error)
+	IntentConfirm(ctx context.Context, req IntentConfirmRequest) (*IntentConfirmResponse, error)
+
+	// ---- S2: 多模态解析 ----
+	ParseProcess(ctx context.Context, req *ParseProcessRequest) (*ParseProcessResponse, error)
+	ParseStatus(ctx context.Context, taskID string) (*ParseStatusResponse, error)
+	ParseVideo(ctx context.Context, req *ParseVideoRequest) (*ParseProcessResponse, error)
+
+	// ---- KB: 知识库 RAG ----
+	RAGSearch(ctx context.Context, req RAGSearchRequest) (*RAGSearchResponse, error)
+	RAGEvidence(ctx context.Context, req RAGEvidenceRequest) (*RAGEvidenceResponse, error)
+	KnowledgeUpload(ctx context.Context, req *KnowledgeUploadRequest) (*KnowledgeUploadResponse, error)
+
+	// ---- S3: 课件生成 ----
+	GenerationCreate(ctx context.Context, req GenerationCreateRequest) (*GenerationCreateResponse, error)
+	GenerationStatus(ctx context.Context, taskID string) (*GenerationStatusResponse, error)
+
+	// ---- S4: 个性化 & 版本 & 导出 ----
+	GenerationModify(ctx context.Context, genID string, req GenerationModifyRequest) (*GenerationModifyResponse, error)
+	VersionHistory(ctx context.Context, genID string) (*VersionHistoryResponse, error)
+	VersionRollback(ctx context.Context, genID string, req VersionRollbackRequest) (*VersionRollbackResponse, error)
+	VersionLock(ctx context.Context, genID string) (*VersionLockResponse, error)
+	ExportCreate(ctx context.Context, genID string, req ExportCreateRequest) (*ExportCreateResponse, error)
+	ExportStatus(ctx context.Context, jobID string) (*ExportStatusResponse, error)
 }
 
 type aiEngineClient struct {
@@ -265,6 +294,281 @@ type ParseKnowledgeResponse struct {
 	Structure []KnowledgeNode `json:"structure"`
 }
 
+// =============================================================================
+// S1: 意图理解 — 请求/响应类型
+// =============================================================================
+
+// SessionStatus 会话状态（映射 Python SessionStatus 枚举）
+type SessionStatus string
+
+const (
+	SessionStatusCollecting  SessionStatus = "collecting"
+	SessionStatusClarifying  SessionStatus = "clarifying"
+	SessionStatusConfirming  SessionStatus = "confirming"
+	SessionStatusConfirmed   SessionStatus = "confirmed"
+	SessionStatusLocked      SessionStatus = "locked"
+)
+
+// IntentSummary 结构化教学意图摘要
+type IntentSummary struct {
+	Topic            *string  `json:"topic,omitempty"`
+	DurationMinutes  *int     `json:"duration_minutes,omitempty"`
+	Style            *string  `json:"style,omitempty"`
+	TargetStudent    *string  `json:"target_student,omitempty"`
+	KnowledgePoints  []string `json:"knowledge_points,omitempty"`
+	OutputFormat     []string `json:"output_format,omitempty"`
+	WithInteractive  bool     `json:"with_interactive"`
+	KeyDifficulties  []string `json:"key_difficulties,omitempty"`
+	ExpectedOutcomes []string `json:"expected_outcomes,omitempty"`
+	MissingFields    []string `json:"missing_fields,omitempty"`
+}
+
+type DialogueTurn struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type IntentExtractRequest struct {
+	SessionID string         `json:"session_id"`
+	Messages  []DialogueTurn `json:"messages,omitempty"`
+}
+
+type IntentExtractResponse struct {
+	IntentSummary  *IntentSummary `json:"intent_summary"`
+	SessionStatus  SessionStatus  `json:"session_status"`
+	Response       string         `json:"response,omitempty"`
+	NeedFollowup   bool           `json:"need_followup"`
+	FollowupQs     []string       `json:"followup_questions,omitempty"`
+}
+
+type IntentConfirmRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type IntentConfirmResponse struct {
+	Confirmed     bool           `json:"confirmed"`
+	IntentSummary *IntentSummary `json:"intent_summary"`
+	SessionStatus SessionStatus  `json:"session_status"`
+}
+
+// =============================================================================
+// S2: 多模态解析 — 请求/响应类型
+// =============================================================================
+
+type ParseProcessRequest struct {
+	SessionID string   `json:"session_id"`
+	FilePaths []string `json:"file_paths,omitempty"`
+}
+
+type MaterialAsset struct {
+	AssetID    string `json:"asset_id"`
+	FileName   string `json:"file_name"`
+	SourceType string `json:"source_type"`
+	ParseStatus string `json:"parse_status"`
+	FileSize   int    `json:"file_size"`
+}
+
+type ParseProcessResponse struct {
+	TaskID string          `json:"task_id"`
+	Status string          `json:"status"`
+	Assets []MaterialAsset `json:"assets,omitempty"`
+}
+
+type ParseStatusResponse struct {
+	TaskID string          `json:"task_id"`
+	Status string          `json:"status"`
+	Chunks []ChunkItem     `json:"chunks,omitempty"`
+	Error  string          `json:"error,omitempty"`
+}
+
+type ChunkItem struct {
+	ChunkID    string `json:"chunk_id"`
+	Content    string `json:"content"`
+	SourceType string `json:"source_type"`
+	PageRef    int    `json:"page_ref,omitempty"`
+	SeqIndex   int    `json:"seq_index"`
+}
+
+type ParseVideoRequest struct {
+	SessionID string `json:"session_id"`
+	FilePath  string `json:"file_path"`
+	Language  string `json:"language,omitempty"` // ASR 语言
+}
+
+// =============================================================================
+// KB: 知识库 RAG — 请求/响应类型
+// =============================================================================
+
+type RAGSearchRequest struct {
+	Query              string   `json:"query"`
+	KnowledgeBaseIDs   []string `json:"knowledge_base_ids,omitempty"`
+	TopK               int      `json:"top_k,omitempty"`
+	MinScore           float64  `json:"min_score,omitempty"`
+}
+
+type RAGSearchResponse struct {
+	Results     []SearchResultItem `json:"results"`
+	TotalChunks int                `json:"total_chunks"`
+}
+
+type SearchResultItem struct {
+	ChunkID  string         `json:"chunk_id"`
+	Content  string         `json:"content"`
+	Score    float64        `json:"score"`
+	Source   map[string]any `json:"source,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+type RAGEvidenceRequest struct {
+	Query             string         `json:"query"`
+	Context           map[string]any `json:"context,omitempty"`
+	KnowledgeBaseIDs  []string       `json:"knowledge_base_ids,omitempty"`
+}
+
+type EvidencePacket struct {
+	RelevantChunks     []ChunkItem  `json:"relevant_chunks"`
+	SynthesizedContext string       `json:"synthesized_context"`
+	Citations          []CitationItem `json:"citations"`
+}
+
+type CitationItem struct {
+	ChunkID     string `json:"chunk_id"`
+	TextSnippet string `json:"text_snippet"`
+	SourceRef   string `json:"source_ref"`
+}
+
+type RAGEvidenceResponse struct {
+	EvidencePacket *EvidencePacket `json:"evidence_packet"`
+}
+
+type KnowledgeUploadRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type KnowledgeUploadResponse struct {
+	TaskID      string `json:"task_id"`
+	Status      string `json:"status"`
+	ChunkCount  int    `json:"chunk_count"`
+	DocumentID  string `json:"document_id,omitempty"`
+}
+
+// =============================================================================
+// S3: 课件生成 — 请求/响应类型
+// =============================================================================
+
+type TeachingNodeItem struct {
+	NodeID       string   `json:"node_id"`
+	Title        string   `json:"title"`
+	NodeType     string   `json:"node_type,omitempty"`
+	Content      string   `json:"content,omitempty"`
+	Summary      string   `json:"summary,omitempty"`
+	PageRef      int      `json:"page_ref,omitempty"`
+	CorePoints   []string `json:"core_points,omitempty"`
+	Examples     []string `json:"examples,omitempty"`
+	DurationMin  float64  `json:"estimated_duration_minutes,omitempty"`
+	CitationRefs []string `json:"citation_refs,omitempty"`
+	NextNodeID   string   `json:"next_node_id,omitempty"`
+}
+
+type GenerationCreateRequest struct {
+	SessionID       string          `json:"session_id"`
+	Intent          *IntentSummary  `json:"intent,omitempty"`
+	EvidencePacket  *EvidencePacket `json:"evidence_packet,omitempty"`
+	TemplateID      string          `json:"template_id,omitempty"`
+}
+
+type GenerationCreateResponse struct {
+	TaskID          string `json:"task_id"`
+	Status          string `json:"status"`
+	GenerationType  string `json:"generation_type,omitempty"`
+}
+
+type GenerationStatusResponse struct {
+	TaskID      string             `json:"task_id"`
+	Status      string             `json:"status"`
+	Stage       string             `json:"stage,omitempty"`
+	ProgressPct float64            `json:"progress_pct"`
+	CurrentNode string             `json:"current_node,omitempty"`
+	Nodes       []TeachingNodeItem `json:"nodes,omitempty"`
+	PreviewURL  string             `json:"preview_url,omitempty"`
+	Error       string             `json:"error,omitempty"`
+}
+
+// =============================================================================
+// S4: 个性化 & 版本 & 导出 — 请求/响应类型
+// =============================================================================
+
+type ModifyCommandItem struct {
+	CommandType    string   `json:"command_type"`
+	NodeID         string   `json:"node_id,omitempty"`
+	TargetNodeIDs  []string `json:"target_node_ids,omitempty"`
+	Content        string   `json:"content,omitempty"`
+	AfterNodeID    string   `json:"after_node_id,omitempty"`
+	TemplateID     string   `json:"template_id,omitempty"`
+	SplitPoint     string   `json:"split_point,omitempty"`
+	Regenerate     bool     `json:"regenerate"`
+}
+
+type GenerationModifyRequest struct {
+	Commands []ModifyCommandItem `json:"commands"`
+}
+
+type GenerationModifyResponse struct {
+	TaskID      string `json:"task_id"`
+	NewVersion  int    `json:"new_version"`
+	Status      string `json:"status"`
+}
+
+type VersionSnapshot struct {
+	ID             string             `json:"id"`
+	GenerationID   string             `json:"generation_id"`
+	VersionNumber  int                `json:"version_number"`
+	NodesSnapshot  []TeachingNodeItem `json:"nodes_snapshot,omitempty"`
+	Summary        string             `json:"summary,omitempty"`
+	Locked         bool               `json:"locked"`
+	CreatedAt      string             `json:"created_at"`
+}
+
+type VersionHistoryResponse struct {
+	Versions []VersionSnapshot `json:"versions"`
+}
+
+type VersionRollbackRequest struct {
+	TargetVersion int `json:"target_version"`
+}
+
+type VersionRollbackResponse struct {
+	CurrentVersion int    `json:"current_version"`
+	Status         string `json:"status"`
+}
+
+type VersionLockResponse struct {
+	Version    int               `json:"version"`
+	Locked     bool              `json:"locked"`
+	ExportURLs map[string]string `json:"export_urls,omitempty"`
+}
+
+type ExportCreateRequest struct {
+	Format  string `json:"format"`
+	Version int    `json:"version"`
+}
+
+type ExportCreateResponse struct {
+	JobID  string `json:"job_id"`
+	Status string `json:"status"`
+}
+
+type ExportStatusResponse struct {
+	JobID       string `json:"job_id"`
+	Status      string `json:"status"`
+	DownloadURL string `json:"download_url,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// =============================================================================
+// Client 构造函数
+// =============================================================================
+
 func NewAIEngineClient(baseURL string, timeout time.Duration) AIEngine {
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = "http://127.0.0.1:8000"
@@ -386,6 +690,192 @@ func (c *aiEngineClient) ParseKnowledge(ctx context.Context, req ParseKnowledgeR
 	var result ParseKnowledgeResponse
 	if err := c.postJSON(ctx, "/parse-knowledge", req, &result); err != nil {
 		return nil, err
+	}
+	return &result, nil
+}
+
+// ---- S1: 意图理解 ----
+
+func (c *aiEngineClient) IntentExtract(ctx context.Context, req IntentExtractRequest) (*IntentExtractResponse, error) {
+	var result IntentExtractResponse
+	if err := c.postJSON(ctx, "/api/v1/intent/extract", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) IntentConfirm(ctx context.Context, req IntentConfirmRequest) (*IntentConfirmResponse, error) {
+	var result IntentConfirmResponse
+	if err := c.postJSON(ctx, "/api/v1/intent/confirm", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ---- S2: 多模态解析 ----
+
+func (c *aiEngineClient) ParseProcess(ctx context.Context, req *ParseProcessRequest) (*ParseProcessResponse, error) {
+	var result ParseProcessResponse
+	if err := c.postJSON(ctx, "/api/v1/parse/process", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) ParseStatus(ctx context.Context, taskID string) (*ParseStatusResponse, error) {
+	var result ParseStatusResponse
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/parse/status/"+taskID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("构造解析状态请求失败: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("查询解析状态失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("查询解析状态返回异常: %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("解析状态响应失败: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) ParseVideo(ctx context.Context, req *ParseVideoRequest) (*ParseProcessResponse, error) {
+	var result ParseProcessResponse
+	if err := c.postJSON(ctx, "/api/v1/parse/video", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ---- KB: 知识库 RAG ----
+
+func (c *aiEngineClient) RAGSearch(ctx context.Context, req RAGSearchRequest) (*RAGSearchResponse, error) {
+	var result RAGSearchResponse
+	if err := c.postJSON(ctx, "/api/v1/rag/search", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) RAGEvidence(ctx context.Context, req RAGEvidenceRequest) (*RAGEvidenceResponse, error) {
+	var result RAGEvidenceResponse
+	if err := c.postJSON(ctx, "/api/v1/rag/evidence", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) KnowledgeUpload(ctx context.Context, req *KnowledgeUploadRequest) (*KnowledgeUploadResponse, error) {
+	var result KnowledgeUploadResponse
+	if err := c.postJSON(ctx, "/api/v1/knowledge/upload", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ---- S3: 课件生成 ----
+
+func (c *aiEngineClient) GenerationCreate(ctx context.Context, req GenerationCreateRequest) (*GenerationCreateResponse, error) {
+	var result GenerationCreateResponse
+	if err := c.postJSON(ctx, "/api/v1/gen/create", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) GenerationStatus(ctx context.Context, taskID string) (*GenerationStatusResponse, error) {
+	var result GenerationStatusResponse
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/gen/status/"+taskID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("构造生成状态请求失败: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("查询生成状态失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("查询生成状态返回异常: %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("解析生成状态响应失败: %w", err)
+	}
+	return &result, nil
+}
+
+// ---- S4: 个性化 & 版本 & 导出 ----
+
+func (c *aiEngineClient) GenerationModify(ctx context.Context, genID string, req GenerationModifyRequest) (*GenerationModifyResponse, error) {
+	var result GenerationModifyResponse
+	if err := c.postJSON(ctx, "/api/v1/gen/modify/"+genID, req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) VersionHistory(ctx context.Context, genID string) (*VersionHistoryResponse, error) {
+	var result VersionHistoryResponse
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/version/"+genID+"/history", nil)
+	if err != nil {
+		return nil, fmt.Errorf("构造版本历史请求失败: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("查询版本历史失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("查询版本历史返回异常: %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("解析版本历史响应失败: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) VersionRollback(ctx context.Context, genID string, req VersionRollbackRequest) (*VersionRollbackResponse, error) {
+	var result VersionRollbackResponse
+	if err := c.postJSON(ctx, "/api/v1/version/"+genID+"/rollback", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) VersionLock(ctx context.Context, genID string) (*VersionLockResponse, error) {
+	var result VersionLockResponse
+	if err := c.postJSON(ctx, "/api/v1/version/"+genID+"/lock", nil, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) ExportCreate(ctx context.Context, genID string, req ExportCreateRequest) (*ExportCreateResponse, error) {
+	var result ExportCreateResponse
+	if err := c.postJSON(ctx, "/api/v1/export/"+genID, req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) ExportStatus(ctx context.Context, jobID string) (*ExportStatusResponse, error) {
+	var result ExportStatusResponse
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/export/status/"+jobID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("构造导出状态请求失败: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("查询导出状态失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("查询导出状态返回异常: %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("解析导出状态响应失败: %w", err)
 	}
 	return &result, nil
 }

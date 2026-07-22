@@ -32,6 +32,7 @@ try:
     from .gen.commands import CommandParser, EditCommand, CommandType
     from .gen.patch import NodePatcher
     from .gen.interactive import InteractiveBuilder
+    from .intent.router import router as intent_router
 except ImportError:
     from parser import DocumentParser
     from generator import LessonGenerator, GenerationConfig
@@ -46,9 +47,18 @@ except ImportError:
     from gen.commands import CommandParser, EditCommand, CommandType
     from gen.patch import NodePatcher
     from gen.interactive import InteractiveBuilder
+    from intent.router import router as intent_router
 
 app = FastAPI(title="泛雅 AI 智课系统后端", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
 app.include_router(recommendation_router)
+app.include_router(intent_router)
+
+# ---- Phase 4: Skill 模块注册（新增，互不冲突） ----
+from ai_engine.parse.router import router as parse_router
+app.include_router(parse_router)
+
+from ai_engine.rag.router import router as rag_router
+app.include_router(rag_router)
 
 # 启用跨域支持，让前端 Vue/React 能访问
 app.add_middleware(

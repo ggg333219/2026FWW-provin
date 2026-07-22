@@ -86,3 +86,65 @@ func RegisterTeacherRoutes(api *gin.RouterGroup,
 		}
 	}
 }
+
+// RegisterNewSkillRoutes 注册 4 Skill + KB 的新路由
+// 与旧路由共存，向后兼容
+func RegisterNewSkillRoutes(
+	v1 *gin.RouterGroup,
+	convHandler *handler.ConversationHandler,
+	parseHandler *handler.ParseHandler,
+	knowledgeHandler *handler.KnowledgeHandler,
+	genHandler *handler.GenerationHandler,
+	versionHandler *handler.VersionHandler,
+	exportHandler *handler.ExportHandler,
+) {
+	// ---- S1: 意图理解 ----
+	intent := v1.Group("/intent")
+	{
+		intent.POST("/extract", convHandler.ExtractIntent)
+		intent.POST("/confirm", convHandler.ConfirmIntent)
+	}
+
+	// ---- S2: 多模态解析 ----
+	parse := v1.Group("/parse")
+	{
+		parse.POST("/process", parseHandler.ProcessFile)
+		parse.GET("/status/:task_id", parseHandler.ParseStatus)
+		parse.POST("/video", parseHandler.ProcessVideo)
+	}
+
+	// ---- KB: 知识库 RAG ----
+	rag := v1.Group("/rag")
+	{
+		rag.POST("/search", knowledgeHandler.Search)
+		rag.POST("/evidence", knowledgeHandler.Evidence)
+	}
+	knowledge := v1.Group("/knowledge")
+	{
+		knowledge.POST("/upload", knowledgeHandler.Upload)
+	}
+
+	// ---- S3: 课件生成 ----
+	gen := v1.Group("/gen")
+	{
+		gen.POST("/create", genHandler.Create)
+		gen.GET("/status/:task_id", genHandler.Status)
+		gen.GET("/preview/:gen_id", genHandler.Preview)
+		gen.POST("/modify/:gen_id", genHandler.Create) // 简化：后续拆为单独 modify handler
+	}
+
+	// ---- S4: 版本管理 ----
+	ver := v1.Group("/version")
+	{
+		ver.GET("/:gen_id/history", versionHandler.History)
+		ver.POST("/:gen_id/rollback", versionHandler.Rollback)
+		ver.POST("/:gen_id/lock", versionHandler.Lock)
+	}
+
+	// ---- S4: 导出 ----
+	exp := v1.Group("/export")
+	{
+		exp.POST("/:gen_id", exportHandler.Create)
+		exp.GET("/status/:job_id", exportHandler.Status)
+	}
+}
