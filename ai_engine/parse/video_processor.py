@@ -1,0 +1,558 @@
+"""
+视频/音频处理器 (video_processor.py)
+
+使用成熟开源方案解析视频/音频，带多级回退链确保始终产出 chunks。
+
+处理管线（各阶段依次尝试，任一成功即返回）：
+  - 元数据提取:    纯 Python 文件分析（始终可用）
+  - 关键帧抽取:    FFmpeg → 跳过（无依赖时返回空）
+  - 帧视觉描述:    Qwen-VL (LLMClient) → 基础元数据描述
+  - ASR 语音识别:  Faster-Whisper → 不可用标记
+
+依赖安装（可选，非必须）：
+    pip install faster-whisper
+    ffmpeg 需在系统 PATH 中
+
+使用方式：
+    from ai_engine.parse.video_processor import VideoProcessor
+
+    vp = VideoProcessor()
+    result = vp.process("path/to/video.mp4")
+    # -> [{"type": "video_meta|frame|transcript", ...}]
+"""
+
+import base64
+import os
+import struct
+import subprocess
+import tempfile
+from typing import Any, Optional
+
+from ai_engine.core.llm import LLMClient
+
+
+class VideoProcessor:
+    """
+    视频处理器，多级回退确保始终产出解析块。
+
+    处理管线：
+      1. 提取视频元数据（纯 Python，始终可用）
+      2. FFmpeg 抽帧 + Qwen-VL Caption（降级时跳过）
+      3. Faster-Whisper ASR（降级时标记不可用）
+      4. 保底：至少返回一个 metadata chunk
+
+    也支持纯音频处理（process_audio）。
+    """
+
+    def __init__(
+        self,
+        max_keyframes: int = 5,
+        whisper_model: str = "base",
+        asr_language: Optional[str] = None,
+        vlm_model: Optional[str] = None,
+        llm_model: Optional[str] = None,
+    ):
+        """
+        Args:
+            max_keyframes: 最大抽取关键帧数。
+            whisper_model: Faster-Whisper 模型尺寸
+                           ("base", "small", "medium", "large-v3", 或 HuggingFace 路径)。
+            asr_language:  ASR 语言代码（"zh"/"en"/None=自动检测）。
+            vlm_model:     多模态视觉模型名
+                           (默认 "qwen-vl-plus"，可被 AI_VLM_MODEL 环境变量覆盖)。
+            llm_model:     ASR 纠错用的 LLM 模型名
+                           (默认 settings.MODEL，可被 AI_MODEL 环境变量覆盖)。
+        """
+        self.max_keyframes = max_keyframes
+        self.whisper_model_name = whisper_model
+        self.asr_language = asr_language
+        self._vlm_model = vlm_model or os.getenv("AI_VLM_MODEL", "qwen-vl-plus")
+        self._llm_model = llm_model or os.getenv("AI_MODEL", None)
+        # 统一 LLM 客户端，VLM 和 ASR 纠错共用（模型名通过调用参数覆盖）
+        self._llm_client: Optional[LLMClient] = None
+        self._whisper_instance = None
+
+    # ======================================================================
+    # 主入口
+    # ======================================================================
+
+    def process(self, video_path: str) -> list[dict[str, Any]]:
+        """
+        处理视频：元数据 + 关键帧视觉摘要 + ASR 字幕。
+
+        无论外部依赖是否齐全，始终返回至少一个块。
+
+        Args:
+            video_path: 视频文件路径。
+
+        Returns:
+            list[dict]: 统一原始块列表。
+        """
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"视频文件未找到: {video_path}")
+
+        result: list[dict[str, Any]] = []
+
+        # 0. 基础元数据（纯 Python，始终可用）
+        meta = self._get_metadata(video_path)
+        if meta:
+            result.append(meta)
+
+        # 1. FFmpeg 抽帧 + Qwen-VL Caption
+        keyframes = self._extract_keyframes(video_path)
+        for kf in keyframes:
+            frame_desc = self._describe_frame_with_qwen(kf["path"])
+            result.append({
+                "type": "frame",
+                "page": 0,
+                "content": frame_desc,
+                "metadata": {
+                    "timestamp_sec": kf["timestamp_sec"],
+                    "frame_path": kf["path"],
+                    "vlm_model": self._vlm_model,
+                },
+            })
+
+        # 2. ASR 语音识别
+        asr_chunk = self._transcribe(video_path)
+        if asr_chunk:
+            result.append(asr_chunk)
+
+        return result
+
+    def process_audio(self, audio_path: str) -> list[dict[str, Any]]:
+        """
+        处理纯音频文件：元数据 + ASR 语音识别。
+
+        Args:
+            audio_path: 音频文件路径。
+
+        Returns:
+            list[dict]: 统一原始块列表。
+        """
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(f"音频文件未找到: {audio_path}")
+
+        result: list[dict[str, Any]] = []
+
+        meta = self._get_metadata(audio_path)
+        if meta:
+            result.append(meta)
+
+        asr_chunk = self._transcribe(audio_path)
+        if asr_chunk:
+            result.append(asr_chunk)
+
+        return result
+
+    # ======================================================================
+    # 视频元数据（纯 Python，始终可用）
+    # ======================================================================
+
+    @staticmethod
+    def _parse_mp4_duration(file_path: str) -> float:
+        """
+        纯 Python 解析 MP4 文件时长（无需 ffprobe）。
+
+        通过读取 moov → mvhd atom 获取 timescale 和 duration。
+        适用于 MP4/M4V/M4A 等 ISO Base Media File Format。
+
+        Returns:
+            float: 时长（秒），解析失败返回 0.0。
+        """
+        try:
+            with open(file_path, "rb") as f:
+                # 扫描找到 moov box
+                while True:
+                    header = f.read(8)
+                    if len(header) < 8:
+                        break
+                    box_size = struct.unpack(">I", header[:4])[0]
+                    box_type = header[4:8]
+
+                    if box_type == b"moov":
+                        # 在 moov 内找 mvhd atom
+                        moov_end = f.tell() + box_size - 8
+                        while f.tell() < moov_end:
+                            atom_header = f.read(8)
+                            if len(atom_header) < 8:
+                                break
+                            atom_size = struct.unpack(">I", atom_header[:4])[0]
+                            atom_type = atom_header[4:8]
+                            if atom_type == b"mvhd":
+                                # 跳过 version(1) + flags(3)
+                                f.read(4)
+                                # timescale (uint32) + duration (uint32)
+                                # 或者 version=1 时是 uint64 + uint64
+                                # 读取 version 字节判断
+                                f.seek(-4, os.SEEK_CUR)  # 回到 version 开始处
+                                version_data = f.read(1)
+                                version = version_data[0]
+                                f.read(3)  # flags
+                                if version == 0:
+                                    f.read(4)  # creation_time
+                                    f.read(4)  # modification_time
+                                    timescale = struct.unpack(">I", f.read(4))[0]
+                                    duration = struct.unpack(">I", f.read(4))[0]
+                                else:
+                                    f.read(8)  # creation_time
+                                    f.read(8)  # modification_time
+                                    timescale = struct.unpack(">I", f.read(4))[0]
+                                    duration = struct.unpack(">Q", f.read(8))[0]
+                                if timescale > 0:
+                                    return duration / timescale
+                                break
+                            else:
+                                # 跳到下一个 atom
+                                if atom_size < 8:
+                                    break
+                                f.seek(atom_size - 8, os.SEEK_CUR)
+                        break
+                    else:
+                        if box_size < 8:
+                            break
+                        f.seek(box_size - 8, os.SEEK_CUR)
+        except Exception:
+            pass
+        return 0.0
+
+    @staticmethod
+    def _get_metadata(media_path: str) -> Optional[dict[str, Any]]:
+        """
+        提取媒体文件基础元数据。
+
+        纯 Python 实现，不依赖外部工具。
+        如果 ffprobe 可用，补充更精确的时长和分辨率信息。
+        """
+        if not os.path.exists(media_path):
+            return None
+
+        file_size = os.path.getsize(media_path)
+        file_name = os.path.basename(media_path)
+        ext = os.path.splitext(file_name)[1].lower()
+
+        metadata: dict[str, Any] = {
+            "source_type": "video" if ext in (".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv") else "audio",
+            "file_name": file_name,
+            "file_size": file_size,
+            "file_size_mb": round(file_size / (1024 * 1024), 2),
+        }
+
+        # 尝试 ffprobe 获取更精确信息
+        duration = 0.0
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", media_path],
+                capture_output=True, text=True, timeout=10, check=True,
+            )
+            duration = float(result.stdout.strip())
+            metadata["duration_sec"] = round(duration, 2)
+            metadata["duration_method"] = "ffprobe"
+
+            # 获取分辨率
+            try:
+                v_result = subprocess.run(
+                    ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                     "-show_entries", "stream=width,height",
+                     "-of", "csv=p=0", media_path],
+                    capture_output=True, text=True, timeout=10, check=True,
+                )
+                parts = v_result.stdout.strip().split(",")
+                if len(parts) == 2:
+                    metadata["width"] = int(parts[0])
+                    metadata["height"] = int(parts[1])
+            except Exception:
+                pass
+
+        except Exception:
+            # ffprobe 不可用 → 纯 Python 解析时长
+            duration = VideoProcessor._parse_mp4_duration(media_path)
+            if duration > 0:
+                metadata["duration_sec"] = round(duration, 2)
+                metadata["duration_method"] = "python_parser"
+
+        if not metadata.get("duration_sec"):
+            metadata["duration_sec"] = 0.0
+            metadata["duration_note"] = "无法获取视频时长"
+
+        return {
+            "type": "video_meta",
+            "page": 0,
+            "content": (
+                f"文件: {metadata['file_name']}\n"
+                f"大小: {metadata['file_size_mb']}MB\n"
+                f"时长: {metadata['duration_sec']}秒\n"
+                + (f"分辨率: {metadata.get('width', '?')}x{metadata.get('height', '?')}\n"
+                   if "width" in metadata else "")
+            ),
+            "metadata": metadata,
+        }
+
+    # ======================================================================
+    # FFmpeg 关键帧抽取
+    # ======================================================================
+
+    def _extract_keyframes(self, video_path: str) -> list[dict[str, Any]]:
+        """
+        使用 FFmpeg 按时间均匀抽帧。
+
+        如果 ffmpeg 不可用，返回空列表（不阻塞流水线）。
+        """
+        duration = self._get_video_duration(video_path)
+        if duration <= 0:
+            return []
+
+        interval = max(int(duration // self.max_keyframes), 1)
+        timestamps = list(range(0, int(duration), interval))[:self.max_keyframes]
+
+        keyframes: list[dict[str, Any]] = []
+        tmp_dir = tempfile.mkdtemp(prefix="video_frames_")
+
+        for ts in timestamps:
+            output_path = os.path.join(tmp_dir, f"frame_{ts:04d}.jpg")
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-ss", str(ts), "-i", video_path,
+                     "-vframes", "1", "-q:v", "2", output_path],
+                    capture_output=True, timeout=30, check=True,
+                )
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    keyframes.append({"path": output_path, "timestamp_sec": ts})
+            except (subprocess.SubprocessError, FileNotFoundError):
+                continue
+
+        return keyframes
+
+    @staticmethod
+    def _get_video_duration(video_path: str) -> float:
+        """FFprobe 获取视频时长（秒）。"""
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", video_path],
+                capture_output=True, text=True, timeout=10, check=True,
+            )
+            return float(result.stdout.strip())
+        except (subprocess.SubprocessError, ValueError, FileNotFoundError):
+            return 0.0
+
+    # ======================================================================
+    # 帧视觉描述 — Qwen-VL
+    # ======================================================================
+
+    def _describe_frame_with_qwen(self, frame_path: str) -> str:
+        """
+        使用 Qwen-VL 生成帧描述。
+
+        降级策略：
+          1. Qwen-VL via LLMClient — 需要 API key
+          2. 返回图片基本信息（文件大小、尺寸）
+          3. 完全不可用时返回占位标记
+        """
+        # 1) Qwen-VL 主方案（通过统一 LLMClient，按调用传入 vlm 模型名）
+        try:
+            if self._llm_client is None:
+                self._llm_client = LLMClient(temperature=0.1, timeout=300)
+
+            with open(frame_path, "rb") as f:
+                b64_data = base64.b64encode(f.read()).decode("utf-8")
+
+            response = self._llm_client.chat_messages(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url",
+                             "image_url": {"url": f"data:image/jpeg;base64,{b64_data}"}},
+                            {"type": "text",
+                             "text": "这是教学视频的一个关键帧。请用中文简要描述："
+                                     "1）画面主要内容；2）是否有文字、公式或图表；"
+                                     "3）这段可能的教学主题是什么。"},
+                        ],
+                    }
+                ],
+                model=self._vlm_model,
+            )
+            return response.content.strip()
+        except Exception:
+            pass
+
+        # 2) 基础文件信息（降级）
+        try:
+            from PIL import Image
+            img = Image.open(frame_path)
+            size_info = f"尺寸: {img.width}x{img.height}"
+            file_size = os.path.getsize(frame_path)
+            return f"(帧图像: {size_info}, {round(file_size/1024,1)}KB — 需配置 VLM 模型获取详细描述)"
+        except Exception:
+            pass
+
+        # 3) 完全降级
+        return "(视频关键帧 — 需配置 VLM 模型获取帧内容描述)"
+
+    # ======================================================================
+    # ASR — Faster-Whisper
+    # ======================================================================
+
+    def _transcribe(self, media_path: str) -> Optional[dict[str, Any]]:
+        """
+        语音识别 + LLM 纠错，含多级回退。
+
+        降级策略：
+          1. Faster-Whisper — 最优方案，带时间戳
+          2. LLM 纠错 — 修正 ASR 识别错误，使输出通顺合理
+          3. 标记 ASR 不可用 — 返回基本信息
+
+        Returns:
+            dict 或 None（完全无法提取语音信息时返回 None）。
+        """
+        # 1) Faster-Whisper 主方案（失败返回空列表 → 自然走降级分支）
+        segments = self._transcribe_with_faster_whisper(media_path)
+
+        if segments:
+            combined_raw = "\n".join(
+                f"[{seg['start']:.1f}s-{seg['end']:.1f}s] {seg['text']}"
+                for seg in segments
+            )
+
+            # 2) LLM 纠错 — 将 ASR 原始文本送入 LLM 修正
+            corrected = self._correct_asr_text(combined_raw)
+
+            return {
+                "type": "transcript",
+                "page": 0,
+                "content": corrected,
+                "metadata": {
+                    "source": "faster-whisper",
+                    "model": self.whisper_model_name,
+                    "segment_count": len(segments),
+                    "segments": segments[:100],
+                    "llm_corrected": corrected != combined_raw,
+                },
+            }
+
+        # 3) 降级
+        return self._make_asr_fallback("Faster-Whisper 未安装或识别无结果")
+
+    # ======================================================================
+    # ASR 文本 LLM 纠错
+    # ======================================================================
+
+    def _correct_asr_text(self, raw_text: str) -> str:
+        """
+        使用 LLM 对 ASR 语音识别文本进行纠错，使输出通顺合理。
+
+        ASR 常见问题：
+          - 同音字/近音字错误（如"普通"→"普京"、"AI"→"爱"）
+          - 断句不合理
+          - 专有名词识别错误
+          - 口语语气词/重复
+
+        纠错要求：
+          - 修正识别错误，保留原意
+          - 保留时间戳标记 [xx.xs-xx.xs]
+          - 不增删实质性教学内容
+          - 使文本通顺、合理
+
+        降级策略：
+          1. LLM 纠错 — 调用 core/LLMClient（使用配置的 AI_BASE_URL）
+          2. 返回原始文本 — LLM 不可用或因任何原因失败时
+
+        Args:
+            raw_text: 带时间戳的 ASR 原始文本。
+
+        Returns:
+            str: 纠错后的文本（或原始文本的降级）。
+        """
+        # 无内容或不含时间戳 → 直接返回
+        if not raw_text.strip() or "[" not in raw_text:
+            return raw_text
+
+        # 截断过长的纠错文本：超过 1500 字符的前缀足以捕捉典型 ASR 错误模式，
+        # 后面未被纠错的片段在时间戳上独立，不影响整体可读性
+        truncated = raw_text[:1500] if len(raw_text) > 1500 else raw_text
+
+        try:
+            # 使用统一的 LLMClient（避免重复创建）
+            if self._llm_client is None:
+                self._llm_client = LLMClient(temperature=0.1, timeout=300)
+
+            # 用户要求的 ASR 纠错 prompt
+            prompt = (
+                "你是一个语音识别（ASR）文本纠错专家。下面是一段视频语音识别出来的原始文本，"
+                "其中可能包含同音错别字、标点符号缺失或不通顺的地方。\n\n"
+                "请在不改变原意的前提下进行润色修正：\n"
+                "1. 修正明显的同音错别字和专业术语错误。\n"
+                "2. 补全或修正标点符号。\n"
+                "3. 保持原有的口语表达风格，不要过度重写。\n"
+                "4. 保持原有的时间戳标记 [xx.xs-xx.xs] 完全不变、换行结构不变。\n\n"
+                "原始文本：\n"
+                f"{truncated}\n\n"
+                "输出格式：直接输出修正后的文本。"
+            )
+            response = self._llm_client.chat(
+                system="你是一个语音识别（ASR）文本纠错专家。", user=prompt,
+                model=self._llm_model or "qwen-turbo",
+            )
+
+            if not response.used_fallback:
+                corrected = response.content.strip()
+                if corrected and "[" in corrected:
+                    # 如果截断纠错，将未纠错的剩余部分拼接回去
+                    if len(raw_text) > 1500:
+                        return corrected + raw_text[1500:]
+                    return corrected
+
+        except Exception:
+            pass
+
+        return raw_text
+
+    @staticmethod
+    def _make_asr_fallback(reason: str) -> dict[str, Any]:
+        """构造 ASR 降级响应块。"""
+        return {
+            "type": "transcript",
+            "page": 0,
+            "content": f"[ASR 语音识别不可用] {reason}。如需语音转文字，请安装: pip install faster-whisper",
+            "metadata": {
+                "source": "fallback",
+                "note": reason,
+            },
+        }
+
+    def _transcribe_with_faster_whisper(self, media_path: str) -> list[dict[str, Any]]:
+        """
+        使用 Faster-Whisper 进行语音识别，返回带时间戳的片段列表。
+        """
+        try:
+            if self._whisper_instance is None:
+                from faster_whisper import WhisperModel
+
+                self._whisper_instance = WhisperModel(
+                    model_size_or_path=self.whisper_model_name,
+                    device="cpu",
+                    compute_type="int8",
+                )
+
+            segments, info = self._whisper_instance.transcribe(
+                media_path,
+                beam_size=5,
+                language=self.asr_language,
+            )
+
+            return [
+                {
+                    "start": round(seg.start, 2),
+                    "end": round(seg.end, 2),
+                    "text": seg.text.strip(),
+                }
+                for seg in segments
+                if seg.text and seg.text.strip()
+            ]
+
+        except ImportError:
+            return []
+        except Exception as e:
+            return []

@@ -467,6 +467,26 @@ class IntentConfirmResponse(BaseModel):
 
 # ---- S2 ----
 
+class ParseProcessRequest(BaseModel):
+    """POST /api/v1/parse/process 请求
+
+    与 Go 端 AIEngine.ParseProcessRequest 保持一致。
+    file_paths 可以是本地路径或 minio:// 协议的远程路径。
+    """
+    session_id: str = ""
+    intent_id: Optional[str] = None
+    """关联的教学意图 ID（可选，留空则纯解析不映射）"""
+    file_paths: list[str] = Field(default_factory=list)
+
+
+class ParseVideoRequest(BaseModel):
+    """POST /api/v1/parse/video 请求"""
+    session_id: str = ""
+    file_path: str = ""
+    language: str = ""
+    """ASR 语言代码，如 "zh"、"en"，空字符串自动检测"""
+
+
 class ParseProcessResponse(BaseModel):
     task_id: str = ""
     status: str = "pending"
