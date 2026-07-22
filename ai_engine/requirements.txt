@@ -13,3 +13,10 @@ python-dotenv==1.1.1
 # paddleocr           # 图片 OCR 中文识别
 # faster-whisper      # 视频 ASR（比 whisper 快 4-6 倍）
 # ffmpeg-python       # 视频关键帧抽取（需系统安装 ffmpeg）
+
+# P3 KB 知识库 RAG 依赖（按需安装）
+# psycopg2-binary     # PostgreSQL 驱动（PGVectorStore 需要）
+# pgvector            # pgvector Python 适配器（PGVectorStore 需要）
+# sentence-transformers  # Cross-encoder 重排序模型（可选，无则透传）
+# minio               # MinIO 对象存储客户端（minio:// 文件下载需要）
+# python-docx         # DOCX 解析（知识库上传需要）

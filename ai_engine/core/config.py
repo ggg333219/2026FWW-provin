@@ -26,12 +26,16 @@ _KEY_MODEL = "AI_MODEL"
 _KEY_TEMPERATURE = "AI_TEMPERATURE"
 _KEY_MODE = "AI_GEN_MODE"
 _KEY_MAX_CONTENT_CHARS = "AI_MAX_CONTENT_CHARS"
+_KEY_EMBEDDING_MODEL = "AI_EMBEDDING_MODEL"
+_KEY_EMBEDDING_DIM = "AI_EMBEDDING_DIM"
 
 # ---- 默认值 ----
 _DEFAULT_MODEL = "qwen-turbo"
 _DEFAULT_TEMPERATURE = 0.2
 _DEFAULT_MODE = "llm"
 _DEFAULT_MAX_CONTENT_CHARS = 3500
+_DEFAULT_EMBEDDING_MODEL = "text-embedding-v3"
+_DEFAULT_EMBEDDING_DIM = 1024
 
 
 def _get_env_str(key: str, default: str) -> str:
@@ -71,6 +75,10 @@ class Settings:
     GEN_MODE: str = _DEFAULT_MODE
     MAX_CONTENT_CHARS: int = _DEFAULT_MAX_CONTENT_CHARS
 
+    # ---- 嵌入 / RAG ----
+    EMBEDDING_MODEL: str = _DEFAULT_EMBEDDING_MODEL
+    EMBEDDING_DIM: int = _DEFAULT_EMBEDDING_DIM
+
     # ---- 路径 ----
     PROJECT_ROOT: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent.parent)
     UPLOAD_DIR: Path = field(default_factory=lambda: Path("uploads"))
@@ -95,6 +103,8 @@ def _build_settings() -> Settings:
         TEMPERATURE=_get_env_float(_KEY_TEMPERATURE, _DEFAULT_TEMPERATURE),
         GEN_MODE=_get_env_str(_KEY_MODE, _DEFAULT_MODE),
         MAX_CONTENT_CHARS=_get_env_int(_KEY_MAX_CONTENT_CHARS, _DEFAULT_MAX_CONTENT_CHARS),
+        EMBEDDING_MODEL=_get_env_str(_KEY_EMBEDDING_MODEL, _DEFAULT_EMBEDDING_MODEL),
+        EMBEDDING_DIM=_get_env_int(_KEY_EMBEDDING_DIM, _DEFAULT_EMBEDDING_DIM),
         HOST=_get_env_str("HOST", "0.0.0.0"),
         PORT=_get_env_int("PORT", 8000),
         RELOAD=_get_env_str("RELOAD", "true").lower() in ("true", "1", "yes"),
