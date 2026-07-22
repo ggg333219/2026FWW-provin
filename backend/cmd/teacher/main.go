@@ -70,6 +70,14 @@ func main() {
 	weakPointHandler := handler.NewWeakPointHandler(db, aiClient)
 	compatHandler := handler.NewCompatibilityHandler(db, aiClient, courseService)
 
+	// ---- 4 Skill + KB 新处理器 ----
+	convHandler := handler.NewConversationHandler(aiClient)
+	parseHandler := handler.NewParseHandler(aiClient)
+	knowledgeHandler := handler.NewKnowledgeHandler(aiClient)
+	genHandler := handler.NewGenerationHandler(aiClient)
+	versionHandler := handler.NewVersionHandler(aiClient)
+	exportHandler := handler.NewExportHandler(aiClient)
+
 	if cfg.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -106,6 +114,13 @@ func main() {
 
 	api := r.Group("/api")
 	router.RegisterTeacherRoutes(api, teacherHandler, courseHandler, compatHandler, weakPointHandler)
+
+	// 4 Skill + KB 新路由（v1 子路由）
+	skillV1 := api.Group("/v1")
+	router.RegisterNewSkillRoutes(skillV1,
+		convHandler, parseHandler, knowledgeHandler,
+		genHandler, versionHandler, exportHandler,
+	)
 
 	applogger.Info("教师端服务运行中", zap.Int("port", 8082))
 	if err := r.Run(":8082"); err != nil {
