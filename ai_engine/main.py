@@ -37,6 +37,9 @@ app.include_router(recommendation_router)
 from ai_engine.parse.router import router as parse_router
 app.include_router(parse_router)
 
+from ai_engine.rag.router import router as rag_router
+app.include_router(rag_router)
+
 # 启用跨域支持，让前端 Vue/React 能访问
 app.add_middleware(
     CORSMiddleware,

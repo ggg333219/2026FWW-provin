@@ -232,6 +232,64 @@ class LLMClient:
         """
         return self._call(messages=messages, temperature=temperature, model=model)
 
+    def embed(
+        self,
+        texts: list[str],
+        *,
+        model: Optional[str] = None,
+        dim: Optional[int] = None,
+    ) -> list[list[float]]:
+        """
+        Embedding 向量化调用。
+
+        用于 KB 知识库 RAG 的文本向量化。
+        调用 OpenAI 兼容的 Embedding API。
+
+        Args:
+            texts: 待向量化的文本列表。
+            model: 嵌入模型名（默认从 AI_EMBEDDING_MODEL 环境变量读取）。
+            dim: 向量维度。
+
+        Returns:
+            等长的 list[list[float]]。
+        """
+        import os
+
+        embedding_model = model or (os.getenv("AI_EMBEDDING_MODEL") or "text-embedding-v3").strip()
+        default_dim = 1024
+        try:
+            default_dim = int(os.getenv("AI_EMBEDDING_DIM", "1024"))
+        except (TypeError, ValueError):
+            pass
+        embedding_dim = dim or default_dim
+
+        if not texts:
+            return []
+
+        # Mock 模式 / 无 API key → 零向量回退
+        if settings.is_mock or not self.api_key:
+            return [[0.0] * embedding_dim for _ in range(len(texts))]
+
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                timeout=self.timeout,
+            )
+
+            response = client.embeddings.create(
+                model=embedding_model,
+                input=texts,
+            )
+
+            sorted_data = sorted(response.data, key=lambda d: d.index)
+            return [list(d.embedding) for d in sorted_data]
+
+        except Exception:
+            return [[0.0] * embedding_dim for _ in range(len(texts))]
+
     # ---- 内部实现 ----
 
     def _call(

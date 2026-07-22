@@ -1,0 +1,316 @@
+"""
+混合检索器 (retrieve.py)
+
+实现向量相似度 + BM25 关键词混合检索，按设计文档 §6 权重融合：
+
+    score = 0.7 × cosine_sim(query_embedding, chunk_embedding)
+          + 0.3 × bm25_score(query, chunk)
+
+质量阈值 min_score = 0.6，低于此阈值的结果丢弃。
+
+使用方式：
+    from ai_engine.rag.retrieve import HybridRetriever
+
+    retriever = HybridRetriever(store=store, embed_service=embed_svc)
+    results = retriever.search("什么是排序算法？", top_k=5)
+"""
+
+from __future__ import annotations
+
+import math
+import re
+from collections import defaultdict
+from typing import Optional
+
+from ai_engine.core.schema import SearchResult, SourceType
+from ai_engine.rag.embed import EmbeddingService
+from ai_engine.rag.store import VectorStore, SearchHit
+
+# ---- 混合权重 ----
+
+_VECTOR_WEIGHT = 0.7
+_BM25_WEIGHT = 0.3
+
+
+# =============================================================================
+# BM25 实现（纯 Python，零依赖）
+# =============================================================================
+
+class BM25Scorer:
+    """
+    简易 BM25 关键词检索器。
+
+    参考 Okapi BM25 算法，支持中文（单字切分 + 2-gram）。
+
+    使用方式：
+        bm25 = BM25Scorer()
+        bm25.index(corpus)  # corpus = [text1, text2, ...]
+        scores = bm25.search("查询", top_k=10)
+    """
+
+    def __init__(self, k1: float = 1.5, b: float = 0.75):
+        self.k1 = k1
+        self.b = b
+        self._docs: list[str] = []
+        self._doc_len: list[int] = []
+        self._avgdl: float = 0.0
+        self._df: dict[str, int] = defaultdict(int)  # 文档频率
+        self._tf: list[dict[str, int]] = []            # 每篇文档的词频
+        self._N: int = 0
+
+    # ---- 分词 ----
+
+    @staticmethod
+    def tokenize(text: str) -> list[str]:
+        """
+        中英文混合分词：中文按单字 + 2-gram，英文按小写单词。
+
+        这确保了中英文查询都能匹配，且中文支持部分匹配。
+        """
+        if not text:
+            return []
+        tokens: list[str] = []
+        # 提取中文连续段和非中文段
+        segments = re.findall(r"[一-鿿]+|[a-zA-Z0-9]+", text.lower())
+        for seg in segments:
+            if re.match(r"[一-鿿]", seg[0]):
+                # 中文：单字
+                tokens.extend(list(seg))
+                # 中文：2-gram
+                for i in range(len(seg) - 1):
+                    tokens.append(seg[i:i + 2])
+            else:
+                # 英文/数字：直接作为一个 token
+                tokens.append(seg)
+        return tokens
+
+    # ---- 索引 ----
+
+    def index(self, docs: list[str]) -> None:
+        """
+        构建 BM25 索引。
+
+        Args:
+            docs: 文档文本列表（通常每篇对应一个 Chunk）。
+        """
+        self._docs = list(docs)
+        self._N = len(docs)
+        self._doc_len = []
+        self._df.clear()
+        self._tf = []
+
+        for doc in docs:
+            tokens = self.tokenize(doc)
+            self._doc_len.append(len(tokens))
+            tf: dict[str, int] = defaultdict(int)
+            for t in tokens:
+                tf[t] += 1
+            self._tf.append(tf)
+            for t in set(tokens):
+                self._df[t] += 1
+
+        self._avgdl = sum(self._doc_len) / max(self._N, 1)
+
+    def search(self, query: str, top_k: int = 20) -> list[tuple[int, float]]:
+        """
+        BM25 检索。
+
+        Returns:
+            list[(doc_index, score)]: 按分数降序排列。
+        """
+        if self._N == 0:
+            return []
+
+        query_tokens = self.tokenize(query)
+        scores: list[tuple[int, float]] = []
+
+        for i in range(self._N):
+            score = self._bm25_score(query_tokens, i)
+            if score > 0:
+                scores.append((i, score))
+
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores[:top_k]
+
+    def _bm25_score(self, query_tokens: list[str], doc_idx: int) -> float:
+        """计算单个文档的 BM25 分数。"""
+        dl = self._doc_len[doc_idx]
+        tf = self._tf[doc_idx]
+        score = 0.0
+        for t in query_tokens:
+            if t not in self._df:
+                continue
+            df = self._df[t]
+            idf = math.log(1 + (self._N - df + 0.5) / (df + 0.5))
+            freq = tf.get(t, 0)
+            numerator = freq * (self.k1 + 1)
+            denominator = freq + self.k1 * (1 - self.b + self.b * dl / self._avgdl)
+            score += idf * numerator / denominator if denominator > 0 else 0.0
+        return score
+
+
+# =============================================================================
+# HybridRetriever
+# =============================================================================
+
+class HybridRetriever:
+    """
+    混合检索器：向量相似度 (0.7) + BM25 关键词 (0.3)。
+
+    使用方式：
+        retriever = HybridRetriever(store=store, embed_service=embed_svc)
+        results = retriever.search("冒泡排序的复杂度", top_k=5)
+    """
+
+    def __init__(
+        self,
+        store: VectorStore,
+        embed_service: EmbeddingService,
+        vector_weight: float = _VECTOR_WEIGHT,
+        bm25_weight: float = _BM25_WEIGHT,
+    ):
+        """
+        Args:
+            store: 向量存储实例。
+            embed_service: 嵌入服务实例。
+            vector_weight: 向量相似度权重（默认 0.7）。
+            bm25_weight: BM25 关键词权重（默认 0.3）。
+        """
+        self.store = store
+        self.embed = embed_service
+        self.vector_weight = vector_weight
+        self.bm25_weight = bm25_weight
+        self._bm25: Optional[BM25Scorer] = None
+        self._bm25_doc_ids: list[str] = []  # doc_idx → chunk_id 映射
+
+    # ---- 公开 API ----
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_score: float = 0.6,
+        knowledge_base_ids: Optional[list[str]] = None,
+        source_type: Optional[SourceType] = None,
+    ) -> list[SearchResult]:
+        """
+        混合检索：向量 + BM25 融合打分。
+
+        Args:
+            query: 查询文本。
+            top_k: 返回结果数。
+            min_score: 最低分数阈值（低于此值丢弃）。
+            knowledge_base_ids: 限定知识库范围（目前未实现过滤）。
+            source_type: 限定来源类型。
+
+        Returns:
+            list[SearchResult]: 按融合分数降序排列。
+        """
+        # 1. 向量检索（召回 top_k × 4 作为候选池）
+        query_vec = self.embed.embed_text(query)
+        vector_hits = self.store.search(
+            query_vec,
+            top_k=min(top_k * 4, 200),
+            min_score=0.0,  # 向量侧不过滤，留给融合后统一阈值
+            source_type=source_type,
+        )
+
+        if not vector_hits:
+            return []
+
+        # 2. 归一化向量分数到 [0, 1]
+        v_scores = self._normalize_scores(
+            {h.chunk.chunk_id: h.score for h in vector_hits}
+        )
+
+        # 3. BM25 关键词检索
+        b_scores = self._bm25_scores(query)
+
+        # 4. 融合打分
+        fused: list[tuple[SearchHit, float]] = []
+        for hit in vector_hits:
+            cid = hit.chunk.chunk_id
+            v = v_scores.get(cid, 0.0)
+            b = b_scores.get(cid, 0.0)
+            score = self.vector_weight * v + self.bm25_weight * b
+            if score >= min_score:
+                fused.append((hit, score))
+
+        fused.sort(key=lambda x: x[1], reverse=True)
+        top = fused[:top_k]
+
+        # 5. 构建 SearchResult
+        return [
+            SearchResult(
+                chunk_id=hit.chunk.chunk_id,
+                content=hit.chunk.content,
+                score=round(score, 4),
+                source={
+                    "file_name": hit.chunk.source_ref,
+                    "page": hit.chunk.page_ref or 0,
+                    "type": hit.chunk.source_type.value,
+                },
+                metadata={
+                    "doc_id": hit.chunk.doc_id,
+                    "seq_index": hit.chunk.seq_index,
+                    **hit.chunk.metadata,
+                },
+            )
+            for hit, score in top
+        ]
+
+    def rebuild_bm25(self) -> None:
+        """重建 BM25 索引（数据变更后调用）。"""
+        self._bm25 = BM25Scorer()
+        self._bm25_doc_ids = []
+
+        # 从 store 读取所有 chunk
+        docs = self.store.list_documents()
+        all_texts: list[str] = []
+        for doc in docs:
+            for cid in self._get_doc_chunk_ids(doc.doc_id):
+                chunk = self.store.get_chunk(cid)
+                if chunk:
+                    all_texts.append(chunk.content)
+                    self._bm25_doc_ids.append(cid)
+
+        self._bm25.index(all_texts)
+
+    # ---- 内部 ----
+
+    def _get_doc_chunk_ids(self, doc_id: str) -> list[str]:
+        """获取文档下所有 chunk ID。HACK: 通过遍历 store 内部实现。"""
+        # InMemoryVectorStore 暴露了 _doc_chunks，但 VectorStore 接口没有
+        # 这里通过 list_documents + 内部属性访问
+        if hasattr(self.store, '_doc_chunks'):
+            return list(self.store._doc_chunks.get(doc_id, []))
+        # 回退：无法获取，BM25 索引为空
+        return []
+
+    def _bm25_scores(self, query: str) -> dict[str, float]:
+        """计算 BM25 分数，返回 {chunk_id: normalized_score}。"""
+        if self._bm25 is None or self._bm25._N == 0:
+            self.rebuild_bm25()
+        if self._bm25 is None or self._bm25._N == 0:
+            return {}
+
+        raw = self._bm25.search(query, top_k=100)
+        if not raw:
+            return {}
+
+        scored: dict[str, float] = {}
+        for doc_idx, score in raw:
+            if doc_idx < len(self._bm25_doc_ids):
+                scored[self._bm25_doc_ids[doc_idx]] = score
+
+        return self._normalize_scores(scored)
+
+    @staticmethod
+    def _normalize_scores(scored: dict[str, float]) -> dict[str, float]:
+        """将分数归一化到 [0, 1]。"""
+        if not scored:
+            return {}
+        max_s = max(scored.values())
+        if max_s <= 0:
+            return {k: 0.0 for k in scored}
+        return {k: v / max_s for k, v in scored.items()}
