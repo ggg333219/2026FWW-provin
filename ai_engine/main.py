@@ -23,12 +23,29 @@ try:
     from .qa import QAResponder, QAConfig, resolve_llm_base_url
     from .reconstructor import LessonReconstructor, ReconstructionConfig
     from .recommendation.service import router as recommendation_router
+    # P4 新模块 — S3 课件生成 + S4 个性化满足
+    from .gen.outline import OutlineBuilder, OutlineConfig
+    from .gen.node import NodeGenerator, NodeGenConfig
+    from .gen.export_ppt import PPTExporter, ExportPPTConfig
+    from .gen.export_doc import DOCExporter, ExportDocConfig
+    from .gen.preview import PreviewRenderer
+    from .gen.commands import CommandParser, EditCommand, CommandType
+    from .gen.patch import NodePatcher
+    from .gen.interactive import InteractiveBuilder
 except ImportError:
     from parser import DocumentParser
     from generator import LessonGenerator, GenerationConfig
     from qa import QAResponder, QAConfig, resolve_llm_base_url
     from reconstructor import LessonReconstructor, ReconstructionConfig
     from recommendation.service import router as recommendation_router
+    from gen.outline import OutlineBuilder, OutlineConfig
+    from gen.node import NodeGenerator, NodeGenConfig
+    from gen.export_ppt import PPTExporter, ExportPPTConfig
+    from gen.export_doc import DOCExporter, ExportDocConfig
+    from gen.preview import PreviewRenderer
+    from gen.commands import CommandParser, EditCommand, CommandType
+    from gen.patch import NodePatcher
+    from gen.interactive import InteractiveBuilder
 
 app = FastAPI(title="泛雅 AI 智课系统后端", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
 app.include_router(recommendation_router)
@@ -530,6 +547,253 @@ def _llm_health_payload() -> dict[str, Any]:
         "degraded": not bool(api_key),
         "reason": "missing_api_key" if not api_key else normalize_reason,
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# P4 — S3 课件生成 + S4 个性化满足 新接口
+# ═══════════════════════════════════════════════════════════════
+
+# — 数据模型 —
+
+class GenOutlineRequest(BaseModel):
+    """构建大纲请求"""
+    intent: dict[str, Any] = Field(default_factory=dict)
+    evidence_packet: dict[str, Any] | None = None
+    markdown: str | None = None
+    course_name: str | None = None
+
+
+class GenNodesRequest(BaseModel):
+    """生成节点讲稿请求"""
+    nodes: list[dict[str, Any]]
+    context_markdown: str = ""
+    course_name: str | None = None
+    enhanced: bool = False
+
+
+class ExportPPTRequest(BaseModel):
+    """导出 PPTX 请求"""
+    nodes: list[dict[str, Any]]
+    course_name: str = "课件"
+    template_id: str = "default"
+
+
+class PreviewRequest(BaseModel):
+    """预览渲染请求"""
+    nodes: list[dict[str, Any]]
+    course_name: str = "课件预览"
+
+
+class ModifyRequest(BaseModel):
+    """修改命令请求"""
+    nodes: list[dict[str, Any]]
+    commands: list[dict[str, Any]]  # 结构化命令列表
+    regenerate: bool = False
+    course_name: str | None = None
+
+
+class InteractiveRequest(BaseModel):
+    """互动内容生成请求"""
+    node: dict[str, Any]
+
+
+# — S3 课件生成接口 —
+
+@app.post("/gen/outline")
+async def generate_outline(req: GenOutlineRequest):
+    """[S3] 构建大纲：从 intent / markdown 生成节点树"""
+    builder = OutlineBuilder()
+    try:
+        if req.markdown:
+            result = builder.build_from_markdown(req.markdown, req.course_name)
+        else:
+            result = builder.build(req.intent, req.evidence_packet)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"大纲构建失败: {str(e)}")
+
+
+@app.post("/gen/nodes")
+async def generate_nodes(req: GenNodesRequest):
+    """[S3] 逐节点生成讲稿"""
+    generator = NodeGenerator()
+    try:
+        if req.enhanced:
+            result = generator.generate_enhanced(req.nodes, req.context_markdown, req.course_name)
+        else:
+            result = generator.generate_all(req.nodes, req.context_markdown, req.course_name)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"节点生成失败: {str(e)}")
+
+
+@app.post("/gen/node/single")
+async def generate_single_node(req: dict[str, Any]):
+    """[S3] 单个节点重生成（供 S4 修补调用）"""
+    node = req.get("node", {})
+    course_name = req.get("course_name")
+    generator = NodeGenerator()
+    try:
+        return generator.generate_single(node, course_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"单节点生成失败: {str(e)}")
+
+
+@app.post("/gen/export/ppt")
+async def export_ppt(req: ExportPPTRequest):
+    """[S3] 导出 PPTX"""
+    exporter = PPTExporter()
+    try:
+        return exporter.export(req.nodes, req.course_name, req.template_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PPTX 导出失败: {str(e)}")
+
+
+@app.post("/gen/export/ppt-bytes")
+async def export_ppt_bytes(req: ExportPPTRequest):
+    """[S3] 导出 PPTX 字节流（直接上传 MinIO）"""
+    exporter = PPTExporter()
+    try:
+        buf = exporter.export_to_bytes(req.nodes, req.course_name, req.template_id)
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                 headers={"Content-Disposition": f"attachment; filename={req.course_name}.pptx"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PPTX 导出失败: {str(e)}")
+
+
+@app.post("/gen/export/doc")
+async def export_doc(req: ExportPPTRequest):
+    """[S3] 导出 DOCX"""
+    exporter = DOCExporter()
+    try:
+        return exporter.export(req.nodes, req.course_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DOCX 导出失败: {str(e)}")
+
+
+@app.post("/gen/export/doc-bytes")
+async def export_doc_bytes(req: ExportPPTRequest):
+    """[S3] 导出 DOCX 字节流（直接上传 MinIO）"""
+    exporter = DOCExporter()
+    try:
+        buf = exporter.export_to_bytes(req.nodes, req.course_name)
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                 headers={"Content-Disposition": f"attachment; filename={req.course_name}.docx"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DOCX 导出失败: {str(e)}")
+
+
+@app.post("/gen/interactive")
+async def generate_interactive(req: InteractiveRequest):
+    """[S3] 生成互动内容（测验/闪卡/投票）"""
+    builder = InteractiveBuilder()
+    try:
+        return {"items": builder.build_all(req.node)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"互动内容生成失败: {str(e)}")
+
+
+# — S4 个性化满足接口 —
+
+@app.post("/gen/preview")
+async def render_preview(req: PreviewRequest):
+    """[S4] 预览渲染：节点树 → HTML"""
+    renderer = PreviewRenderer()
+    try:
+        html_content = renderer.render(req.nodes, req.course_name)
+        return {"html": html_content, "node_count": len(req.nodes)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"预览渲染失败: {str(e)}")
+
+
+@app.post("/gen/modify")
+async def modify_nodes(req: ModifyRequest):
+    """[S4] 修改命令：应用编辑命令到节点树"""
+    parser = CommandParser()
+    patcher = NodePatcher()
+
+    # 解析命令
+    parse_result = parser.parse(req.commands)
+    if parse_result.errors:
+        return {"status": "parse_error", "errors": parse_result.errors}
+
+    # 验证命令
+    valid_ids = {n["node_id"] for n in req.nodes}
+    all_errors = []
+    for cmd in parse_result.commands:
+        errs = parser.validate(cmd, valid_ids)
+        all_errors.extend(errs)
+    if all_errors:
+        return {"status": "validation_error", "errors": all_errors}
+
+    # 执行修补
+    generator = NodeGenerator(NodeGenConfig()) if req.regenerate else None
+    regenerate_fn = (lambda nid, node: generator.generate_single(node, req.course_name)) if generator else None
+    result = patcher.apply(req.nodes, parse_result.commands, regenerate_fn)
+
+    return {
+        "status": "ok" if not result.errors else "partial_error",
+        "nodes": result.nodes,
+        "changes": result.changes,
+        "errors": result.errors,
+    }
+
+
+@app.post("/gen/parse-command")
+async def parse_command(raw_input: dict[str, Any]):
+    """[S4] 解析修改命令（自然语言 → 结构化命令）"""
+    parser = CommandParser()
+    result = parser.parse(raw_input.get("text", ""))
+    return {
+        "is_structured": result.is_structured,
+        "commands": [
+            {"type": c.type.value, "params": c.params, "confidence": c.confidence}
+            for c in result.commands
+        ],
+        "errors": result.errors,
+    }
+
+
+@app.get("/gen/full-pipeline")
+async def full_pipeline_preview(markdown: str = "", course_name: str = "课件"):
+    """[S3+S4] 一键全流程：Markdown → 大纲 → 节点 → 预览 HTML"""
+    if not markdown.strip():
+        raise HTTPException(status_code=400, detail="markdown 参数不能为空")
+    try:
+        # 1. 大纲
+        builder = OutlineBuilder()
+        outline = builder.build_from_markdown(markdown, course_name)
+
+        # 2. 节点讲稿
+        generator = NodeGenerator()
+        scripts = generator.generate_all(outline["nodes"], markdown, course_name)
+
+        # 3. 合并节点数据
+        merged_nodes = []
+        for node in outline["nodes"]:
+            script = next(
+                (s for s in scripts["scripts"] if s["node_id"] == node["node_id"]),
+                {"script": "", "segments": []},
+            )
+            merged = {**node, "script": script.get("script", ""), "segments": script.get("segments", [])}
+            merged_nodes.append(merged)
+
+        # 4. 预览
+        renderer = PreviewRenderer()
+        html = renderer.render(merged_nodes, course_name)
+
+        return {
+            "course_name": course_name,
+            "node_count": len(merged_nodes),
+            "used_fallback": outline.get("used_fallback", False) or scripts.get("used_fallback", False),
+            "outline": outline,
+            "scripts": scripts,
+            "preview_html": html,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"全流程失败: {str(e)}")
 
 
 @app.get("/health")
