@@ -1,7 +1,34 @@
 # 开发 Skill 注意事项
 
 > 团队 4 人并行开发 4 个 Skill + KB 的协作规范
-> 最后更新: 2026-07-18
+> 最后更新: 2026-07-21
+
+---
+
+## 0. 你当前要做的（S1 意图理解）
+
+当前这个项目是“在已有代码基础上继续扩展”，不是从零重写。你现在负责的是 S1 意图理解板块，重点是把“多轮对话 → 结构化教学意图”这条链路接通，并且保证后续 S3 能直接消费。
+
+### 当前优先级
+1. 先做“最小可用闭环”：从教师对话中提取主题、时长、风格、目标学生等字段。
+2. 再补“追问机制”：当信息不完整时，生成 1~2 个针对性的追问。
+3. 最后补“确认流程”：教师确认后，产出可传给下游的结构化意图摘要。
+
+### 你现在需要落地的内容
+- 在 `ai_engine/intent/` 下新增意图提取、追问生成、确认逻辑相关模块。
+- 通过 `ai_engine/core/schema.py` 里的 `IntentSummary`、`IntentExtractRequest`、`IntentConfirmRequest` 作为统一契约。
+- 在 `ai_engine/main.py` 注册 S1 的 FastAPI router，确保 Python 侧可被调用。
+- 让 Go 侧现有的 `backend/internal/handler/conversation_handler.go` 通过已有接口调用到 Python 的 `/intent/extract` 和 `/intent/confirm`。
+- 先保证“能跑通”而不是追求过度复杂：优先验证对话输入 → 结构化意图 → 追问 → 确认这条链路。
+
+### 当前不要动的内容
+- 不要改动旧的 `ai_engine/qa.py`、`ai_engine/generator.py`、`ai_engine/parser.py`、`ai_engine/schema.py`。
+- 不要把 S1 设计做成全量重构，先保证与现有项目兼容。
+
+### 你当前最关键的目标
+- 能从一段教师对话里产出 `IntentSummary`。
+- 能在信息不完整时生成合理追问。
+- 能把确认后的意图交给后续模块使用。
 
 ---
 
