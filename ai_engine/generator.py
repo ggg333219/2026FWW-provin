@@ -1,3 +1,19 @@
+"""
+⚠️ DEPRECATED — 此文件已废弃，请使用 ai_engine/gen/ 子包替代。
+
+迁移指南:
+  大纲构建     → gen.outline.OutlineBuilder
+  节点生成     → gen.node.NodeGenerator
+  PPT 导出     → gen.export_ppt.PPTExporter
+  DOCX 导出    → gen.export_doc.DOCExporter
+  预览渲染     → gen.preview.PreviewRenderer
+  命令解析     → gen.commands.CommandParser
+  节点修补     → gen.patch.NodePatcher
+  互动内容     → gen.interactive.InteractiveBuilder
+
+保留此文件仅为兼容旧代码调用，新代码禁止引用。
+"""
+
 import json
 import os
 import re
