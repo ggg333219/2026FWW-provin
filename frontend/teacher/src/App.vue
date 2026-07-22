@@ -96,6 +96,10 @@
             <svg class="ins-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6"></path><path d="M2.5 22v-6h6"></path><path d="M2 11.5a10 10 0 0 1 18.8-4.3"></path><path d="M22 12.5a10 10 0 0 1-18.8 2.2"></path></svg>
             <span v-show="!isLeftMenuCollapsed">学情迭代</span>
           </div>
+          <div class="menu-item" :class="{ active: activeTab === 'intent' }" @click="activeTab = 'intent'" title="意图理解">
+            <svg class="ins-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6"></path><path d="M12 22v-6"></path><circle cx="12" cy="12" r="3"></circle></svg>
+            <span v-show="!isLeftMenuCollapsed">意图理解</span>
+          </div>
           <div class="menu-item" :class="{ active: resourceDrawerVisible }" @click="openResourceRecommend" title="智能推荐">
             <svg class="ins-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M6 4h12"></path>
@@ -199,6 +203,10 @@
               />
             </div>
 
+            <div v-else-if="activeTab === 'intent'" class="tab-container">
+              <TeacherIntentPanel />
+            </div>
+
             <div v-else class="tab-container"></div>
           </div>
         </transition>
@@ -281,6 +289,7 @@ import HomeLogin from './components/HomeLogin.vue'
 import PlatformManagementPanel from './components/teacher/PlatformManagementPanel.vue'
 import CourseIterationPanel from './components/teacher/CourseIterationPanel.vue'
 import ResourceRecommendPanel from './components/teacher/ResourceRecommendPanel.vue'
+import TeacherIntentPanel from './components/teacher/TeacherIntentPanel.vue'
 
 const isLoggedIn = ref(false)
 const hasEnteredTeachingWorkspace = ref(false)

@@ -1,7 +1,30 @@
 # Skill 1: 意图理解 (Intent Understanding) — 详细设计
 
 > 基于 Phase 2 工作流分析结果编写
-> 最后更新: 2026-07-15
+> 最后更新: 2026-07-21
+
+## 0. 当前阶段任务说明
+
+当前项目是基于已有代码继续改造，而不是从零重建。你负责的 S1 意图理解模块，当前重点不是做大而全的重构，而是先把“教师对话 → 结构化意图摘要”这条最核心链路做出来，并能顺利给后续 S3 使用。
+
+### 这阶段你要完成的事情
+1. 先把意图提取接口做通：输入为会话消息历史，输出为结构化 `IntentSummary`。
+2. 让系统在字段不完整时自动生成 1~2 个追问，推动对话继续收集信息。
+3. 实现确认流程：教师确认后，输出可下发给生成模块的意图对象。
+4. 通过现有 FastAPI 与 Go handler 入口接通，确保能从后端调用到 Python 逻辑。
+
+### 你需要关注的核心文件
+- Python 侧：`ai_engine/intent/`（新增）
+- 统一 schema：`ai_engine/core/schema.py`
+- FastAPI 入口：`ai_engine/main.py`
+- Go 侧：`backend/internal/handler/conversation_handler.go`
+
+### 当前阶段的成功标准
+- 能从一段教师输入中识别出 `topic`、`duration_minutes`、`style`、`target_student` 等字段。
+- 当信息不完整时，能生成合理追问。
+- 能输出一个可用于后续生成流程的 `IntentSummary`。
+
+---
 
 ## 1. 总体架构
 

@@ -251,14 +251,14 @@ class LLMClient:
                 fallback_reason="mock_mode",
             )
 
-        # 检查 API key
+        # Missing API key should gracefully fall back to mock mode for local demo
         api_key = self.api_key
         if not api_key:
             return LLMResponse(
-                content=self._fallback_text(messages),
+                content=self._mock_response(messages),
                 model=model or self.model,
                 used_fallback=True,
-                fallback_reason="missing_api_key",
+                fallback_reason="missing_api_key_mock",
             )
 
         try:
@@ -315,16 +315,95 @@ class LLMClient:
         )
 
     def _mock_response(self, messages: list[dict[str, str]]) -> str:
-        """Mock 模式下的假响应。"""
-        last_user = ""
-        for m in reversed(messages):
-            if m["role"] == "user":
-                last_user = m["content"][:100]
-                break
+        """Mock 模式下的结构化意图响应。"""
+        text = "\n".join(m["content"] for m in messages if m["role"] == "teacher")
+        duration = self._mock_extract_duration(text)
+        topic = self._mock_extract_topic(text)
+        target_student = self._mock_extract_target_student(text)
+        style = self._mock_extract_style(text)
+        knowledge_points = self._mock_extract_knowledge_points(text)
+        output_format = self._mock_extract_output_format(text)
+        with_interactive = bool(re.search(r"互动|练习|测验|小测|讨论|问答", text))
+        key_difficulties = self._mock_extract_list(r"难点[:：]?\s*([\u4e00-\u9fa5\w\s,，]+)", text)
+        expected_outcomes = self._mock_extract_list(r"目标[:：]?\s*([\u4e00-\u9fa5\w\s,，]+)", text)
+        missing_fields = [
+            f for f, value in [
+                ("topic", topic),
+                ("duration_minutes", duration),
+                ("style", style),
+                ("target_student", target_student),
+                ("knowledge_points", knowledge_points),
+            ]
+            if not value
+        ]
         return json.dumps({
-            "mock": True,
-            "reply": f"（Mock 回应）已收到您的输入: {last_user}",
+            "topic": topic,
+            "duration_minutes": duration,
+            "style": style,
+            "target_student": target_student,
+            "knowledge_points": knowledge_points,
+            "output_format": output_format,
+            "with_interactive": with_interactive,
+            "key_difficulties": key_difficulties,
+            "expected_outcomes": expected_outcomes,
+            "missing_fields": missing_fields,
         }, ensure_ascii=False, indent=2)
+
+    def _mock_extract_duration(self, text: str) -> int | None:
+        m = re.search(r"(\d{1,3})\s*分钟", text)
+        if m:
+            return int(m.group(1))
+        m = re.search(r"(\d+(?:\.\d+)?)\s*小时", text)
+        if m:
+            return int(float(m.group(1)) * 60)
+        if re.search(r"半小时", text):
+            return 30
+        return None
+
+    def _mock_extract_topic(self, text: str) -> str | None:
+        m = re.search(r"关于([\u4e00-\u9fa5\w\s]{2,80}?)(?:的|，|,|\.|$)", text)
+        if m:
+            return m.group(1).strip()
+        m = re.search(r"我要一份(\d{1,3}分钟的)?([\u4e00-\u9fa5\w\s]{2,80}?)(?:课件|讲稿|练习|讲解|测验|活动)?", text)
+        if m:
+            return (m.group(2) or "").strip()
+        return None
+
+    def _mock_extract_target_student(self, text: str) -> str | None:
+        m = re.search(r"面向([\u4e00-\u9fa5\w\s]+?)(?:学生|专业|年级|，|,|的|$)", text)
+        if m:
+            return m.group(1).strip()
+        return None
+
+    def _mock_extract_style(self, text: str) -> str | None:
+        m = re.search(r"(讲练结合|案例分析|案例驱动|讨论环节|互动|项目制|理论为主|课堂活动)", text)
+        if m:
+            return m.group(1).strip()
+        return None
+
+    def _mock_extract_knowledge_points(self, text: str) -> list[str]:
+        m = re.search(r"(包括|包含|涉及|重点讲解|重点|涵盖)\s*([\u4e00-\u9fa5\w\s,，；;]+)", text)
+        if m:
+            items = re.split(r"[，,；;]\s*", m.group(2))
+            return [i.strip() for i in items if i.strip()]
+        items = re.findall(r"([\u4e00-\u9fa5]{2,10})(?:、|,|，)", text)
+        return list(dict.fromkeys([i.strip() for i in items if i.strip()]))
+
+    def _mock_extract_output_format(self, text: str) -> list[str]:
+        result = []
+        if re.search(r"PPT|ppt|幻灯|课件", text):
+            result.append("ppt")
+        if re.search(r"讲稿|讲义", text):
+            result.append("script")
+        if re.search(r"习题|练习题|题目|练习", text):
+            result.append("exercise")
+        return result
+
+    def _mock_extract_list(self, pattern: str, text: str) -> list[str]:
+        m = re.search(pattern, text)
+        if not m:
+            return []
+        return [item.strip() for item in re.split(r"[，,；;]\s*", m.group(1)) if item.strip()]
 
 
 # ---- 便捷单例工厂 ----

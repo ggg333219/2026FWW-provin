@@ -180,6 +180,7 @@
 <script setup>
 import { defineEmits, onMounted, onUnmounted, ref } from 'vue'
 import { API_BASE } from '../config/api'
+import { authenticateLocalUser, registerLocalUser } from '../utils/authFallback'
 
 const emit = defineEmits(['login-success'])
 const username = ref('')
@@ -286,18 +287,7 @@ onUnmounted(() => {
   clearPendingTimeouts()
 })
 
-const tryLocalLoginFallback = () => {
-  const uname = String(username.value || '').trim().toLowerCase()
-  const pwd = String(password.value || '')
-  const accountRoleMap = {
-    jiaoshi: 'teacher',
-    xuesheng: 'student'
-  }
-  if (!accountRoleMap[uname] || pwd !== uname) {
-    throw new Error('账号或密码错误')
-  }
-  return { username: uname, role: accountRoleMap[uname] }
-}
+const tryLocalLoginFallback = () => authenticateLocalUser(username.value, password.value)
 
 const switchMode = () => {
   errorMessage.value = ''
@@ -368,6 +358,17 @@ const handleRegister = async () => {
     password.value = ''
     errorMessage.value = '注册成功，请使用该账号登录'
   } catch (err) {
+    if (String(err?.message || '').includes('Failed to fetch')) {
+      try {
+        registerLocalUser(username.value, password.value, role.value)
+        isRegisterMode.value = false
+        password.value = ''
+        errorMessage.value = '注册成功，请使用本地账号登录'
+      } catch (fallbackErr) {
+        errorMessage.value = fallbackErr.message || '注册失败，请稍后重试'
+      }
+      return
+    }
     errorMessage.value = err.message || '注册失败，请稍后重试'
   } finally {
     loading.value = false
