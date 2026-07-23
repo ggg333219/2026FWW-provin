@@ -37,6 +37,12 @@ scripts/pids.json
 tmp/
 uploads/
 
+# Parse test files (large binary test assets)
+ai_engine/parse/test.docx
+ai_engine/parse/test2.pdf
+ai_engine/parse/test3.pptx
+ai_engine/parse/test4.mp4
+
 # Config files
 .env
 .env.local
