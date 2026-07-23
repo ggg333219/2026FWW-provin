@@ -12,9 +12,10 @@ import wave
 from pathlib import Path
 from typing import List, Optional, Any
 
-CURRENT_DIR = Path(__file__).resolve().parent
-if str(CURRENT_DIR) not in sys.path:
-    sys.path.insert(0, str(CURRENT_DIR))
+CURRENT_DIR = Path(__file__).resolve().parent  # ai_engine/
+PROJECT_ROOT = CURRENT_DIR.parent  # 项目根目录
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # 导入你之前写的 AI 核心逻辑
 try:
@@ -34,20 +35,20 @@ try:
     from .gen.interactive import InteractiveBuilder
     from .intent.router import router as intent_router
 except ImportError:
-    from parser import DocumentParser
-    from generator import LessonGenerator, GenerationConfig
-    from qa import QAResponder, QAConfig, resolve_llm_base_url
-    from reconstructor import LessonReconstructor, ReconstructionConfig
-    from recommendation.service import router as recommendation_router
-    from gen.outline import OutlineBuilder, OutlineConfig
-    from gen.node import NodeGenerator, NodeGenConfig
-    from gen.export_ppt import PPTExporter, ExportPPTConfig
-    from gen.export_doc import DOCExporter, ExportDocConfig
-    from gen.preview import PreviewRenderer
-    from gen.commands import CommandParser, EditCommand, CommandType
-    from gen.patch import NodePatcher
-    from gen.interactive import InteractiveBuilder
-    from intent.router import router as intent_router
+    from ai_engine.parser import DocumentParser
+    from ai_engine.generator import LessonGenerator, GenerationConfig
+    from ai_engine.qa import QAResponder, QAConfig, resolve_llm_base_url
+    from ai_engine.reconstructor import LessonReconstructor, ReconstructionConfig
+    from ai_engine.recommendation.service import router as recommendation_router
+    from ai_engine.gen.outline import OutlineBuilder, OutlineConfig
+    from ai_engine.gen.node import NodeGenerator, NodeGenConfig
+    from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
+    from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
+    from ai_engine.gen.preview import PreviewRenderer
+    from ai_engine.gen.commands import CommandParser, EditCommand, CommandType
+    from ai_engine.gen.patch import NodePatcher
+    from ai_engine.gen.interactive import InteractiveBuilder
+    from ai_engine.intent.router import router as intent_router
 
 app = FastAPI(title="泛雅 AI 智课系统后端", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
 app.include_router(recommendation_router)
