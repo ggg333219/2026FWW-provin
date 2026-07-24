@@ -386,7 +386,11 @@ class TaskManager:
         self,
         ft: FileTask,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """流式处理单个文件，yield 文件级事件。"""
+        """流式处理单个文件，yield 文件级事件。
+
+        对视频/音频类型使用渐进式流式解析（每完成一个阶段立即推送），
+        对其他类型使用全量解析后分批推送。
+        """
         file_name = ft.file_path.split("/")[-1].split("\\")[-1]
 
         yield {
@@ -402,25 +406,49 @@ class TaskManager:
         ft.started_at = datetime.now()
 
         try:
-            # 1) 按文件类型解析 → 原始块
-            raw_result = self._parse_by_type(ft)
+            raw_result: list[dict[str, Any]] = []
 
-            # 2) 分批 yield 原始块（按 type 分组）
-            if raw_result:
-                from itertools import groupby
+            # ── 视频/音频：渐进式流式解析 ──
+            if ft.source_type in (SourceType.VIDEO, SourceType.AUDIO):
+                vp = VideoProcessor()
 
-                raw_result.sort(key=lambda r: r.get("type", "unknown"))
-                for type_key, group in groupby(raw_result, key=lambda r: r.get("type", "unknown")):
-                    group_list = list(group)
+                if ft.source_type == SourceType.VIDEO:
+                    stream = vp.process_stream(ft.file_path)
+                else:
+                    stream = vp.process_audio_stream(ft.file_path)
+
+                async for chunk in stream:
+                    raw_result.append(chunk)
+                    # 每完成一个阶段立即推送（单 chunk 作为一批）
                     yield {
                         "event": "file_chunk_batch",
                         "data": {
                             "file_name": file_name,
-                            "type": type_key,
-                            "count": len(group_list),
-                            "chunks": group_list,
+                            "type": chunk.get("type", "unknown"),
+                            "count": 1,
+                            "chunks": [chunk],
                         },
                     }
+
+            else:
+                # ── 其他类型：全量解析后分批推送 ──
+                raw_result = self._parse_by_type(ft)
+
+                if raw_result:
+                    from itertools import groupby
+
+                    raw_result.sort(key=lambda r: r.get("type", "unknown"))
+                    for type_key, group in groupby(raw_result, key=lambda r: r.get("type", "unknown")):
+                        group_list = list(group)
+                        yield {
+                            "event": "file_chunk_batch",
+                            "data": {
+                                "file_name": file_name,
+                                "type": type_key,
+                                "count": len(group_list),
+                                "chunks": group_list,
+                            },
+                        }
 
             # 3) 标准化为 Chunk（落库）
             ft.chunks = self._chunk_normalizer.normalize(

@@ -17,13 +17,17 @@
         schema={...}  # OpenAI response_format 的 schema
     )
     # -> {"topic": "排序算法", ...}
+
+    # 流式输出（用于 SSE 推送）
+    for token in client.chat_stream("你是助教", "帮我写大纲"):
+        print(token, end="")
 """
 
 import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Generator, Optional
 from urllib.parse import urlparse
 
 from .config import settings
@@ -157,6 +161,71 @@ class LLMClient:
             temperature=temperature,
             model=model,
         )
+
+    def chat_stream(
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: Optional[float] = None,
+        model: Optional[str] = None,
+    ) -> Generator[str, None, None]:
+        """
+        流式文本聊天调用，逐 token yield。
+
+        用于 SSE 流式推送场景（如意图提取进度展示）。
+
+        Args:
+            system: 系统提示词
+            user: 用户消息
+            temperature: 覆盖默认温度
+            model: 覆盖默认模型
+
+        Yields:
+            str: 每个增量文本 token
+        """
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+
+        # Mock 模式或缺少 API key → 回退为非流式 mock 输出（按字符拆分）
+        if settings.is_mock or not self.api_key:
+            fallback = self._mock_response(messages)
+            # 按合理块模拟流式输出
+            chunk_size = max(1, len(fallback) // 20)
+            for i in range(0, len(fallback), chunk_size):
+                yield fallback[i:i + chunk_size]
+            return
+
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                timeout=self.timeout,
+            )
+
+            actual_model = model or self.model
+            actual_temperature = temperature if temperature is not None else self.temperature
+
+            stream = client.chat.completions.create(
+                model=actual_model,
+                messages=messages,
+                temperature=actual_temperature,
+                stream=True,
+            )
+
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    yield delta.content
+
+        except Exception:
+            # 流式失败 → 回退为非流式
+            fallback = self._fallback_text(messages)
+            yield fallback
 
     def chat_json(
         self,
