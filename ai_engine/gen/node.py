@@ -9,17 +9,18 @@
 
 现有基础：
   从 generator.py 的 generate_node_script / _run_stage3_scripts 重构而来
+
+LLM 调用：
+  统一通过 core.llm.LLMClient，构造函数可注入 llm_client 供测试用。
 """
 
 import json
-import os
 import re
-from dataclasses import dataclass, field
-from typing import Any
-
-from openai import OpenAI
+from dataclasses import dataclass
+from typing import Any, Optional
 
 from ..schema import build_stage3_script_schema, normalize_stage3_scripts, build_enhanced_script_schema
+from ..core.llm import LLMClient
 
 
 @dataclass
@@ -33,28 +34,19 @@ class NodeGenConfig:
 class NodeGenerator:
     """根据节点树逐节点生成讲稿内容"""
 
-    def __init__(self, config: NodeGenConfig | None = None):
+    def __init__(self, config: NodeGenConfig | None = None, llm_client: Optional[LLMClient] = None):
         self.config = config or NodeGenConfig()
+        self._llm = llm_client  # 可注入，供测试用
 
     # ── 公开入口 ──
 
     def generate_all(self, nodes: list[dict[str, Any]],
                      context_markdown: str = "",
                      course_name: str | None = None) -> dict[str, Any]:
-        """生成所有节点的讲稿
-
-        Args:
-            nodes: 节点树（outline.py 产出的 nodes 列表）
-            context_markdown: 原始上下文 Markdown
-            course_name: 课程名称
-
-        Returns:
-            {"scripts": [...], "used_fallback": bool}
-        """
+        """生成所有节点的讲稿"""
         fallback = self._fallback_scripts(nodes, course_name)
         try:
-            client = self._build_llm_client()
-            scripts = self._run_batch_generation(client, context_markdown, nodes, course_name)
+            scripts = self._run_batch_generation(context_markdown, nodes, course_name)
             if not scripts:
                 scripts = fallback["scripts"]
             node_ids = {n["node_id"] for n in nodes}
@@ -69,8 +61,7 @@ class NodeGenerator:
         """增强版生成：带 segment_type / estimated_seconds / interaction_hint / knowledge_card"""
         fallback = self._enhanced_fallback(nodes, course_name)
         try:
-            client = self._build_llm_client()
-            scripts = self._run_enhanced_batch(client, context_markdown, nodes, course_name)
+            scripts = self._run_enhanced_batch(context_markdown, nodes, course_name)
             if not scripts:
                 scripts = fallback["scripts"]
             node_ids = {n["node_id"] for n in nodes}
@@ -90,13 +81,6 @@ class NodeGenerator:
 
         fallback = self._single_fallback(node_id, title, summary, core_points, examples, confusions)
         try:
-            client = self._build_llm_client()
-            assembled = "\n".join([
-                title, summary,
-                *[f"要点: {item}" for item in core_points],
-                *[f"例子: {item}" for item in examples],
-                *[f"易错点: {item}" for item in confusions],
-            ]).strip()
             system_prompt = (
                 "你是高校课程智能讲授编排助手。"
                 "请根据讲授节点信息生成适合互动式课堂的讲授内容。"
@@ -109,37 +93,41 @@ class NodeGenerator:
                 f"示例: {json.dumps(examples, ensure_ascii=False)}\n"
                 f"易错点: {json.dumps(confusions, ensure_ascii=False)}\n"
             )
-            raw = self._request_llm(client, system_prompt, user_prompt)
-            data = self._extract_json(raw)
+            result = self._get_llm().chat_json(system_prompt, user_prompt,
+                                               temperature=self.config.temperature)
             return {
                 "node_id": node_id, "title": title,
-                "script": self._clean_text(data.get("script")) or fallback["script"],
-                "mindmap_markdown": self._clean_text(data.get("mindmap_markdown")) or fallback["mindmap_markdown"],
-                "interactive_questions": data.get("interactive_questions") or fallback["interactive_questions"],
-                "reteach_script": self._clean_text(data.get("reteach_script")) or fallback["reteach_script"],
-                "transition": self._clean_text(data.get("transition")) or fallback["transition"],
+                "script": self._clean_text(result.get("script")) or fallback["script"],
+                "mindmap_markdown": self._clean_text(result.get("mindmap_markdown")) or fallback["mindmap_markdown"],
+                "interactive_questions": result.get("interactive_questions") or fallback["interactive_questions"],
+                "reteach_script": self._clean_text(result.get("reteach_script")) or fallback["reteach_script"],
+                "transition": self._clean_text(result.get("transition")) or fallback["transition"],
             }
         except Exception:
             return fallback
 
     # ── 批量生成 ──
 
-    def _run_batch_generation(self, client: OpenAI, markdown: str,
+    def _run_batch_generation(self, markdown: str,
                               nodes: list[dict], course_name: str | None) -> list[dict]:
-        system_prompt = "你是课堂讲稿生成助手。请严格按节点输出可直接讲授的脚本，每条脚本必须绑定 node_id。"
+        system_prompt = (
+            "你是课堂讲稿生成助手。请严格按节点输出可直接讲授的脚本，每条脚本必须绑定 node_id。"
+        )
         user_prompt = (
             f"课程名: {course_name or '未命名课程'}\n"
             f"原始 Markdown:\n{markdown}\n\n"
             f"节点树:\n{json.dumps(nodes, ensure_ascii=False)}\n\n"
             "请输出 scripts 数组；每个元素包含 node_id/title/script/segments。"
         )
-        raw = self._request_llm(client, system_prompt, user_prompt,
-                                json_schema=build_stage3_script_schema())
-        data = self._extract_json(raw)
+        result = self._get_llm().chat_with_schema(
+            system_prompt, user_prompt,
+            build_stage3_script_schema(),
+            temperature=self.config.temperature,
+        )
         node_ids = {n["node_id"] for n in nodes}
-        return normalize_stage3_scripts(data.get("scripts") or [], node_ids)
+        return normalize_stage3_scripts(result.get("scripts") or [], node_ids)
 
-    def _run_enhanced_batch(self, client: OpenAI, markdown: str,
+    def _run_enhanced_batch(self, markdown: str,
                             nodes: list[dict], course_name: str | None) -> list[dict]:
         system_prompt = (
             "你是课堂讲稿生成助手（增强版）。只输出JSON。\n"
@@ -158,10 +146,12 @@ class NodeGenerator:
             f"节点树:\n{json.dumps(nodes, ensure_ascii=False)}\n\n"
             "每个节点至少2-4个segments: 开场->讲解->互动->过渡。node_id必须用节点树中的值。"
         )
-        raw = self._request_llm(client, system_prompt, user_prompt,
-                                json_schema=build_enhanced_script_schema())
-        data = self._extract_json(raw)
-        scripts = data if isinstance(data, list) else data.get("scripts") or []
+        result = self._get_llm().chat_with_schema(
+            system_prompt, user_prompt,
+            build_enhanced_script_schema(),
+            temperature=self.config.temperature,
+        )
+        scripts = result if isinstance(result, list) else result.get("scripts") or []
         valid_ids = {n["node_id"] for n in nodes}
         valid_list = sorted(valid_ids)
         for idx, script in enumerate(scripts):
@@ -177,33 +167,11 @@ class NodeGenerator:
 
     # ── LLM 客户端 ──
 
-    def _build_llm_client(self) -> OpenAI:
-        from ..qa import resolve_llm_base_url
-        api_key = os.getenv("AI_API_KEY")
-        if not api_key:
-            raise RuntimeError("缺少环境变量 AI_API_KEY")
-        model = self.config.model or os.getenv("AI_MODEL", "qwen-turbo")
-        base_url, _ = resolve_llm_base_url(model)
-        return OpenAI(api_key=api_key, base_url=base_url)
-
-    def _request_llm(self, client: OpenAI, system_prompt: str, user_prompt: str,
-                     json_schema: dict[str, Any] | None = None) -> str:
-        model = self.config.model or os.getenv("AI_MODEL", "qwen-turbo")
-        messages = [{"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}]
-        try:
-            if json_schema:
-                resp = client.chat.completions.create(
-                    model=model, temperature=self.config.temperature, messages=messages,
-                    response_format={"type": "json_schema", "json_schema": json_schema})
-            else:
-                resp = client.chat.completions.create(
-                    model=model, temperature=self.config.temperature, messages=messages,
-                    response_format={"type": "json_object"})
-        except Exception:
-            resp = client.chat.completions.create(
-                model=model, temperature=self.config.temperature, messages=messages)
-        return resp.choices[0].message.content or ""
+    def _get_llm(self) -> LLMClient:
+        """获取 LLM 客户端（懒创建，支持注入）"""
+        if self._llm is not None:
+            return self._llm
+        return LLMClient(temperature=self.config.temperature, model=self.config.model or None)
 
     # ── 兜底 ──
 
@@ -259,18 +227,6 @@ class NodeGenerator:
         }
 
     # ── 工具 ──
-
-    @staticmethod
-    def _extract_json(text: str) -> dict[str, Any]:
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?", "", cleaned, count=1).strip()
-            cleaned = re.sub(r"```$", "", cleaned).strip()
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError("未找到有效 JSON")
-        return json.loads(cleaned[start: end + 1])
 
     @staticmethod
     def _clean_text(value: Any) -> str:

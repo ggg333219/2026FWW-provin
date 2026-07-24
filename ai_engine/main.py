@@ -33,6 +33,13 @@ try:
     from .gen.patch import NodePatcher
     from .gen.interactive import InteractiveBuilder
     from .intent.router import router as intent_router
+    from .core.schema import (
+        GenerationCreateRequest, GenerationCreateResponse,
+        GenerationStatusResponse, GenerationStatus, GenerationStage,
+        GenerationTask, ExportRequest, ExportFormat,
+        ExportStatusResponse, ExportStatus, ExportJob,
+        RollbackRequest,
+    )
 except ImportError:
     from parser import DocumentParser
     from generator import LessonGenerator, GenerationConfig
@@ -48,6 +55,13 @@ except ImportError:
     from gen.patch import NodePatcher
     from gen.interactive import InteractiveBuilder
     from intent.router import router as intent_router
+    from core.schema import (
+        GenerationCreateRequest, GenerationCreateResponse,
+        GenerationStatusResponse, GenerationStatus, GenerationStage,
+        GenerationTask, ExportRequest, ExportFormat,
+        ExportStatusResponse, ExportStatus, ExportJob,
+        RollbackRequest,
+    )
 
 app = FastAPI(title="泛雅 AI 智课系统后端", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
 app.include_router(recommendation_router)
@@ -806,10 +820,377 @@ async def full_pipeline_preview(markdown: str = "", course_name: str = "课件")
         raise HTTPException(status_code=500, detail=f"全流程失败: {str(e)}")
 
 
+# =============================================================================
+# S4 版本管理端点（对齐 Go VersionHandler → AIEngine）
+# =============================================================================
+
+from ai_engine.gen.version import get_version_manager
+
+
+@app.get("/api/v1/version/{gen_id}/history")
+async def version_history(gen_id: str):
+    """GET /api/v1/version/{gen_id}/history — 版本历史列表"""
+    vm = get_version_manager()
+    versions = vm.list_versions(gen_id)
+    return {
+        "versions": [
+            {
+                "version_number": v.version_number,
+                "id": v.id,
+                "summary": v.summary,
+                "locked": v.locked,
+                "created_at": v.created_at.isoformat() if v.created_at else "",
+            }
+            for v in versions
+        ]
+    }
+
+
+@app.post("/api/v1/version/{gen_id}/rollback")
+async def version_rollback(gen_id: str, req: RollbackRequest):
+    """POST /api/v1/version/{gen_id}/rollback — 回滚到指定版本"""
+    vm = get_version_manager()
+    try:
+        new_ver = vm.revert_to(gen_id, req.target_version)
+        return {"current_version": new_ver.version_number, "status": "done"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/v1/version/{gen_id}/lock")
+async def version_lock(gen_id: str):
+    """POST /api/v1/version/{gen_id}/lock — 锁定最新版"""
+    vm = get_version_manager()
+    try:
+        locked = vm.lock_version(gen_id)
+        return {"version": locked.version_number, "locked": True}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/v1/version/{gen_id}")
+async def version_load(gen_id: str, v: int | None = None):
+    """GET /api/v1/version/{gen_id}?v=N — 加载指定版本，为空则加载最新版"""
+    vm = get_version_manager()
+    snap = vm.load_version(gen_id, v)
+    if not snap:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    return {
+        "version_number": snap.version_number,
+        "id": snap.id,
+        "nodes_snapshot": [n.model_dump() if hasattr(n, "model_dump") else n for n in snap.nodes_snapshot],
+        "summary": snap.summary,
+        "locked": snap.locked,
+        "created_at": snap.created_at.isoformat() if snap.created_at else "",
+    }
+
+
+@app.get("/api/v1/version/{gen_id}/diff")
+async def version_diff(gen_id: str, v1: int, v2: int):
+    """GET /api/v1/version/{gen_id}/diff?v1=1&v2=2 — 对比两个版本差异"""
+    vm = get_version_manager()
+    return vm.diff(gen_id, v1, v2)
+
+
+# =============================================================================
+# S3 生成任务管理端点（对齐 Go GenerationHandler → AIEngine）
+# =============================================================================
+
+import asyncio
+import uuid
+from ai_engine.core.schema import (
+    GenerationCreateRequest,
+    GenerationCreateResponse,
+    GenerationStatusResponse,
+    GenerationStatus,
+    GenerationStage,
+    ExportRequest,
+    ExportFormat,
+    ExportStatusResponse,
+    ExportStatus,
+    ExportJob,
+)
+from ai_engine.gen.version import get_version_manager
+
+# 进程内生成任务存储（生产环境用 Redis/DB）
+_gen_tasks: dict[str, GenerationTask] = {}
+_gen_tasks_lock = asyncio.Lock()
+
+
+@app.post("/api/v1/gen/create", response_model=GenerationCreateResponse)
+async def gen_create(req: GenerationCreateRequest):
+    """
+    POST /api/v1/gen/create — 创建生成任务，执行 outline → nodes 全流程。
+
+    对应 Go 端：GenerationHandler.Create → AIEngine.GenerationCreate
+    """
+    task_id = f"gen_{uuid.uuid4().hex[:12]}"
+    gen_id = f"course_{uuid.uuid4().hex[:12]}"
+
+    # 构建任务对象
+    task = GenerationTask(
+        task_id=task_id,
+        session_id=req.session_id,
+        generation_id=gen_id,
+        status=GenerationStatus.PENDING,
+        stage=GenerationStage.INTENT_LOCKED,
+        progress_pct=0.0,
+        intent=req.intent,
+        evidence=req.evidence_packet,
+        template_id=req.template_id,
+        nodes=[],
+        created_at=datetime.now(),
+    )
+
+    async with _gen_tasks_lock:
+        _gen_tasks[task_id] = task
+
+    # 后台执行生成管道
+    asyncio.create_task(_run_generation_pipeline(task_id, req))
+
+    return GenerationCreateResponse(
+        task_id=task_id,
+        status=GenerationStatus.PENDING,
+        generation_type="ppt" if not req.intent.output_format else (req.intent.output_format[0] if req.intent.output_format else "ppt"),
+    )
+
+
+async def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
+    """后台生成管道：outline → nodes → 保存版本快照"""
+    async with _gen_tasks_lock:
+        task = _gen_tasks.get(task_id)
+        if not task:
+            return
+
+    try:
+        # Stage 1: 意图锁定
+        task.status = GenerationStatus.GENERATING
+        task.stage = GenerationStage.INTENT_LOCKED
+        task.progress_pct = 10.0
+
+        # Stage 2: 收集证据（如有）
+        task.stage = GenerationStage.EVIDENCE_GATHERING
+        task.progress_pct = 20.0
+
+        # Stage 3: 构建大纲
+        task.stage = GenerationStage.STRUCTURING
+        task.progress_pct = 30.0
+        builder = OutlineBuilder()
+        if req.evidence_packet:
+            intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
+            evidence_dict = req.evidence_packet.model_dump() if hasattr(req.evidence_packet, "model_dump") else req.evidence_packet
+            outline = builder.build(intent_dict, evidence_dict)
+        else:
+            intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
+            outline = builder.build(intent_dict, None)
+        nodes = outline.get("nodes", [])
+        task.nodes = nodes
+        task.progress_pct = 50.0
+
+        # Stage 4: 逐节点生成
+        task.stage = GenerationStage.GENERATING
+        generator = NodeGenerator()
+        course_name = req.intent.topic or "课件"
+        scripts = generator.generate_all(nodes, "", course_name)
+        task.progress_pct = 80.0
+
+        # 合并节点
+        merged_nodes = []
+        for node in nodes:
+            script_data = next(
+                (s for s in scripts.get("scripts", []) if s.get("node_id") == node.get("node_id")),
+                {"script": "", "segments": []},
+            )
+            merged = {**node}
+            if isinstance(script_data, dict):
+                merged["script"] = script_data.get("script", "")
+                merged["segments"] = script_data.get("segments", [])
+            merged_nodes.append(merged)
+        task.nodes = merged_nodes
+
+        # Stage 5: 保存版本快照
+        task.stage = GenerationStage.PREVIEW
+        task.progress_pct = 90.0
+        vm = get_version_manager()
+        vm.save_snapshot(
+            generation_id=task.generation_id,
+            nodes=merged_nodes,
+            summary="初稿",
+        )
+
+        # 完成
+        task.status = GenerationStatus.DONE
+        task.stage = GenerationStage.DONE
+        task.progress_pct = 100.0
+
+        async with _gen_tasks_lock:
+            _gen_tasks[task_id] = task
+
+    except Exception as e:
+        task.status = GenerationStatus.FAILED
+        task.error = str(e)
+        async with _gen_tasks_lock:
+            _gen_tasks[task_id] = task
+
+
+@app.get("/api/v1/gen/status/{task_id}", response_model=GenerationStatusResponse)
+async def gen_status(task_id: str):
+    """
+    GET /api/v1/gen/status/{task_id} — 查询生成任务状态。
+
+    对应 Go 端：GenerationHandler.Status → AIEngine.GenerationStatus
+    """
+    async with _gen_tasks_lock:
+        task = _gen_tasks.get(task_id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    return GenerationStatusResponse(
+        task_id=task.task_id,
+        status=task.status,
+        stage=task.stage,
+        progress_pct=task.progress_pct,
+        current_node=task.current_node or "",
+        nodes=task.nodes,
+        preview_url=None,
+        error=task.error,
+    )
+
+
+# =============================================================================
+# S4 异步导出端点（对齐 Go ExportHandler → AIEngine）
+# =============================================================================
+
+from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
+from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
+
+# 进程内导出任务存储
+_export_tasks: dict[str, ExportJob] = {}
+_export_lock = asyncio.Lock()
+
+
+@app.post("/api/v1/export/{gen_id}", response_model=ExportStatusResponse)
+async def export_create(gen_id: str, req: ExportRequest):
+    """
+    POST /api/v1/export/{gen_id} — 创建异步导出任务。
+
+    对应 Go 端：ExportHandler.Create → AIEngine.ExportCreate
+    """
+    job_id = f"exp_{uuid.uuid4().hex[:12]}"
+
+    # 获取最新版本节点
+    vm = get_version_manager()
+    latest = vm.load_version(gen_id)
+    if not latest:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    nodes = latest.nodes_snapshot
+
+    # 创建导出任务
+    job = ExportJob(
+        job_id=job_id,
+        generation_id=gen_id,
+        format=req.format,
+        version=req.version or latest.version_number,
+        status=ExportStatus.PENDING,
+        created_at=datetime.now(),
+    )
+
+    async with _export_lock:
+        _export_tasks[job_id] = job
+
+    # 后台执行导出
+    asyncio.create_task(_run_export(job_id, nodes, req.format))
+
+    return ExportStatusResponse(
+        job_id=job_id,
+        status=ExportStatus.PENDING,
+        download_url=None,
+        error=None,
+    )
+
+
+async def _run_export(job_id: str, nodes: list[dict], fmt: ExportFormat):
+    """后台导出任务"""
+    async with _export_lock:
+        job = _export_tasks.get(job_id)
+        if not job:
+            return
+
+    try:
+        job.status = ExportStatus.EXPORTING
+
+        course_name = "课件"
+        export_dir = Path("data/exports")
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        if fmt in (ExportFormat.BOTH, ExportFormat.PPTX):
+            exporter = PPTExporter()
+            buf = exporter.export_to_bytes(nodes, course_name)
+            ppt_path = export_dir / f"{job_id}.pptx"
+            ppt_path.write_bytes(buf.getvalue())
+            job.metadata = job.metadata or {}
+            job.metadata["ppt_path"] = str(ppt_path)
+
+        if fmt in (ExportFormat.BOTH, ExportFormat.DOCX):
+            exporter = DOCExporter()
+            buf = exporter.export_to_bytes(nodes, course_name)
+            doc_path = export_dir / f"{job_id}.docx"
+            doc_path.write_bytes(buf.getvalue())
+            job.metadata = job.metadata or {}
+            job.metadata["doc_path"] = str(doc_path)
+
+        job.status = ExportStatus.DONE
+        job.minio_path = str(export_dir / job_id)
+
+        async with _export_lock:
+            _export_tasks[job_id] = job
+
+    except Exception as e:
+        job.status = ExportStatus.FAILED
+        job.error = str(e)
+        async with _export_lock:
+            _export_tasks[job_id] = job
+
+
+@app.get("/api/v1/export/status/{job_id}", response_model=ExportStatusResponse)
+async def export_status(job_id: str):
+    """
+    GET /api/v1/export/status/{job_id} — 查询导出任务状态。
+
+    对应 Go 端：ExportHandler.Status → AIEngine.ExportStatus
+    """
+    async with _export_lock:
+        job = _export_tasks.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="导出任务不存在")
+
+    download_url = None
+    if job.status == ExportStatus.DONE:
+        meta = job.metadata or {}
+        if "ppt_path" in meta:
+            download_url = f"/download/{job_id}.pptx"
+        elif "doc_path" in meta:
+            download_url = f"/download/{job_id}.docx"
+
+    return ExportStatusResponse(
+        job_id=job.job_id,
+        status=job.status,
+        download_url=download_url,
+        error=job.error,
+    )
+
+
+# =============================================================================
+# 健康检查
+# =============================================================================
+
 @app.get("/health")
 def health_check():
     """健康检查接口，供前端联调测试"""
     return {"status": "running", "version": "v1.0.0", "llm": _llm_health_payload()}
+
 
 if __name__ == "__main__":
     import uvicorn
