@@ -17,10 +17,12 @@
     status = manager.get_task_status(task.task_id)
 """
 
+import asyncio
+import json
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, AsyncGenerator, Optional
 
 from ai_engine.core.schema import (
     Chunk,
@@ -291,6 +293,173 @@ class TaskManager:
                 chunks=task.all_chunks,
                 intent_id=task.intent_id,
             )
+
+    # ======================================================================
+    # 流式执行（SSE）
+    # ======================================================================
+
+    async def run_task_stream(
+        self,
+        task_id: str,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """
+        流式执行一个解析任务，逐文件 yield 事件（dict）。
+
+        Yield 的事件:
+          - {"event": "task_start",  "data": {...}}
+          - {"event": "file_start",  "data": {...}}
+          - {"event": "file_chunk_batch", "data": {"chunks": [...]}}
+          - {"event": "file_done",   "data": {...}}
+          - {"event": "file_error",  "data": {...}}
+          - {"event": "task_done",   "data": {...}}
+          - {"event": "task_error",  "data": {...}}
+
+        Args:
+            task_id: 已创建的 task_id（先调用 create_task 获得）。
+        """
+        task = self._tasks.get(task_id)
+        if task is None:
+            yield {"event": "task_error", "data": {"error": f"task_id {task_id} 不存在"}}
+            return
+
+        task.status = AggregateTaskStatus.PROCESSING
+        task.updated_at = datetime.now()
+
+        yield {
+            "event": "task_start",
+            "data": {
+                "task_id": task_id,
+                "file_count": len(task.files),
+                "files": [
+                    {
+                        "file_name": f.file_path.split("/")[-1].split("\\")[-1],
+                        "source_type": f.source_type.value,
+                    }
+                    for f in task.files
+                ],
+            },
+        }
+
+        for ft in task.files:
+            async for evt in self._process_single_file_stream(ft):
+                yield evt
+
+        # 汇总状态
+        all_terminal = all(f.is_terminal for f in task.files)
+        if not all_terminal:
+            return  # 不应该发生
+
+        failed = [f for f in task.files if f.status == FileTaskStatus.FAILED]
+        if failed and len(failed) < len(task.files):
+            task.status = AggregateTaskStatus.PARTIAL_FAIL
+            task.error = f"{len(failed)}/{len(task.files)} 文件解析失败"
+        elif failed:
+            task.status = AggregateTaskStatus.DONE
+            task.error = "全部文件解析失败"
+        else:
+            task.status = AggregateTaskStatus.DONE
+
+        task.updated_at = datetime.now()
+
+        if task.all_chunks:
+            self._material_mapper.build_mappings(
+                task_id=task_id,
+                chunks=task.all_chunks,
+                intent_id=task.intent_id,
+            )
+
+        total_chunks = len(task.all_chunks)
+        # 将 Chunk 模型转为可 JSON 序列化的字典
+        chunk_dicts = [c.model_dump() for c in task.all_chunks]
+        yield {
+            "event": "task_done",
+            "data": {
+                "task_id": task_id,
+                "status": task.status.value,
+                "error": task.error,
+                "total_chunks": total_chunks,
+                "chunks": chunk_dicts,
+            },
+        }
+
+    async def _process_single_file_stream(
+        self,
+        ft: FileTask,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """流式处理单个文件，yield 文件级事件。"""
+        file_name = ft.file_path.split("/")[-1].split("\\")[-1]
+
+        yield {
+            "event": "file_start",
+            "data": {
+                "file_name": file_name,
+                "source_type": ft.source_type.value,
+                "file_path": ft.file_path,
+            },
+        }
+
+        ft.status = FileTaskStatus.PARSING
+        ft.started_at = datetime.now()
+
+        try:
+            # 1) 按文件类型解析 → 原始块
+            raw_result = self._parse_by_type(ft)
+
+            # 2) 分批 yield 原始块（按 type 分组）
+            if raw_result:
+                from itertools import groupby
+
+                raw_result.sort(key=lambda r: r.get("type", "unknown"))
+                for type_key, group in groupby(raw_result, key=lambda r: r.get("type", "unknown")):
+                    group_list = list(group)
+                    yield {
+                        "event": "file_chunk_batch",
+                        "data": {
+                            "file_name": file_name,
+                            "type": type_key,
+                            "count": len(group_list),
+                            "chunks": group_list,
+                        },
+                    }
+
+            # 3) 标准化为 Chunk（落库）
+            ft.chunks = self._chunk_normalizer.normalize(
+                raw_chunks=raw_result,
+                source_ref=ft.file_path,
+                source_type=ft.source_type,
+            )
+            ft.status = FileTaskStatus.DONE
+            ft.completed_at = datetime.now()
+            if ft.asset:
+                ft.asset.parse_status = ParseStatus.DONE
+
+            # 4) 标准化后的 Chunk 也 yield 一份（供前端直接落库）
+            yield {
+                "event": "file_done",
+                "data": {
+                    "file_name": file_name,
+                    "source_type": ft.source_type.value,
+                    "chunk_count": len(ft.chunks),
+                    "normalized_chunks": [c.model_dump() for c in ft.chunks],
+                },
+            }
+
+        except Exception as e:
+            ft.retry_count += 1
+            ft.error = f"解析失败: {e}"
+            ft.status = FileTaskStatus.FAILED
+            ft.completed_at = datetime.now()
+            if ft.asset:
+                ft.asset.parse_status = ParseStatus.FAILED
+
+            yield {
+                "event": "file_error",
+                "data": {
+                    "file_name": file_name,
+                    "source_type": ft.source_type.value,
+                    "error": str(e),
+                },
+            }
 
     async def _process_single_file(self, ft: FileTask) -> None:
         """处理单个文件（含重试）。"""

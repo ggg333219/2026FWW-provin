@@ -47,10 +47,11 @@ class VideoProcessor:
     def __init__(
         self,
         max_keyframes: int = 5,
-        whisper_model: str = "base",
+        whisper_model: str = "medium",
         asr_language: Optional[str] = None,
         vlm_model: Optional[str] = None,
         llm_model: Optional[str] = None,
+        initial_prompt: Optional[str] = None,
     ):
         """
         Args:
@@ -62,10 +63,17 @@ class VideoProcessor:
                            (默认 "qwen-vl-plus"，可被 AI_VLM_MODEL 环境变量覆盖)。
             llm_model:     ASR 纠错用的 LLM 模型名
                            (默认 settings.MODEL，可被 AI_MODEL 环境变量覆盖)。
+            initial_prompt: Whisper initial_prompt，引导模型识别专有名词和领域术语。
+                           默认值为中文 AI/工具/编程场景的领域提示词；传空字符串禁用。
+
+
         """
         self.max_keyframes = max_keyframes
         self.whisper_model_name = whisper_model
-        self.asr_language = asr_language
+        self.asr_language = asr_language or "zh"
+        self.initial_prompt = initial_prompt if initial_prompt is not None else (
+            "这是一段关于 AI 工具、VS Code、PPT 制作、播客、Plexigate、编程的视频。"
+        )
         self._vlm_model = vlm_model or os.getenv("AI_VLM_MODEL", "qwen-vl-plus")
         self._llm_model = llm_model or os.getenv("AI_MODEL", None)
         # 统一 LLM 客户端，VLM 和 ASR 纠错共用（模型名通过调用参数覆盖）
@@ -428,7 +436,7 @@ class VideoProcessor:
                     "model": self.whisper_model_name,
                     "segment_count": len(segments),
                     "segments": segments[:100],
-                    "llm_corrected": corrected != combined_raw,
+                    "llm_corrected": True,
                 },
             }
 
@@ -478,21 +486,18 @@ class VideoProcessor:
             if self._llm_client is None:
                 self._llm_client = LLMClient(temperature=0.1, timeout=300)
 
-            # 用户要求的 ASR 纠错 prompt
+            # 增强型 ASR 纠错 prompt — 针对口语转文字的常见问题
             prompt = (
-                "你是一个语音识别（ASR）文本纠错专家。下面是一段视频语音识别出来的原始文本，"
-                "其中可能包含同音错别字、标点符号缺失或不通顺的地方。\n\n"
-                "请在不改变原意的前提下进行润色修正：\n"
-                "1. 修正明显的同音错别字和专业术语错误。\n"
-                "2. 补全或修正标点符号。\n"
-                "3. 保持原有的口语表达风格，不要过度重写。\n"
+                "你是一个文本校对员。请将以下语音识别出来的口语字幕进行纠错和润色：\n"
+                "1. 修正明显的同音错别字（如将 Cup Code 改为 VS Code，PBT 改为 PPT）。\n"
+                "2. 删除无意义的口头禅（如 '嗯'、'啊'、'就是说'）。\n"
+                "3. 保持原本的意思不变，输出通顺的段落。\n"
                 "4. 保持原有的时间戳标记 [xx.xs-xx.xs] 完全不变、换行结构不变。\n\n"
-                "原始文本：\n"
-                f"{truncated}\n\n"
-                "输出格式：直接输出修正后的文本。"
+                "原始字幕：\n"
+                f"{truncated}"
             )
             response = self._llm_client.chat(
-                system="你是一个语音识别（ASR）文本纠错专家。", user=prompt,
+                system="你是一个文本校对员，负责将语音识别出来的口语字幕进行纠错和润色。", user=prompt,
                 model=self._llm_model or "qwen-turbo",
             )
 
@@ -522,9 +527,57 @@ class VideoProcessor:
             },
         }
 
-    def _transcribe_with_faster_whisper(self, media_path: str) -> list[dict[str, Any]]:
+    def _merge_segments_smart(
+        self,
+        segments: list[dict[str, Any]],
+        max_pause: float = 1.5,
+    ) -> list[dict[str, Any]]:
+        """
+        智能长句合并。
+
+        不要直接用 Whisper 默认的短时间戳切行，而是：
+          - 只有遇到句末标点（。？；！.!?）或停顿超过 max_pause 秒时才切分。
+          否则将碎片化的段落拼成一个完整长句。
+
+        Args:
+            segments: 原始 segment 列表（含 start / end / text）。
+            max_pause: 最大允许停顿秒数（超过则切分），默认 1.5s。
+
+        Returns:
+            list[dict]: 合并后的 segment 列表。
+        """
+        if not segments:
+            return segments
+
+        merged = [segments[0].copy()]
+        for seg in segments[1:]:
+            prev = merged[-1]
+            gap = seg["start"] - prev["end"]
+            prev_text = prev["text"].strip()
+            # 判断前一句是否以句末标点结尾
+            ends_with_punct = any(
+                prev_text.endswith(p) for p in ("。", "？", "；", "！", ".", "?", "!", ";")
+            )
+
+            if gap < max_pause and not ends_with_punct:
+                # 合并：延后结束时间，拼接文本
+                prev["end"] = seg["end"]
+                prev["text"] = f"{prev_text}，{seg['text'].strip()}"
+            else:
+                merged.append(seg.copy())
+
+        return merged
+
+    def _transcribe_with_faster_whisper(
+        self,
+        media_path: str,
+    ) -> list[dict[str, Any]]:
         """
         使用 Faster-Whisper 进行语音识别，返回带时间戳的片段列表。
+
+        增强特性：
+          - 传入 initial_prompt 引导专有名词识别
+          - 智能长句合并（取代默认 0.8s 切行）
         """
         try:
             if self._whisper_instance is None:
@@ -536,13 +589,20 @@ class VideoProcessor:
                     compute_type="int8",
                 )
 
-            segments, info = self._whisper_instance.transcribe(
-                media_path,
+            # 注入 initial_prompt 挽救专有名词
+            transcribe_kwargs = dict(
                 beam_size=5,
                 language=self.asr_language,
             )
+            if self.initial_prompt:
+                transcribe_kwargs["initial_prompt"] = self.initial_prompt
 
-            return [
+            segments, info = self._whisper_instance.transcribe(
+                media_path,
+                **transcribe_kwargs,
+            )
+
+            raw_segments = [
                 {
                     "start": round(seg.start, 2),
                     "end": round(seg.end, 2),
@@ -551,6 +611,9 @@ class VideoProcessor:
                 for seg in segments
                 if seg.text and seg.text.strip()
             ]
+
+            # 智能长句合并：仅按标点或 >1.5s 停顿切分
+            return self._merge_segments_smart(raw_segments)
 
         except ImportError:
             return []

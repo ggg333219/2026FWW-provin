@@ -12,9 +12,10 @@ import wave
 from pathlib import Path
 from typing import List, Optional, Any
 
-CURRENT_DIR = Path(__file__).resolve().parent
-if str(CURRENT_DIR) not in sys.path:
-    sys.path.insert(0, str(CURRENT_DIR))
+CURRENT_DIR = Path(__file__).resolve().parent  # ai_engine/
+PROJECT_ROOT = CURRENT_DIR.parent  # 项目根目录
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # 导入你之前写的 AI 核心逻辑
 try:
