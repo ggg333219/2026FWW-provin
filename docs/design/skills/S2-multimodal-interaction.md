@@ -77,6 +77,139 @@ RAG 索引       Agent Orchestrator
 }
 ```
 
+## 3.1 SSE 流式解析接口（新增）
+
+Python 端提供 `text/event-stream` 实时流式解析端点，支持分段推送进度和 Chunk。
+
+### POST /api/v1/parse/stream-process
+
+创建解析任务，以 SSE 流式返回进度+分块。**无需轮询，一请求即完整交付。**
+
+```json
+请求体（同 /api/v1/parse/process）:
+{
+  "session_id": "uuid",
+  "file_paths": ["path/to/video.mp4", "path/to/doc.pdf"],
+  "intent_id": "uuid"  // 可选
+}
+```
+
+### GET /api/v1/parse/stream/{task_id}
+
+对已存在的任务"接入"实时流。任务若已完成，立即返回所有数据。
+
+### SSE 事件表
+
+| 事件 | data 字段 | 触发时机 |
+| --- | --- | --- |
+| `task_start` | `{"task_id","file_count","files"}` | 任务创建成功 |
+| `file_start` | `{"file_name","source_type"}` | 开始解析一个文件 |
+| `file_chunk_batch` | `{"file_name","type","count","chunks"}` | 解析出一批同类原始块 |
+| `file_done` | `{"file_name","chunk_count","normalized_chunks"}` | 单个文件解析完毕 |
+| `file_error` | `{"file_name","error"}` | 单个文件解析失败 |
+| `task_done` | `{"task_id","status","total_chunks","chunks"}` | 全部文件解析完毕 |
+| `task_error` | `{"error"}` | 任务层面异常 |
+
+### 事件流示例
+
+```
+event: task_start
+data: {"task_id":"parse_abc123","file_count":2,"files":[{"file_name":"test4.mp4","source_type":"VIDEO"},{"file_name":"doc.pdf","source_type":"PDF"}]}
+
+event: file_start
+data: {"file_name":"test4.mp4","source_type":"VIDEO"}
+
+event: file_chunk_batch
+data: {"file_name":"test4.mp4","type":"video_meta","count":1,"chunks":[{"type":"video_meta","content":"文件: test4.mp4\n大小: 45.2MB\n时长: 120.5秒"}]}
+
+event: file_chunk_batch
+data: {"file_name":"test4.mp4","type":"frame","count":3,"chunks":[{"type":"frame","content":"画面是VS Code界面…","page":0,"metadata":{"timestamp_sec":0}},...]}
+
+event: file_chunk_batch
+data: {"file_name":"test4.mp4","type":"transcript","count":1,"chunks":[{"type":"transcript","content":"[0.0s-5.2s] 大家好…"}]}
+
+event: file_done
+data: {"file_name":"test4.mp4","chunk_count":5,"normalized_chunks":[{"chunk_id":"chunk_xxx","content":"…"},...]}
+
+event: file_start
+data: {"file_name":"doc.pdf","source_type":"PDF"}
+...
+event: file_done
+data: {"file_name":"doc.pdf","chunk_count":8,...}
+
+event: task_done
+data: {"task_id":"parse_abc123","status":"done","total_chunks":13,"chunks":[...全部Chunk...]}
+```
+
+### 前端联调指南
+
+```typescript
+// 方式一：EventSource（推荐——自动重连，适合轮不到的起始状态）
+const es = new EventSource("/api/v1/parse/stream/parse_abc123");
+
+es.addEventListener("task_start", (e) => {
+  const { task_id, file_count } = JSON.parse(e.data);
+  showProgressBar(file_count);
+});
+es.addEventListener("file_start", (e) => {
+  const { file_name } = JSON.parse(e.data);
+  setCurrentFile(file_name);
+});
+es.addEventListener("file_chunk_batch", (e) => {
+  const { file_name, type, count, chunks } = JSON.parse(e.data);
+  appendChunks(type, chunks);  // 实时展示已解析的 Chunk
+});
+es.addEventListener("file_done", (e) => {
+  const { file_name, normalized_chunks } = JSON.parse(e.data);
+  markFileDone(file_name);
+});
+es.addEventListener("file_error", (e) => {
+  const { file_name, error } = JSON.parse(e.data);
+  showFileError(file_name, error);
+});
+es.addEventListener("task_done", (e) => {
+  const { task_id, chunks } = JSON.parse(e.data);
+  es.close();         // 关闭连接
+  finishParse(chunks); // 得到全量 Chunk
+});
+es.addEventListener("task_error", (e) => {
+  const { error } = JSON.parse(e.data);
+  es.close();
+  showError(error);
+});
+
+// 方式二：fetch ReadableStream（适合 POST /stream-process 场景）
+const response = await fetch("/api/v1/parse/stream-process", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    session_id: "s1", file_paths: ["test4.mp4"],
+  }),
+});
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+let buffer = "";
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  buffer += decoder.decode(value, { stream: true });
+  // 按 "\\n\\n" 分割事件
+  const parts = buffer.split("\n\n");
+  buffer = parts.pop() || "";
+  for (const part of parts) {
+    const lines = part.split("\n");
+    const eventLine = lines.find(l => l.startsWith("event: "));
+    const dataLine = lines.find(l => l.startsWith("data: "));
+    if (eventLine && dataLine) {
+      const event = eventLine.slice(7);
+      const data = JSON.parse(dataLine.slice(6));
+      handleSseEvent(event, data);
+    }
+  }
+}
+```
+
 ## 4. 内部模块
 
 | 子模块 | 职责 | 文件 |
