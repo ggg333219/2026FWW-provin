@@ -1,4 +1,5 @@
 {
+  "effort":"max",
   "permissions": {
     "allow": [
       "WebFetch(domain:github.com)",

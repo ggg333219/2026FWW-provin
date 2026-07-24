@@ -215,6 +215,39 @@ class LLMClient:
             except (ValueError, json.JSONDecodeError):
                 return {"error": "json_parse_failed", "_raw": response.content[:500]}
 
+    def chat_with_schema(
+        self,
+        system: str,
+        user: str,
+        schema: dict[str, Any],
+        *,
+        temperature: Optional[float] = None,
+        model: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        带 JSON Schema 的结构化输出调用（显式版本）。
+
+        与 chat_json(schema=...) 等价，但语义更明确：
+        明确告诉调用方这个调用一定会携带 schema。
+
+        Args:
+            system: 系统提示词
+            user: 用户消息
+            schema: OpenAI json_schema 格式的定义（需含 name 字段才触发 structured output）
+            temperature: 覆盖默认温度
+            model: 覆盖默认模型
+
+        Returns:
+            解析后的 JSON 字典
+        """
+        return self.chat_json(
+            system=system,
+            user=user,
+            schema=schema,
+            temperature=temperature,
+            model=model,
+        )
+
     def chat_messages(
         self,
         messages: list[dict[str, str]],

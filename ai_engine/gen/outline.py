@@ -14,11 +14,10 @@
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
-
-from openai import OpenAI
+from typing import Any, Optional
 
 from ..schema import build_stage2_node_tree_schema, normalize_stage2_nodes
+from ..core.llm import LLMClient
 
 
 @dataclass
@@ -32,8 +31,9 @@ class OutlineConfig:
 class OutlineBuilder:
     """从教师意图 + 证据包构建课件大纲与节点树"""
 
-    def __init__(self, config: OutlineConfig | None = None):
+    def __init__(self, config: OutlineConfig | None = None, llm_client: Optional[LLMClient] = None):
         self.config = config or OutlineConfig()
+        self._llm = llm_client  # 可注入，供测试用
 
     # ── 公开入口 ──
 
@@ -56,8 +56,7 @@ class OutlineBuilder:
         fallback = self._fallback_outline(title, key_points)
 
         try:
-            client = self._build_llm_client()
-            nodes = self._run_node_tree_generation(client, markdown, key_points)
+            nodes = self._run_node_tree_generation(markdown, key_points)
             if not nodes:
                 nodes = fallback["nodes"]
             return {"nodes": nodes, "used_fallback": False}
@@ -68,8 +67,7 @@ class OutlineBuilder:
         """从已有 Markdown 构建节点树（兼容旧接口）"""
         fallback = self._fallback_outline(course_name or "未命名课程")
         try:
-            client = self._build_llm_client()
-            nodes = self._run_node_tree_generation(client, markdown, [])
+            nodes = self._run_node_tree_generation(markdown, [])
             if not nodes:
                 nodes = fallback["nodes"]
             return {"nodes": nodes, "used_fallback": False}
@@ -78,7 +76,7 @@ class OutlineBuilder:
 
     # ── LLM 节点树生成 ──
 
-    def _run_node_tree_generation(self, client: OpenAI, markdown: str, key_points: list[str]) -> list[dict[str, Any]]:
+    def _run_node_tree_generation(self, markdown: str, key_points: list[str]) -> list[dict[str, Any]]:
         """调用 LLM 从 markdown 生成节点树"""
         system_prompt = (
             "你是教学设计助手。"
@@ -91,50 +89,17 @@ class OutlineBuilder:
             f"关键点:\n{json.dumps(key_points, ensure_ascii=False)}\n\n"
             "请输出 nodes 数组。node_id 必须稳定、可读，例如 node_001。"
         )
-        raw = self._request_llm_json(client, system_prompt, user_prompt,
-                                     json_schema=build_stage2_node_tree_schema())
-        data = self._extract_json(raw)
-        return normalize_stage2_nodes(data.get("nodes") or [])
+        llm = self._get_llm()
+        schema = build_stage2_node_tree_schema()
+        result = llm.chat_with_schema(system_prompt, user_prompt, schema,
+                                       temperature=self.config.temperature)
+        return normalize_stage2_nodes(result.get("nodes") or [])
 
-    # ── LLM 客户端 ──
-
-    def _build_llm_client(self) -> OpenAI:
-        from ..qa import resolve_llm_base_url
-        import os
-        api_key = os.getenv("AI_API_KEY")
-        if not api_key:
-            raise RuntimeError("缺少环境变量 AI_API_KEY，无法调用大模型。")
-        model = self.config.model or os.getenv("AI_MODEL", "qwen-turbo")
-        base_url, _ = resolve_llm_base_url(model)
-        return OpenAI(api_key=api_key, base_url=base_url)
-
-    def _request_llm_json(self, client: OpenAI, system_prompt: str, user_prompt: str,
-                          json_schema: dict[str, Any] | None = None) -> str:
-        from ..qa import resolve_llm_base_url
-        import os
-        model = self.config.model or os.getenv("AI_MODEL", "qwen-turbo")
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        try:
-            if json_schema:
-                resp = client.chat.completions.create(
-                    model=model, temperature=self.config.temperature,
-                    messages=messages,
-                    response_format={"type": "json_schema", "json_schema": json_schema},
-                )
-            else:
-                resp = client.chat.completions.create(
-                    model=model, temperature=self.config.temperature,
-                    messages=messages, response_format={"type": "json_object"},
-                )
-        except Exception:
-            resp = client.chat.completions.create(
-                model=model, temperature=self.config.temperature,
-                messages=messages,
-            )
-        return resp.choices[0].message.content or ""
+    def _get_llm(self) -> LLMClient:
+        """获取 LLM 客户端（懒创建，支持注入）"""
+        if self._llm is not None:
+            return self._llm
+        return LLMClient(temperature=self.config.temperature, model=self.config.model or None)
 
     # ── 工具方法 ──
 
@@ -180,15 +145,3 @@ class OutlineBuilder:
                 "prerequisites": [f"node_{idx - 1:03d}"] if idx > 1 else [],
             })
         return {"nodes": nodes}
-
-    @staticmethod
-    def _extract_json(text: str) -> dict[str, Any]:
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?", "", cleaned, count=1).strip()
-            cleaned = re.sub(r"```$", "", cleaned).strip()
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError("模型返回内容中未找到有效 JSON")
-        return json.loads(cleaned[start: end + 1])

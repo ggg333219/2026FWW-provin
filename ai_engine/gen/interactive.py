@@ -6,12 +6,16 @@
 
 流程：
   节点内容 → interactive_builder → 互动素材列表（可嵌入 PPT/独立导出）
+
+LLM 调用：
+  统一通过 core.llm.LLMClient，构造函数可注入 llm_client 供测试用。
 """
 
 import json
-import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
+
+from ..core.llm import LLMClient
 
 
 @dataclass
@@ -24,8 +28,9 @@ class InteractiveConfig:
 class InteractiveBuilder:
     """根据节点内容生成课堂互动素材"""
 
-    def __init__(self, config: InteractiveConfig | None = None):
+    def __init__(self, config: InteractiveConfig | None = None, llm_client: Optional[LLMClient] = None):
         self.config = config or InteractiveConfig()
+        self._llm = llm_client  # 可注入，供测试用
 
     def build_quiz(self, node: dict[str, Any]) -> list[dict[str, Any]]:
         """生成测验题"""
@@ -35,27 +40,25 @@ class InteractiveBuilder:
         if questions:
             return [{"type": "quiz", "title": title, "questions": questions, "source": "node"}]
         # LLM 生成
-        from openai import OpenAI
-        api_key = os.getenv("AI_API_KEY")
-        if not api_key:
-            return self._fallback_quiz(title, content)
-        model = self.config.model or os.getenv("AI_MODEL", "qwen-turbo")
-        client = OpenAI(api_key=api_key)
-        prompt = (
-            f"根据以下内容生成2-3道课堂测验题。输出JSON: "
-            f'{{"questions": [{{"question": "...", "options": ["A", "B", "C", "D"], "answer": "A", "explanation": "..."}}]}}\n\n'
-            f"标题: {title}\n内容: {content[:1500]}"
-        )
         try:
-            resp = client.chat.completions.create(
-                model=model, temperature=self.config.temperature,
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
+            result = self._get_llm().chat_json(
+                system="你是一个课堂测验生成助手。",
+                user=(
+                    f"根据以下内容生成2-3道课堂测验题。输出JSON格式:\n"
+                    f'{{"questions": [{{"question": "...", "options": ["A", "B", "C", "D"], "answer": "A", "explanation": "..."}}]}}\n\n'
+                    f"标题: {title}\n内容: {content[:1500]}"
+                ),
+                temperature=self.config.temperature,
             )
-            data = json.loads(resp.choices[0].message.content or "{}")
-            return [{"type": "quiz", "title": title, "questions": data.get("questions", []), "source": "llm"}]
+            return [{"type": "quiz", "title": title,
+                     "questions": result.get("questions", []), "source": "llm"}]
         except Exception:
             return self._fallback_quiz(title, content)
+
+    def _get_llm(self) -> LLMClient:
+        if self._llm is not None:
+            return self._llm
+        return LLMClient(temperature=self.config.temperature, model=self.config.model or None)
 
     def build_flashcards(self, node: dict[str, Any]) -> list[dict[str, Any]]:
         """生成知识闪卡"""
