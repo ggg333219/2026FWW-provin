@@ -57,6 +57,24 @@ _version_locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
 
+def _get_title(node: Any) -> str:
+    """安全获取节点标题，兼容 dict 和 Pydantic model"""
+    if hasattr(node, "title"):
+        return node.title or ""
+    if isinstance(node, dict):
+        return node.get("title", "")
+    return ""
+
+
+def _get_field(node: Any, field: str) -> Any:
+    """安全获取节点字段，兼容 dict 和 Pydantic model"""
+    if hasattr(node, field):
+        return getattr(node, field, "")
+    if isinstance(node, dict):
+        return node.get(field, "")
+    return ""
+
+
 def _lock_for(gen_id: str) -> threading.Lock:
     with _locks_guard:
         if gen_id not in _version_locks:
@@ -202,8 +220,8 @@ class VersionManager:
         if not snap1 or not snap2:
             return {"error": "version_not_found", "v1": v1, "v2": v2}
 
-        nodes1 = {n.get("node_id"): n for n in snap1.nodes_snapshot}
-        nodes2 = {n.get("node_id"): n for n in snap2.nodes_snapshot}
+        nodes1 = {n.node_id if hasattr(n, "node_id") else n.get("node_id"): n for n in snap1.nodes_snapshot}
+        nodes2 = {n.node_id if hasattr(n, "node_id") else n.get("node_id"): n for n in snap2.nodes_snapshot}
 
         all_ids = set(nodes1) | set(nodes2)
 
@@ -212,14 +230,14 @@ class VersionManager:
             n1 = nodes1.get(nid)
             n2 = nodes2.get(nid)
             if n1 and not n2:
-                result["removed"].append({"node_id": nid, "title": n1.get("title", "")})
+                result["removed"].append({"node_id": nid, "title": _get_title(n1)})
             elif not n1 and n2:
-                result["added"].append({"node_id": nid, "title": n2.get("title", "")})
+                result["added"].append({"node_id": nid, "title": _get_title(n2)})
             elif n1 and n2:
                 # 比较内容
                 changes = []
-                for field in ("title", "content", "type"):
-                    if n1.get(field) != n2.get(field):
+                for field in ("title", "content", "node_type"):
+                    if _get_field(n1, field) != _get_field(n2, field):
                         changes.append(field)
                 # 比较顺序（通过列表位置判断）
                 keys1 = list(nodes1.keys())
@@ -227,9 +245,9 @@ class VersionManager:
                 if keys1 != keys2:
                     changes.append("order")
                 if changes:
-                    result["changed"].append({"node_id": nid, "title": n2.get("title", ""), "changes": changes})
+                    result["changed"].append({"node_id": nid, "title": _get_title(n2), "changes": changes})
                 else:
-                    result["same"].append({"node_id": nid, "title": n2.get("title", "")})
+                    result["same"].append({"node_id": nid, "title": _get_title(n2)})
 
         return result
 

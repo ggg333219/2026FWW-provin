@@ -18,6 +18,11 @@ ai_engine/__pycache__
 ai_engine/debug_output/
 ai_engine/tests/mocks/_tmp_*
 *.py[cod]
+
+# output & test artifacts
+output/
+data/versions/_test_*
+__pycache__/
 .pytest_cache/
 *.pyc
 
