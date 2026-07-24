@@ -6,7 +6,7 @@ generates follow-up questions for missing fields, and renders
 a human-readable summary. It is intentionally simple so the skill
 is runnable without external LLM dependencies during early integration.
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Generator
 import re
 
 from ai_engine.core.schema import IntentSummary
@@ -232,4 +232,31 @@ class LLMIntentEngine:
             return {"error": "unexpected_response", "_raw": str(result)}
         except Exception as e:
             return {"error": "llm_call_failed", "reason": str(e)}
+
+    def extract_intent_stream(
+        self, messages: List[Dict[str, Any]]
+    ) -> Generator[str, None, None]:
+        """
+        流式提取意图，逐 token yield LLM 的 JSON 输出。
+
+        用于 SSE 流式推送场景——前端可以实时看到意图提取的进度。
+
+        Args:
+            messages: 对话消息列表。
+
+        Yields:
+            str: LLM 输出的增量文本 token。
+        """
+        teacher_texts = []
+        for m in messages:
+            role = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
+            content = m.get("content") if isinstance(m, dict) else getattr(m, "content", "")
+            if role and role.lower() == "teacher":
+                teacher_texts.append(content or "")
+        user_prompt = "\n".join(teacher_texts) or "教师未提供内容。"
+
+        yield from self.client.chat_stream(
+            system=self.SYSTEM_PROMPT,
+            user=user_prompt,
+        )
 

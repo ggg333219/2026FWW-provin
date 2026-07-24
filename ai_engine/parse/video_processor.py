@@ -17,16 +17,23 @@
     from ai_engine.parse.video_processor import VideoProcessor
 
     vp = VideoProcessor()
+
+    # 一次性全量解析
     result = vp.process("path/to/video.mp4")
     # -> [{"type": "video_meta|frame|transcript", ...}]
+
+    # 渐进式流式解析（用于 SSE 推送）
+    async for chunk in vp.process_stream("path/to/video.mp4"):
+        print(chunk["type"], chunk["content"][:50])
 """
 
+import asyncio
 import base64
 import os
 import struct
 import subprocess
 import tempfile
-from typing import Any, Optional
+from typing import Any, AsyncGenerator, Optional
 
 from ai_engine.core.llm import LLMClient
 
@@ -128,6 +135,66 @@ class VideoProcessor:
 
         return result
 
+    async def process_stream(
+        self, video_path: str
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """
+        渐进式流式处理视频，每个阶段实时 yield chunk。
+
+        与 process() 不同，此方法不会等所有阶段完成才返回，
+        而是在每个阶段产出数据时立即 yield，适合 SSE 流式推送。
+
+        Yield 顺序:
+          1. video_meta chunk（元数据，几乎即时）
+          2. frame chunk × N（每处理完一个关键帧立即 yield）
+          3. transcript chunk（ASR + LLM 纠错完成后）
+
+        每个 yield 的 dict 结构与 process() 返回的原始块一致:
+          {"type": "video_meta|frame|transcript", "page": 0, "content": "...", "metadata": {...}}
+
+        Args:
+            video_path: 视频文件路径。
+
+        Yields:
+            dict: 单个原始块（每阶段完成时）。
+        """
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"视频文件未找到: {video_path}")
+
+        # 阶段 0: 元数据 — 纯 Python，几乎即时
+        meta = self._get_metadata(video_path)
+        if meta:
+            yield meta
+
+        # 阶段 1: 关键帧抽取（FFmpeg，IO 密集 → 线程池）
+        loop = asyncio.get_running_loop()
+        keyframes = await loop.run_in_executor(
+            None, self._extract_keyframes, video_path
+        )
+
+        # 阶段 2: 逐帧 VLM 描述（网络 IO 密集），每完成一帧立即 yield
+        for kf in keyframes:
+            frame_desc = await loop.run_in_executor(
+                None, self._describe_frame_with_qwen, kf["path"]
+            )
+            yield {
+                "type": "frame",
+                "page": 0,
+                "content": frame_desc,
+                "metadata": {
+                    "timestamp_sec": kf["timestamp_sec"],
+                    "frame_path": kf["path"],
+                    "vlm_model": self._vlm_model,
+                },
+            }
+
+        # 阶段 3: ASR 语音识别（CPU 密集 → 线程池）
+        asr_chunk = await loop.run_in_executor(
+            None, self._transcribe, video_path
+        )
+        if asr_chunk:
+            yield asr_chunk
+
     def process_audio(self, audio_path: str) -> list[dict[str, Any]]:
         """
         处理纯音频文件：元数据 + ASR 语音识别。
@@ -152,6 +219,36 @@ class VideoProcessor:
             result.append(asr_chunk)
 
         return result
+
+    async def process_audio_stream(
+        self, audio_path: str
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """
+        渐进式流式处理纯音频文件。
+
+        Yield 顺序:
+          1. video_meta chunk（元数据）
+          2. transcript chunk（ASR + LLM 纠错完成后）
+
+        Args:
+            audio_path: 音频文件路径。
+
+        Yields:
+            dict: 单个原始块。
+        """
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(f"音频文件未找到: {audio_path}")
+
+        meta = self._get_metadata(audio_path)
+        if meta:
+            yield meta
+
+        loop = asyncio.get_running_loop()
+        asr_chunk = await loop.run_in_executor(
+            None, self._transcribe, audio_path
+        )
+        if asr_chunk:
+            yield asr_chunk
 
     # ======================================================================
     # 视频元数据（纯 Python，始终可用）
