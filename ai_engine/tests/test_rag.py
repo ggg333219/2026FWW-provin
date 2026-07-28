@@ -11,6 +11,7 @@ P3 KB 知识库 RAG 单元测试
 
 from __future__ import annotations
 
+import asyncio
 import os
 import unittest
 
@@ -624,6 +625,87 @@ class TestPGVectorStore(unittest.TestCase):
         self.assertIn("1", formatted)
         self.assertIn("2", formatted)
         self.assertIn("3", formatted)
+
+
+# =============================================================================
+# 8. S2 → KB 对接测试
+# =============================================================================
+
+class TestS2ToKBBridge(unittest.TestCase):
+    """S2 解析完成后自动注册 chunks 到 KB 的桥接测试。"""
+
+    def test_register_session_chunks(self):
+        """register_session_chunks 将 chunks 存入 session 映射。"""
+        from ai_engine.rag.router import (
+            register_session_chunks,
+            _find_session_chunks,
+            _session_parsed_chunks,
+        )
+
+        session_id = "test_session_001"
+        # 清理可能的前置数据
+        _session_parsed_chunks.pop(session_id, None)
+
+        chunks = [
+            Chunk(chunk_id="c1", source_type=SourceType.TEXT,
+                  source_ref="doc.pdf", content="hello world"),
+            Chunk(chunk_id="c2", source_type=SourceType.PDF,
+                  source_ref="doc.pdf", content="second chunk"),
+        ]
+        register_session_chunks(session_id, chunks)
+
+        found = _find_session_chunks(session_id)
+        self.assertEqual(len(found), 2)
+        self.assertEqual(found[0].chunk_id, "c1")
+        self.assertEqual(found[1].chunk_id, "c2")
+
+        # 追加注册不会覆盖
+        register_session_chunks(session_id, [Chunk(chunk_id="c3", source_type=SourceType.TEXT, content="third")])
+        found = _find_session_chunks(session_id)
+        self.assertEqual(len(found), 3)
+
+        # 清理
+        _session_parsed_chunks.pop(session_id, None)
+
+    def test_find_session_chunks_empty(self):
+        """空 session 返回空列表。"""
+        from ai_engine.rag.router import _find_session_chunks
+        result = _find_session_chunks("nonexistent_session")
+        self.assertEqual(result, [])
+
+    def test_kb_upload_from_session(self):
+        """知识库上传端点能通过 session_id 找到 S2 产出的 chunks。"""
+        import asyncio
+        from ai_engine.rag.router import (
+            _find_session_chunks,
+            _session_parsed_chunks,
+            knowledge_upload,
+            KnowledgeUploadRequest,
+            register_session_chunks,
+        )
+
+        session_id = "kb_upload_test_session"
+        _session_parsed_chunks.pop(session_id, None)
+
+        # 模拟 S2 注册 chunks
+        chunks = [
+            Chunk(chunk_id="s2_c1", source_type=SourceType.TEXT,
+                  source_ref="material.pdf", content="排序算法是计算机科学的基础"),
+            Chunk(chunk_id="s2_c2", source_type=SourceType.TEXT,
+                  source_ref="material.pdf", content="快速排序平均复杂度 O(n log n)"),
+        ]
+        register_session_chunks(session_id, chunks)
+
+        # 调用知识库上传（通过 session_id）
+        req = KnowledgeUploadRequest(session_id=session_id)
+        response = asyncio.run(knowledge_upload(req))
+
+        self.assertEqual(response.status, "done")
+        self.assertGreater(response.chunk_count, 0)
+        self.assertTrue(response.document_id)
+
+        # 清理
+        _session_parsed_chunks.pop(session_id, None)
 
 
 if __name__ == "__main__":

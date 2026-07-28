@@ -293,6 +293,12 @@ class TaskManager:
                 chunks=task.all_chunks,
                 intent_id=task.intent_id,
             )
+            # ---- S2 → KB 桥接：将解析完成的 chunks 注册到知识库 ----
+            try:
+                from ai_engine.rag.router import register_session_chunks
+                register_session_chunks(task.session_id, task.all_chunks)
+            except Exception:
+                pass  # KB 未就绪时不阻塞解析流程
 
     # ======================================================================
     # 流式执行（SSE）
@@ -367,6 +373,12 @@ class TaskManager:
                 chunks=task.all_chunks,
                 intent_id=task.intent_id,
             )
+            # ---- S2 → KB 桥接：将解析完成的 chunks 注册到知识库 ----
+            try:
+                from ai_engine.rag.router import register_session_chunks
+                register_session_chunks(task.session_id, task.all_chunks)
+            except Exception:
+                pass  # KB 未就绪时不阻塞解析流程
 
         total_chunks = len(task.all_chunks)
         # 将 Chunk 模型转为可 JSON 序列化的字典

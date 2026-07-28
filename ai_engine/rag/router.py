@@ -123,10 +123,10 @@ async def rag_evidence(req: EvidenceRequest):
     证据融合接口。
 
     执行 检索 → 重排序 → LLM合成 → EvidencePacket 全流程。
-    输出直接传递给 S3 生成管道。
 
-    Go 端调用: POST /api/v1/rag/evidence
-    对应: KnowledgeHandler.Evidence → AIEngine.RAGEvidence
+    兼容性说明：
+      EvidencePacket 使用 relevant_chunks/synthesized_context/citations，
+      S3 OutlineBuilder 已兼容此格式（同时支持 chunks 字段）。
     """
     query = (req.query or "").strip()
     if not query:

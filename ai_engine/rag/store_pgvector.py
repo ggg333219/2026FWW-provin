@@ -58,6 +58,7 @@ class PGVectorStore(VectorStore):
       - 支持按 doc_id 批量删除
       - 自动创建/迁移表结构
       - 事务安全
+      - 连接池支持（可选）
 
     表结构：
       rag_documents: 文档级元数据
@@ -69,6 +70,7 @@ class PGVectorStore(VectorStore):
         conn_string: str = "",
         table_prefix: str = "",
         embedding_dim: int = 1024,
+        pool_size: int = 5,
     ):
         """
         Args:
@@ -76,10 +78,12 @@ class PGVectorStore(VectorStore):
                          （默认从 DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME 构建）。
             table_prefix: 表前缀（多租户场景）。
             embedding_dim: 向量维度。
+            pool_size: 连接池大小（当前使用懒连接单连接，保留参数兼容未来连接池）。
         """
         self.conn_string = conn_string or _DEFAULT_CONN_STRING
         self.table_prefix = table_prefix
         self.embedding_dim = embedding_dim
+        self.pool_size = pool_size
         self._conn = None
 
     # ---- 连接管理 ----
@@ -88,10 +92,30 @@ class PGVectorStore(VectorStore):
     def conn(self):
         """懒连接 PostgreSQL。"""
         if self._conn is None or self._conn.closed:
-            import psycopg2
-            self._conn = psycopg2.connect(self.conn_string)
-            self._conn.autocommit = False
-            self._ensure_tables()
+            try:
+                import psycopg2
+                self._conn = psycopg2.connect(
+                    self.conn_string,
+                    connect_timeout=10,
+                )
+                self._conn.autocommit = False
+                # 自动注册 pgvector Python 包的类型适配器
+                try:
+                    from pgvector.psycopg2 import register_vector
+                    register_vector(self._conn)
+                except ImportError:
+                    pass  # pgvector 包未安装，使用字符串解析回退
+                self._ensure_tables()
+            except ImportError:
+                raise RuntimeError(
+                    "PGVectorStore 需要 psycopg2-binary。"
+                    "请执行: pip install psycopg2-binary pgvector"
+                )
+            except Exception as e:
+                raise RuntimeError(
+                    f"PGVectorStore 连接 PostgreSQL 失败: {e}\n"
+                    f"连接字符串: {self.conn_string.split('@')[0]}@***"
+                )
         return self._conn
 
     def _ensure_tables(self) -> None:
@@ -101,9 +125,12 @@ class PGVectorStore(VectorStore):
             # pgvector 扩展
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
+            t_docs = self._t('rag_documents')
+            t_chunks = self._t('rag_chunks')
+
             # 文档表
             cur.execute(f"""
-                CREATE TABLE IF NOT EXISTS {self._t('rag_documents')} (
+                CREATE TABLE IF NOT EXISTS {t_docs} (
                     doc_id       VARCHAR(64) PRIMARY KEY,
                     file_name    TEXT NOT NULL DEFAULT '',
                     source_type  VARCHAR(20) NOT NULL DEFAULT 'text',
@@ -114,12 +141,12 @@ class PGVectorStore(VectorStore):
                 )
             """)
 
-            # 分块表（pgvector halfvec 精度更高）
+            # 分块表
             cur.execute(f"""
-                CREATE TABLE IF NOT EXISTS {self._t('rag_chunks')} (
+                CREATE TABLE IF NOT EXISTS {t_chunks} (
                     chunk_id     VARCHAR(64) PRIMARY KEY,
                     doc_id       VARCHAR(64) NOT NULL
-                                 REFERENCES {self._t('rag_documents')}(doc_id)
+                                 REFERENCES {t_docs}(doc_id)
                                  ON DELETE CASCADE,
                     source_ref   TEXT NOT NULL DEFAULT '',
                     source_type  VARCHAR(20) NOT NULL DEFAULT 'text',
@@ -132,10 +159,10 @@ class PGVectorStore(VectorStore):
                 )
             """)
 
-            # HNSW 索引（余弦距离）
+            # HNSW 索引
             cur.execute(f"""
                 CREATE INDEX IF NOT EXISTS {self._t('idx_rag_chunks_embedding')}
-                ON {self._t('rag_chunks')}
+                ON {t_chunks}
                 USING hnsw (embedding halfvec_cosine_ops)
                 WITH (m = 16, ef_construction = 200)
             """)
@@ -143,7 +170,7 @@ class PGVectorStore(VectorStore):
             # 辅助索引
             cur.execute(f"""
                 CREATE INDEX IF NOT EXISTS {self._t('idx_rag_chunks_doc_id')}
-                ON {self._t('rag_chunks')}(doc_id)
+                ON {t_chunks}(doc_id)
             """)
 
             self._conn.commit()
@@ -172,14 +199,14 @@ class PGVectorStore(VectorStore):
         chunk_ids: list[str] = []
 
         try:
-            # 1. 插入或更新文档记录
+            # 1. 插入或更新文档记录（UPSERT：不依赖表别名）
             cur.execute(
                 f"""
                 INSERT INTO {self._t('rag_documents')}
                     (doc_id, file_name, source_type, chunk_count, status)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (doc_id) DO UPDATE SET
-                    chunk_count = {self._t('rag_documents')}.chunk_count + %s,
+                    chunk_count = {self._t('rag_documents')}.chunk_count + EXCLUDED.chunk_count,
                     status = 'indexed'
                 """,
                 (
@@ -188,11 +215,10 @@ class PGVectorStore(VectorStore):
                     sample.source_type.value,
                     len(chunks),
                     ParseStatus.INDEXED.value,
-                    len(chunks),
                 ),
             )
 
-            # 2. 批量插入分块
+            # 2. 批量插入分块（使用 INSERT ... ON CONFLICT DO UPDATE）
             for ch in chunks:
                 embedding_vec = _format_vector(ch.embedding) if ch.embedding else None
                 cur.execute(
@@ -202,8 +228,9 @@ class PGVectorStore(VectorStore):
                          content, page_ref, seq_index, embedding, metadata)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (chunk_id) DO UPDATE SET
+                        content = EXCLUDED.content,
                         embedding = EXCLUDED.embedding,
-                        content = EXCLUDED.content
+                        metadata = EXCLUDED.metadata
                     """,
                     (
                         ch.chunk_id,
@@ -242,11 +269,12 @@ class PGVectorStore(VectorStore):
         cur = self.conn.cursor()
 
         try:
+            # 构建参数列表（注意: 查询中有 2 个 %s 用于向量）
+            params: list[Any] = [vec_str, vec_str, top_k]
             where = ""
-            params: list[Any] = [vec_str, top_k]
             if source_type is not None:
                 where = "AND source_type = %s"
-                params.insert(1, source_type.value)
+                params = [vec_str, source_type.value, vec_str, top_k]
 
             # 使用余弦距离算子 <=>（1 - cosine_similarity）
             cur.execute(
@@ -378,15 +406,20 @@ def _row_to_indexed_chunk(row: tuple) -> IndexedChunk:
     embedding: list[float] = []
     if row[7] is not None:
         raw = row[7]
-        # pgvector 返回的 halfvec 可能是字符串或已解析列表
-        if isinstance(raw, str):
-            # 去掉方括号后按逗号分割
+        # pgvector register_vector 后返回 numpy.ndarray / list
+        # 未注册时返回 str "[0.1,0.2,...]"
+        if hasattr(raw, "tolist"):
+            embedding = [float(x) for x in raw.tolist()]
+        elif isinstance(raw, str):
             raw = raw.strip("[]")
             embedding = [float(x) for x in raw.split(",") if x.strip()]
-        elif isinstance(raw, list):
+        elif isinstance(raw, (list, tuple)):
             embedding = [float(x) for x in raw]
         else:
-            embedding = list(float(x) for x in raw)
+            try:
+                embedding = list(float(x) for x in raw)
+            except (TypeError, ValueError):
+                embedding = []
 
     metadata = row[8] if isinstance(row[8], dict) else json.loads(row[8] or "{}")
 

@@ -123,7 +123,10 @@ class OutlineBuilder:
     def _format_evidence(evidence_packet: dict[str, Any] | None) -> str:
         if not evidence_packet:
             return ""
-        chunks = evidence_packet.get("chunks") or []
+        # 兼容两种字段名：
+        #   KB 返回: "relevant_chunks" (EvidencePacket.model_dump())
+        #   S3 期望: "chunks" (OutlineBuilder 旧约定)
+        chunks = evidence_packet.get("chunks") or evidence_packet.get("relevant_chunks") or []
         lines = []
         for c in chunks[:10]:
             text = str(c.get("content") or "").strip()
