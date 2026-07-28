@@ -119,13 +119,17 @@ class EvidenceSynthesizer:
         # 1. 构建 relevant_chunks
         relevant = self._build_relevant_chunks(search_results)
 
-        # 2. LLM 合成
+        # 2. LLM 合成（带回退）
         try:
             synthesized, citations = self._llm_synthesize(
                 search_results, query, context or {}
             )
         except Exception:
-            # LLM 失败时回退为简单的拼接
+            # LLM 调用异常时回退
+            synthesized, citations = "", []
+
+        # 如果 LLM 返回了空结果（mock 模式常见），回退为简单拼接
+        if not synthesized and search_results:
             synthesized, citations = self._fallback_synthesize(search_results)
 
         return EvidencePacket(
@@ -199,10 +203,6 @@ class EvidenceSynthesizer:
             user=user_prompt,
             temperature=0.1,
         )
-
-        # mock 或错误回退 → 触发 fallback
-        if result.get("mock") or result.get("error"):
-            raise RuntimeError("LLM 不可用，回退合成")
 
         synthesized = result.get("synthesized_context", "")
         raw_citations = result.get("citations", [])
