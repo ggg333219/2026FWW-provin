@@ -1,11 +1,18 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+import router from './router'
 import App from './App.vue'
 import './style.css'
 import 'katex/dist/katex.min.css'
 
 const app = createApp(App)
-app.use(createPinia())
+
+// Pinia 状态管理
+const pinia = createPinia()
+app.use(pinia)
+
+// Vue Router
+app.use(router)
 
 // 轻量替代 v-loading，避免未注册指令导致控制台警告。
 const loadingDirective = {
