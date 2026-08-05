@@ -6,6 +6,13 @@
         <p>学情统计、掌握度雷达与班级趋势</p>
       </div>
       <div class="page-body">
+        <AnalyticsAndQuestionsPanel
+          :student-stats="analyticsStore.studentStats"
+          :card-data="analyticsStore.cardData"
+          :question-records="analyticsStore.questionRecords"
+          @update:filterPage="analyticsStore.setFilterPage($event)"
+        />
+
         <TeacherStatsPanel
           :current-course-id="workspaceStore.currentCourseId"
           :current-course-name="workspaceStore.currentCourseName"
@@ -25,6 +32,7 @@ import { useWorkspaceStore } from '../stores/workspaceStore'
 import { useAnalyticsStore } from '../stores/analyticsStore'
 import AppShell from '../components/layout/AppShell.vue'
 import TeacherStatsPanel from '../components/teacher/TeacherStatsPanel.vue'
+import AnalyticsAndQuestionsPanel from '../components/teacher/AnalyticsAndQuestionsPanel.vue'
 
 const workspaceStore = useWorkspaceStore()
 const analyticsStore = useAnalyticsStore()
@@ -43,5 +51,5 @@ onMounted(async () => {
 .page-header { margin-bottom: 20px; }
 .page-header h2 { margin: 0; font-size: 22px; color: #111827; }
 .page-header p { margin: 6px 0 0; font-size: 14px; color: #607a71; }
-.page-body { flex: 1; }
+.page-body { flex: 1; display: flex; flex-direction: column; gap: 24px; }
 </style>

@@ -1,78 +1,83 @@
 import { requestJson } from './request'
 
 /**
- * S4 版本管理 API
- *
- * 负责课件版本管理与发布。
+ * S4 版本管理 API — 对接 Python 后端 /api/v1/version/{gen_id}/...
  */
 export const teacherVersionApi = {
   /**
-   * 获取版本列表
-   * @param {string} courseId - 课件ID
-   * @returns {Promise<Object>}
+   * 版本历史列表
+   * GET /api/v1/version/{genId}/history
    */
-  list: (courseId) =>
-    requestJson(`/api/v1/teacher/coursewares/${encodeURIComponent(courseId)}/versions`),
+  history: (genId) =>
+    requestJson(`/api/v1/version/${encodeURIComponent(genId)}/history`),
 
   /**
-   * 创建新版本
-   * @param {Object} params
-   * @param {string} params.courseId
-   * @param {string} params.title - 版本标题
-   * @param {string} params.description - 版本说明
-   * @returns {Promise<Object>}
+   * 加载指定版本
+   * GET /api/v1/version/{genId}?v={versionNumber}
    */
-  create: ({ courseId, title, description }) =>
-    requestJson(`/api/v1/teacher/coursewares/${encodeURIComponent(courseId)}/versions`, {
+  load: (genId, versionNumber = null) => {
+    const query = versionNumber != null ? `?v=${versionNumber}` : ''
+    return requestJson(`/api/v1/version/${encodeURIComponent(genId)}${query}`)
+  },
+
+  /**
+   * 对比两个版本
+   * GET /api/v1/version/{genId}/diff?v1=1&v2=2
+   */
+  diff: (genId, v1, v2) =>
+    requestJson(`/api/v1/version/${encodeURIComponent(genId)}/diff?v1=${v1}&v2=${v2}`),
+
+  /**
+   * 回滚到指定版本
+   * POST /api/v1/version/{genId}/rollback
+   */
+  rollback: (genId, targetVersion) =>
+    requestJson(`/api/v1/version/${encodeURIComponent(genId)}/rollback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description })
+      body: JSON.stringify({ target_version: targetVersion })
     }),
 
   /**
-   * 获取版本详情
-   * @param {string} courseId
-   * @param {string} versionId
-   * @returns {Promise<Object>}
+   * 锁定当前版本
+   * POST /api/v1/version/{genId}/lock
    */
-  getDetail: (courseId, versionId) =>
-    requestJson(`/api/v1/teacher/coursewares/${encodeURIComponent(courseId)}/versions/${encodeURIComponent(versionId)}`),
+  lock: (genId) =>
+    requestJson(`/api/v1/version/${encodeURIComponent(genId)}/lock`, {
+      method: 'POST'
+    }),
 
   /**
-   * 发布课件
-   * @param {Object} params
-   * @param {string} params.courseId
-   * @param {string} params.scope - 发布范围
-   * @param {string} params.teachingCourseId
-   * @param {string} params.teachingCourseTitle
-   * @param {string} params.courseClassId
-   * @param {string} params.courseClassName
-   * @returns {Promise<Object>}
+   * 创建导出任务
+   * POST /api/v1/export/{genId}
    */
-  publish: ({ courseId, scope, teachingCourseId, teachingCourseTitle, courseClassId, courseClassName }) =>
-    requestJson(`/api/v1/teacher/coursewares/${encodeURIComponent(courseId)}/publish`, {
+  exportCreate: (genId, format = 'pptx', version = null) =>
+    requestJson(`/api/v1/export/${encodeURIComponent(genId)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        scope,
-        teachingCourseId,
-        teachingCourseTitle,
-        courseClassId,
-        courseClassName
+        format,
+        version: version || null
       })
     }),
 
   /**
-   * 提交修改指令
-   * @param {Object} params
-   * @param {string} params.courseId
-   * @param {Array} params.changes - 修改指令列表
-   * @returns {Promise<Object>}
+   * 查询导出任务状态
+   * GET /api/v1/export/status/{jobId}
    */
-  submitChanges: ({ courseId, changes }) =>
-    requestJson(`/api/v1/teacher/coursewares/${encodeURIComponent(courseId)}/changes`, {
+  exportStatus: (jobId) =>
+    requestJson(`/api/v1/export/status/${encodeURIComponent(jobId)}`),
+
+  /**
+   * 提交修改命令
+   * POST /gen/modify
+   * @param {Array} nodes - 当前节点列表
+   * @param {Array} commands - 修改命令列表 [{type, node_id, content, ...}]
+   */
+  modify: (nodes, commands) =>
+    requestJson('/gen/modify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ changes })
+      body: JSON.stringify({ nodes, commands, regenerate: false })
     })
 }
