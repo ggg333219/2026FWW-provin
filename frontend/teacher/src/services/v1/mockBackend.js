@@ -73,6 +73,19 @@ function ensureMockStore() {
         const parsed = JSON.parse(raw)
         if (parsed && typeof parsed === 'object') {
           mockStoreCache = parsed
+          // 兼容旧版本 localStorage：补齐 S2/KB 新增字段
+          if (!Array.isArray(mockStoreCache.materials)) {
+            mockStoreCache.materials = buildDefaultMaterialStore()
+          }
+          if (!mockStoreCache.parseTasks || typeof mockStoreCache.parseTasks !== 'object') {
+            mockStoreCache.parseTasks = {}
+          }
+          if (!Array.isArray(mockStoreCache.ragDocuments)) {
+            mockStoreCache.ragDocuments = []
+          }
+          // 清理历史遗留的二进制乱码切片（旧版本曾把 PDF 按 UTF-8 解码进 content）
+          sanitizeStoreChunks(mockStoreCache)
+          persistMockStore()
           return mockStoreCache
         }
       }
@@ -185,6 +198,57 @@ function createQuestionsForCourse(courseId, scriptsByPage, studentIds) {
     })
   })
   return result.map((item) => ({ ...item, courseId }))
+}
+
+function buildDefaultMaterialStore() {
+  const materials = [
+    {
+      id: 'mat_001',
+      title: '函数与导数基础',
+      type: 'document',
+      fileType: 'pdf',
+      fileSize: 2457600,
+      source: '教师上传',
+      tags: ['函数', '导数', '基础'],
+      parseStatus: 'done',
+      uploadedAt: isoDaysAgo(3),
+      chunks: [
+        { chunkId: 'chunk_001', materialId: 'mat_001', content: '函数是数学中的基本概念，表示两个集合之间的对应关系。设A、B为非空集合，如果按照某种对应法则f，使得A中任意一个元素x，在B中都有唯一确定的元素y与之对应，则称f为从A到B的函数。', pageStart: 1, pageEnd: 1, seqIndex: 0, relevanceScore: 0.92 },
+        { chunkId: 'chunk_002', materialId: 'mat_001', content: '函数的定义域是指自变量x的取值范围，值域是函数值y的取值范围。求定义域时需要注意：分母不为零、偶次根号内非负、对数真数大于零等限制条件。', pageStart: 2, pageEnd: 2, seqIndex: 1, relevanceScore: 0.88 },
+        { chunkId: 'chunk_003', materialId: 'mat_001', content: '导数描述了函数在某一点的变化率。对于函数y=f(x)，其导数f\'(x)表示函数在x处的瞬时变化率。导数的几何意义是函数曲线在该点切线的斜率。', pageStart: 3, pageEnd: 3, seqIndex: 2, relevanceScore: 0.95 },
+        { chunkId: 'chunk_004', materialId: 'mat_001', content: '常用导数公式：(x^n)\' = nx^(n-1)，(sin x)\' = cos x，(cos x)\' = -sin x，(e^x)\' = e^x，(ln x)\' = 1/x。掌握这些基本公式是求解导数题目的基础。', pageStart: 4, pageEnd: 4, seqIndex: 3, relevanceScore: 0.85 },
+      ]
+    },
+    {
+      id: 'mat_002',
+      title: '排序算法动画演示',
+      type: 'video',
+      fileType: 'mp4',
+      fileSize: 15728640,
+      source: 'B站资源',
+      tags: ['算法', '排序', '动画'],
+      parseStatus: 'done',
+      uploadedAt: isoDaysAgo(5),
+      chunks: [
+        { chunkId: 'chunk_005', materialId: 'mat_002', content: '冒泡排序（Bubble Sort）是一种简单的排序算法。它重复地遍历要排序的数列，一次比较两个元素，如果它们的顺序错误就把它们交换过来。遍历数列的工作是重复地进行直到没有再需要交换。', timeStart: 0, timeEnd: 45, seqIndex: 0, relevanceScore: 0.90 },
+        { chunkId: 'chunk_006', materialId: 'mat_002', content: '快速排序（Quick Sort）通过一趟排序将待排记录分隔成独立的两部分，其中一部分记录的关键字均比另一部分的关键字小，则可分别对这两部分记录继续进行排序，以达到整个序列有序。', timeStart: 46, timeEnd: 120, seqIndex: 1, relevanceScore: 0.93 },
+        { chunkId: 'chunk_007', materialId: 'mat_002', content: '快速排序的平均时间复杂度为O(n log n)，最坏情况为O(n²)。通过合理选择基准值（pivot），如三数取中法，可以有效避免最坏情况的发生。', timeStart: 121, timeEnd: 180, seqIndex: 2, relevanceScore: 0.87 },
+      ]
+    },
+    {
+      id: 'mat_003',
+      title: '三角函数与图像',
+      type: 'document',
+      fileType: 'pptx',
+      fileSize: 5242880,
+      source: '校内资源',
+      tags: ['三角函数', '图像', '变换'],
+      parseStatus: 'parsing',
+      uploadedAt: isoDaysAgo(1),
+      chunks: []
+    }
+  ]
+  return materials
 }
 
 function buildDefaultStore() {
@@ -447,7 +511,10 @@ function buildDefaultStore() {
       courses,
       classes,
       enrollments
-    }
+    },
+    materials: buildDefaultMaterialStore(),
+    parseTasks: {},
+    ragDocuments: []
   }
 }
 
@@ -1415,6 +1482,636 @@ function handlePlatformRequest(store, pathname, searchParams, method, options) {
   return null
 }
 
+// =============================================================================
+// S2 多模态资料中心 + KB 知识库 RAG — Mock 处理器
+// =============================================================================
+
+const MATERIAL_TYPE_BY_EXT = {
+  '.pdf': 'document',
+  '.pptx': 'document',
+  '.ppt': 'document',
+  '.docx': 'document',
+  '.doc': 'document',
+  '.txt': 'document',
+  '.md': 'document',
+  '.mp4': 'video',
+  '.avi': 'video',
+  '.mov': 'video',
+  '.mp3': 'audio',
+  '.wav': 'audio',
+  '.png': 'image',
+  '.jpg': 'image',
+  '.jpeg': 'image',
+  '.gif': 'image',
+  '.webp': 'image'
+}
+
+function fileExt(name) {
+  const idx = String(name || '').lastIndexOf('.')
+  return idx >= 0 ? String(name).slice(idx).toLowerCase() : ''
+}
+
+function materialSourceType(fileName) {
+  const ext = fileExt(fileName)
+  if (ext === '.mp4' || ext === '.avi' || ext === '.mov') return 'video'
+  if (ext === '.mp3' || ext === '.wav') return 'audio'
+  if (ext === '.png' || ext === '.jpg' || ext === '.jpeg' || ext === '.gif' || ext === '.webp') return 'image'
+  if (ext === '.pdf') return 'pdf'
+  if (ext === '.pptx' || ext === '.ppt') return 'pptx'
+  if (ext === '.docx' || ext === '.doc') return 'docx'
+  return 'text'
+}
+
+function seedChunksForFile(fileName, materialId) {
+  const ext = fileExt(fileName)
+  const baseName = String(fileName || '未命名资料').replace(/\.[^.]+$/, '')
+  if (ext === '.mp4') {
+    return [
+      { chunkId: uid('chunk'), materialId, content: `【视频】${baseName} 第1段：概念引入与学习目标说明，适合课堂导入使用。`, timeStart: 0, timeEnd: 45, seqIndex: 0, relevanceScore: 0.9 },
+      { chunkId: uid('chunk'), materialId, content: `【视频】${baseName} 第2段：核心知识点讲解，配合案例演示。`, timeStart: 46, timeEnd: 120, seqIndex: 1, relevanceScore: 0.88 },
+      { chunkId: uid('chunk'), materialId, content: `【视频】${baseName} 第3段：例题演练与易错点总结。`, timeStart: 121, timeEnd: 180, seqIndex: 2, relevanceScore: 0.84 }
+    ]
+  }
+  if (ext === '.mp3' || ext === '.wav') {
+    return [
+      { chunkId: uid('chunk'), materialId, content: `【音频】${baseName} 第1段：录音开场与背景介绍。`, timeStart: 0, timeEnd: 60, seqIndex: 0, relevanceScore: 0.82 },
+      { chunkId: uid('chunk'), materialId, content: `【音频】${baseName} 第2段：核心内容讲解。`, timeStart: 61, timeEnd: 150, seqIndex: 1, relevanceScore: 0.86 }
+    ]
+  }
+  if (ext === '.png' || ext === '.jpg' || ext === '.jpeg') {
+    return [
+      { chunkId: uid('chunk'), materialId, content: `【图片】${baseName}：整页图像，OCR 识别文本内容为示例图片说明文字。`, pageStart: 1, pageEnd: 1, seqIndex: 0, relevanceScore: 0.8 }
+    ]
+  }
+  return [
+    { chunkId: uid('chunk'), materialId, content: `${baseName} 第1部分：本节内容的引入与背景，介绍核心概念与学习目标。`, pageStart: 1, pageEnd: 1, seqIndex: 0, relevanceScore: 0.9 },
+    { chunkId: uid('chunk'), materialId, content: `${baseName} 第2部分：核心知识点展开，配合具体示例说明，并给出关键结论。`, pageStart: 2, pageEnd: 3, seqIndex: 1, relevanceScore: 0.87 },
+    { chunkId: uid('chunk'), materialId, content: `${baseName} 第3部分：本节小结与课后练习建议。`, pageStart: 4, pageEnd: 4, seqIndex: 2, relevanceScore: 0.83 }
+  ]
+}
+
+function buildParseAssets(filePaths) {
+  const list = Array.isArray(filePaths) ? filePaths : []
+  return list.map((filePath, idx) => {
+    const fileName = decodeURIComponent(String(filePath || '').split(/[\\/]/).pop() || `文件${idx + 1}`)
+    const ext = fileExt(fileName)
+    const mimeMap = {
+      '.pdf': 'application/pdf',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      '.ppt': 'application/vnd.ms-powerpoint',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.mp4': 'video/mp4',
+      '.mp3': 'audio/mpeg',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg'
+    }
+    const pageCountMap = { '.pdf': 12, '.pptx': 8, '.docx': 6 }
+    const durationMap = { '.mp4': 180, '.mp3': 150 }
+    return {
+      asset_id: uid('asset'),
+      file_name: fileName,
+      source_type: materialSourceType(fileName),
+      parse_status: 'uploaded',
+      file_size: 51200 + (idx + 1) * 30720,
+      page_count: pageCountMap[ext] ?? null,
+      duration_sec: durationMap[ext] ?? null,
+      mime_type: mimeMap[ext] || 'application/octet-stream',
+      created_at: nowIso(),
+      metadata: { ext, mock: true }
+    }
+  })
+}
+
+function getMaterialById(store, id) {
+  return store.materials.find((item) => item.id === id)
+}
+
+/**
+ * 用真实文件文本生成切片（Mock 端）。
+ * 前端上传时通过 file_contents 附带文件头部文本，
+ * 这里按段落切分、累加成 ~220 字/块的 ChunkSchema。
+ * 文本过短或二进制乱码（PDF/PPTX/视频按 UTF-8 解码）时回退到种子内容。
+ */
+function isBinaryGarbage(text) {
+  const limited = String(text || '')
+
+  // 常见二进制文件头签名：PDF、ZIP(Office/PPTX/DOCX)、PNG/JPEG、GIF
+  if (/^%PDF-/.test(limited)) return true
+  if (/^PK[\x03\x04\x05\x07]/.test(limited)) return true
+  if (/^\x89PNG/.test(limited)) return true
+  if (/^\xFF\xD8\xFF/.test(limited)) return true
+  if (/^GIF8/.test(limited)) return true
+
+  // 可打印字符占比 + 控制字符检测：二进制解码后往往夹杂 NUL/控制字符
+  let printable = 0
+  let control = 0
+  let total = 0
+  for (const ch of limited) {
+    total += 1
+    const code = ch.codePointAt(0)
+    if (code === 0 || (code < 32 && code !== 9 && code !== 10 && code !== 13)) control += 1
+    if (code >= 32 || ch === '\n' || ch === '\t' || ch === '\r') printable += 1
+  }
+  if (total > 0 && control / total > 0.02) return true
+  return total > 0 ? printable / total < 0.8 : true
+}
+
+/**
+ * 清理历史遗留的二进制乱码切片：把含 PDF/ZIP 等二进制签名的 content
+ * 用该文件的种子切片整体替换，保证列表/检索/预览显示正常文本。
+ * 通过 _sanitized 标记只执行一次。
+ */
+function sanitizeStoreChunks(store) {
+  if (!store || store._sanitized) return
+  store._sanitized = true
+  const isBad = (m) => (m.chunks || []).some((c) => isBinaryGarbage(c.content || ''))
+  ;(store.materials || []).forEach((m) => {
+    if (isBad(m)) {
+      m.chunks = seedChunksForFileRich(m.title || m.fileName || '资料', m.id)
+      m.parseStatus = 'done'
+    }
+  })
+  ;(store.ragDocuments || []).forEach((doc) => {
+    if ((doc.chunks || []).some((c) => isBinaryGarbage(c.content || ''))) {
+      doc.chunks = seedChunksForFileRich(doc.file_name || '资料', doc.document_id || 'ragmat')
+    }
+  })
+}
+
+function chunkRealText(text, fileName, materialId) {
+  const limited = String(text || '').slice(0, 200000)
+
+  // 二进制乱码或文本过短 → 回退到种子内容
+  if (isBinaryGarbage(limited) || limited.replace(/\s/g, '').length < 10) {
+    return seedChunksForFileRich(fileName, materialId)
+  }
+
+  const paragraphs = limited
+    .split(/\r?\n\s*\r?\n/)
+    .map((p) => p.replace(/[ \t]+/g, ' ').trim())
+    .filter((p) => p.length > 0)
+
+  const chunks = []
+  let current = ''
+  let seq = 0
+  const flush = () => {
+    if (!current) return
+    chunks.push({
+      chunkId: uid('chunk'),
+      materialId,
+      content: current,
+      seqIndex: seq,
+      relevanceScore: Number((0.8 + ((current.length % 5) * 0.02)).toFixed(2))
+    })
+    seq += 1
+    current = ''
+  }
+
+  for (const para of paragraphs) {
+    if (current && current.length + para.length > 220) flush()
+    current = current ? `${current}\n${para}` : para
+  }
+  flush()
+
+  return chunks.length > 0 ? chunks : seedChunksForFileRich(fileName, materialId)
+}
+
+function normalizeTextForFile(text, fileName) {
+  const ext = fileExt(fileName)
+  const normalized = String(text || '').replace(/\r\n?/g, '\n').trim()
+  if (!normalized) return ''
+  if (ext === '.json') {
+    try {
+      return JSON.stringify(JSON.parse(normalized), null, 2)
+    } catch {
+      return normalized
+    }
+  }
+  if (ext === '.csv') {
+    return normalized
+      .split('\n')
+      .map((line) => line.replace(/[ \t]+$/g, ''))
+      .filter((line) => line.trim().length > 0)
+      .join('\n')
+  }
+  if (ext === '.html' || ext === '.htm' || ext === '.xml') {
+    return normalized
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+  return normalized
+}
+
+/** 找到某 asset 对应的前端附带文本（按 file_paths 中的原始路径匹配） */
+function contentForAsset(asset, task) {
+  const paths = Array.isArray(task.file_paths) ? task.file_paths : []
+  const idx = paths.findIndex((p) => {
+    const name = decodeURIComponent(String(p).split(/[\\/]/).pop() || '')
+    return name === asset.file_name
+  })
+  const raw = idx >= 0 ? task.file_contents?.[paths[idx]] || '' : task.file_contents?.[asset.file_name] || ''
+  return normalizeTextForFile(raw, asset.file_name)
+}
+
+function handleS2MaterialRequest(store, pathname, searchParams, method, options) {
+  // /api/v1/teacher/materials/...  保留旧路径的兼容（列表 + chunks + vector-search）
+  const segments = pathname.split('/').filter(Boolean)
+  if (segments.length < 4 || segments[2] !== 'teacher' || segments[3] !== 'materials') return null
+
+  // 搜索（/api/v1/teacher/materials/search?keyword=...）
+  if (segments.length === 5 && segments[4] === 'search' && method === 'GET') {
+    const keyword = cleanText(searchParams.get('keyword'))
+    let list = deepClone(store.materials)
+    if (keyword) {
+      const kw = keyword.toLowerCase()
+      list = list.filter((m) => String(m.title || '').toLowerCase().includes(kw))
+    }
+    return ok(list)
+  }
+
+  // 全量列表
+  if (segments.length === 4 && method === 'GET') {
+    return ok(deepClone(store.materials))
+  }
+
+  const materialId = segments[4] ? decodeURIComponent(segments[4]) : ''
+  const material = getMaterialById(store, materialId)
+
+  if (segments.length === 5 && method === 'DELETE' && material) {
+    store.materials = store.materials.filter((item) => item.id !== materialId)
+    persistMockStore()
+    return ok({ removed: true, materialId })
+  }
+
+  if (segments.length === 5 && method === 'PUT' && material) {
+    const body = parseJsonBody(options)
+    Object.assign(material, {
+      title: cleanText(body.title) || material.title,
+      tags: Array.isArray(body.tags) ? body.tags : material.tags
+    })
+    material.updatedAt = nowIso()
+    persistMockStore()
+    return ok(material)
+  }
+
+  if (segments.length === 6 && segments[5] === 'chunks' && method === 'GET' && material) {
+    return ok({ chunks: deepClone(material.chunks || []) })
+  }
+
+  return null
+}
+
+function handleParseRequest(store, pathname, method, options) {
+  if (pathname === '/api/v1/parse/process' && method === 'POST') {
+    const body = parseJsonBody(options)
+    const filePaths = Array.isArray(body.file_paths) ? body.file_paths : []
+    const sessionId = cleanText(body.session_id)
+    const taskId = uid('ptask')
+
+    const task = {
+      task_id: taskId,
+      status: 'parsing',
+      assets: buildParseAssets(filePaths),
+      file_paths: filePaths,
+      file_contents: (typeof body.file_contents === 'object' && body.file_contents) || {},
+      session_id: sessionId,
+      materialIds: [],
+      created_at: nowIso(),
+      updated_at: nowIso()
+    }
+    store.parseTasks[taskId] = task
+
+    // 异步模拟：解析完成后把 chunks 写回材料库
+    if (typeof window !== 'undefined') {
+      setTimeout(() => {
+        const current = store.parseTasks[taskId]
+        if (!current) return
+        current.status = 'done'
+        current.updated_at = nowIso()
+
+        const materialIds = []
+        current.assets.forEach((asset) => {
+          const materialId = uid('mat')
+          const fileText = contentForAsset(asset, current)
+          // 有真实文本 → 按实际内容切片；否则回退到种子内容
+          const chunks = fileText
+            ? chunkRealText(normalizeTextForFile(fileText, asset.file_name), asset.file_name, materialId)
+            : seedChunksForFileRich(asset.file_name, materialId)
+          store.materials.unshift({
+            id: materialId,
+            title: asset.file_name,
+            type: MATERIAL_TYPE_BY_EXT[fileExt(asset.file_name)] || 'document',
+            fileType: String(asset.file_name).split('.').pop() || 'file',
+            fileSize: asset.file_size,
+            source: '本次上传',
+            tags: [],
+            parseStatus: 'done',
+            uploadedAt: nowIso(),
+            chunks
+          })
+          materialIds.push(materialId)
+        })
+        current.materialIds = materialIds
+        persistMockStore()
+      }, 1800)
+    }
+    return ok({ task_id: taskId, status: 'processing', assets: deepClone(task.assets) })
+  }
+
+  if (pathname.startsWith('/api/v1/parse/status/') && method === 'GET') {
+    const taskId = decodeURIComponent(pathname.split('/').pop() || '')
+    const task = store.parseTasks[taskId]
+    if (!task) {
+      return ok({ task_id: taskId, status: 'done', chunks: [], error: null })
+    }
+    const chunks = task.materialIds && task.materialIds.length > 0
+      ? task.materialIds.flatMap((mid) => {
+          const material = getMaterialById(store, mid)
+          return material ? (material.chunks || []) : []
+        })
+      : []
+    return ok({
+      task_id: task.task_id,
+      status: task.status,
+      chunks: deepClone(chunks),
+      materialIds: Array.isArray(task.materialIds) ? [...task.materialIds] : [],
+      error: task.error || null
+    })
+  }
+
+  if (pathname === '/api/v1/parse/video' && method === 'POST') {
+    const body = parseJsonBody(options)
+    const filePath = cleanText(body.file_path)
+    const sessionId = cleanText(body.session_id)
+    const taskId = uid('vtask')
+    const task = {
+      task_id: taskId,
+      status: 'processing',
+      assets: buildParseAssets([filePath]),
+      file_paths: [filePath],
+      session_id: sessionId,
+      materialIds: [],
+      created_at: nowIso(),
+      updated_at: nowIso()
+    }
+    store.parseTasks[taskId] = task
+    if (typeof window !== 'undefined') {
+      setTimeout(() => {
+        const current = store.parseTasks[taskId]
+        if (!current) return
+        current.status = 'done'
+        current.updated_at = nowIso()
+        const fileName = decodeURIComponent(String(filePath || '').split(/[\\/]/).pop() || '视频素材.mp4')
+        const materialId = uid('mat')
+        store.materials.unshift({
+          id: materialId,
+          title: fileName,
+          type: 'video',
+          fileType: 'mp4',
+          fileSize: current.assets[0]?.file_size || 0,
+          source: '视频解析',
+          tags: [],
+          parseStatus: 'done',
+          uploadedAt: nowIso(),
+          chunks: seedChunksForFileRich(fileName, materialId)
+        })
+        current.materialIds = [materialId]
+        persistMockStore()
+      }, 1800)
+    }
+    return ok({ task_id: taskId, status: 'processing', assets: deepClone(task.assets) })
+  }
+
+  return null
+}
+
+function handleKnowledgeUploadRequest(store, options) {
+  const body = parseJsonBody(options)
+  const sessionId = cleanText(body.session_id)
+  const files = Array.isArray(body.files) ? body.files : []
+
+  let chunkCount = 0
+  if (files.length > 0) {
+    files.forEach((filePath) => {
+      const fileName = decodeURIComponent(String(filePath || '').split(/[\\/]/).pop() || '资料')
+      // 同名文件视为同一文档：已索引则跳过，避免重复入库
+      const existing = store.ragDocuments.find(
+        (d) => d.file_name === fileName && d.source_type === materialSourceType(fileName)
+      )
+      if (existing) {
+        chunkCount += existing.chunk_count
+        return
+      }
+      const chunks = seedChunksForFileRich(fileName, uid('ragmat')).map((c) => ({
+        ...c,
+        metadata: { ...(c.metadata || {}), file_name: fileName, type: 'knowledge' }
+      }))
+      chunkCount += chunks.length
+      store.ragDocuments.push({
+        document_id: uid('doc'),
+        file_name: fileName,
+        source_type: materialSourceType(fileName),
+        chunk_count: chunks.length,
+        chunks,
+        created_at: nowIso()
+      })
+    })
+  } else {
+    // 没有 files 时，从该 session 最近完成的解析材料中收集 chunks
+    const collected = store.materials.filter((m) => m.parseStatus === 'done').flatMap((m) => m.chunks || [])
+    if (collected.length > 0) {
+      const docName = `会话${sessionId || '默认'}资料合集`
+      const existing = store.ragDocuments.find((d) => d.file_name === docName)
+      if (existing) {
+        // 幂等合并：仅把新增切片补进已有合集，避免重复点击“索引知识库”产生重复文档
+        const seen = new Set(existing.chunks.map((c) => c.chunkId))
+        const fresh = collected.filter((c) => !seen.has(c.chunkId))
+        existing.chunks = existing.chunks.concat(fresh)
+        existing.chunk_count = existing.chunks.length
+        existing.created_at = nowIso()
+        chunkCount = fresh.length
+      } else {
+        chunkCount = collected.length
+        store.ragDocuments.push({
+          document_id: uid('doc'),
+          file_name: docName,
+          source_type: 'mixed',
+          chunk_count: collected.length,
+          chunks: collected,
+          created_at: nowIso()
+        })
+      }
+    }
+  }
+  persistMockStore()
+  return ok({
+    task_id: uid('kbtask'),
+    status: 'done',
+    chunk_count: chunkCount,
+    document_id: store.ragDocuments[store.ragDocuments.length - 1]?.document_id || ''
+  })
+}
+
+/**
+ * 解析切片来源名：
+ * 1. 索引入库的 KB 切片直接携带 file_name（metadata.file_name）；
+ * 2. 素材切片通过 materialId 反查素材标题；
+ * 3. 均未命中则按知识库/素材兜底。
+ */
+function resolveChunkSourceName(store, c) {
+  if (c.metadata?.file_name) return c.metadata.file_name
+  if (c.materialId) {
+    const material = getMaterialById(store, c.materialId)
+    if (material?.title) return material.title
+  }
+  const ownerDoc = store.ragDocuments.find((d) => (d.chunks || []).some((ch) => ch.chunkId === c.chunkId))
+  if (ownerDoc?.file_name) return ownerDoc.file_name
+  return c.metadata?.type === 'knowledge' ? '知识库' : '素材'
+}
+
+function handleRagSearchRequest(store, options) {
+  const body = parseJsonBody(options)
+  const query = cleanText(body.query)
+  if (!query) return ok({ results: [], total_chunks: 0 })
+
+  const topK = Math.max(1, safeNumber(body.top_k, 5))
+  const minScore = safeNumber(body.min_score, 0.6)
+
+  // 候选池：知识库文档 + 已解析材料
+  const candidates = []
+  store.ragDocuments.forEach((doc) => {
+    ;(doc.chunks || []).forEach((c) => candidates.push(c))
+  })
+  store.materials.forEach((m) => {
+    ;(m.chunks || []).forEach((c) => candidates.push(c))
+  })
+
+  const seen = new Set()
+  const uniqueCandidates = candidates.filter((c) => {
+    if (seen.has(c.chunkId)) return false
+    seen.add(c.chunkId)
+    return true
+  })
+
+  const scored = uniqueCandidates
+    .map((c) => {
+      const content = String(c.content || '')
+      let score = 0.5 + ((content.length % 5) * 0.03)
+      if (content.includes(query)) score = 0.95
+      const keywords = ['函数', '导数', '排序', '算法', '图像', '概念']
+      keywords.forEach((kw, idx) => {
+        if (content.includes(kw)) score = Math.max(score, 0.8 - idx * 0.04)
+      })
+      return {
+        chunk_id: c.chunkId,
+        content,
+        score: Number(score.toFixed(3)),
+        source: {
+          file_name: resolveChunkSourceName(store, c),
+          page: c.pageStart || c.pageEnd || null,
+          url: ''
+        },
+        metadata: {
+          type: c.metadata?.type || (c.materialId ? 'material' : 'knowledge'),
+          node_ref: ''
+        }
+      }
+    })
+    .filter((item) => item.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+
+  return ok({ results: scored, total_chunks: uniqueCandidates.length })
+}
+
+function handleRagEvidenceRequest(store, options) {
+  const body = parseJsonBody(options)
+  const query = cleanText(body.query)
+  const search = handleRagSearchRequest(store, {
+    body: JSON.stringify({ query, top_k: 5, min_score: 0.5 })
+  })
+  const results = search.data.results || []
+  return ok({
+    evidence_packet: {
+      query,
+      relevant_chunks: results.map((item) => ({
+        chunk_id: item.chunk_id,
+        content: item.content,
+        source_type: item.metadata?.type === 'material' ? materialSourceType(item.source?.file_name) : 'text',
+        page_ref: item.source?.page || 0,
+        seq_index: 0
+      })),
+      synthesized_context: results.length
+        ? `基于检索到的 ${results.length} 段相关资料，综合整理出与“${query}”相关的内容要点，可作为生成环节的参考上下文。`
+        : '未检索到足够相关资料，建议先上传并解析素材后再进行证据融合。',
+      citations: results.map((item) => ({
+        chunk_id: item.chunk_id,
+        text_snippet: String(item.content).slice(0, 60),
+        source_ref: item.source?.file_name || ''
+      }))
+    }
+  })
+}
+
+function seedChunksForFileRich(fileName, materialId) {
+  const ext = fileExt(fileName)
+  const baseName = String(fileName || '未命名资料').replace(/\.[^.]+$/, '')
+
+  if (ext === '.pdf') {
+    return [
+      { chunkId: uid('chunk'), materialId, content: `【PDF】${baseName} 第1页：标题与目录，提取为页面导读切片。`, pageStart: 1, pageEnd: 1, seqIndex: 0, relevanceScore: 0.91 },
+      { chunkId: uid('chunk'), materialId, content: `【PDF】${baseName} 第2页：正文内容与公式/表格信息，适合知识点讲解。`, pageStart: 2, pageEnd: 2, seqIndex: 1, relevanceScore: 0.89 },
+      { chunkId: uid('chunk'), materialId, content: `【PDF】${baseName} 第3页：总结与练习建议，可直接用于课件引用。`, pageStart: 3, pageEnd: 3, seqIndex: 2, relevanceScore: 0.87 }
+    ]
+  }
+
+  if (ext === '.pptx' || ext === '.ppt') {
+    return [
+      { chunkId: uid('chunk'), materialId, content: `【PPT】${baseName} 幻灯片1：课程导入与学习目标。`, pageStart: 1, pageEnd: 1, seqIndex: 0, relevanceScore: 0.92 },
+      { chunkId: uid('chunk'), materialId, content: `【PPT】${baseName} 幻灯片2：核心知识点展开与示例说明。`, pageStart: 2, pageEnd: 2, seqIndex: 1, relevanceScore: 0.9 },
+      { chunkId: uid('chunk'), materialId, content: `【PPT】${baseName} 幻灯片3：课堂小结与互动提问。`, pageStart: 3, pageEnd: 3, seqIndex: 2, relevanceScore: 0.88 }
+    ]
+  }
+
+  if (ext === '.docx' || ext === '.doc') {
+    return [
+      { chunkId: uid('chunk'), materialId, content: `【DOC】${baseName} 第1节：章节概述、背景与教学目标。`, pageStart: 1, pageEnd: 1, seqIndex: 0, relevanceScore: 0.91 },
+      { chunkId: uid('chunk'), materialId, content: `【DOC】${baseName} 第2节：正文与案例说明，适合作为课堂讲义。`, pageStart: 2, pageEnd: 2, seqIndex: 1, relevanceScore: 0.89 },
+      { chunkId: uid('chunk'), materialId, content: `【DOC】${baseName} 第3节：总结、练习与延伸阅读。`, pageStart: 3, pageEnd: 3, seqIndex: 2, relevanceScore: 0.87 }
+    ]
+  }
+
+  if (ext === '.mp4') {
+    return [
+      { chunkId: uid('chunk'), materialId, content: `【视频】${baseName} 第1段：概念引入与学习目标说明，适合课堂导入使用。`, timeStart: 0, timeEnd: 45, seqIndex: 0, relevanceScore: 0.9 },
+      { chunkId: uid('chunk'), materialId, content: `【视频】${baseName} 第2段：核心知识点讲解，配合案例演示。`, timeStart: 46, timeEnd: 120, seqIndex: 1, relevanceScore: 0.88 },
+      { chunkId: uid('chunk'), materialId, content: `【视频】${baseName} 第3段：例题演练与易错点总结。`, timeStart: 121, timeEnd: 180, seqIndex: 2, relevanceScore: 0.84 }
+    ]
+  }
+
+  if (ext === '.mp3' || ext === '.wav') {
+    return [
+      { chunkId: uid('chunk'), materialId, content: `【音频】${baseName} 第1段：录音开场与背景介绍。`, timeStart: 0, timeEnd: 60, seqIndex: 0, relevanceScore: 0.82 },
+      { chunkId: uid('chunk'), materialId, content: `【音频】${baseName} 第2段：核心内容讲解。`, timeStart: 61, timeEnd: 150, seqIndex: 1, relevanceScore: 0.86 }
+    ]
+  }
+
+  if (ext === '.png' || ext === '.jpg' || ext === '.jpeg') {
+    return [
+      { chunkId: uid('chunk'), materialId, content: `【图片】${baseName}：整页图像，OCR 识别文本内容为示例图片说明文字。`, pageStart: 1, pageEnd: 1, seqIndex: 0, relevanceScore: 0.8 }
+    ]
+  }
+
+  return [
+    { chunkId: uid('chunk'), materialId, content: `${baseName} 第1部分：本节内容的引入与背景，介绍核心概念与学习目标。`, pageStart: 1, pageEnd: 1, seqIndex: 0, relevanceScore: 0.9 },
+    { chunkId: uid('chunk'), materialId, content: `${baseName} 第2部分：核心知识点展开，配合具体示例说明，并给出关键结论。`, pageStart: 2, pageEnd: 3, seqIndex: 1, relevanceScore: 0.87 },
+    { chunkId: uid('chunk'), materialId, content: `${baseName} 第3部分：本节小结与课后练习建议。`, pageStart: 4, pageEnd: 4, seqIndex: 2, relevanceScore: 0.83 }
+  ]
+}
+
 export function handleMockRequest(path, options = {}, originalError = null) {
   const { pathname, searchParams } = splitPath(path)
   const method = String(options?.method || 'GET').toUpperCase()
@@ -1424,6 +2121,28 @@ export function handleMockRequest(path, options = {}, originalError = null) {
     if (pathname.startsWith('/api/v1/teacher/coursewares')) {
       const response = handleTeacherCoursewareRequest(store, pathname, searchParams, method, options)
       if (response) return response
+    }
+
+    if (pathname.startsWith('/api/v1/teacher/materials')) {
+      const response = handleS2MaterialRequest(store, pathname, searchParams, method, options)
+      if (response) return response
+    }
+
+    if (pathname.startsWith('/api/v1/parse')) {
+      const response = handleParseRequest(store, pathname, method, options)
+      if (response) return response
+    }
+
+    if (pathname === '/api/v1/knowledge/upload' && method === 'POST') {
+      return handleKnowledgeUploadRequest(store, options)
+    }
+
+    if (pathname === '/api/v1/rag/search' && method === 'POST') {
+      return handleRagSearchRequest(store, options)
+    }
+
+    if (pathname === '/api/v1/rag/evidence' && method === 'POST') {
+      return handleRagEvidenceRequest(store, options)
     }
 
     if (pathname === '/api/v1/teacher/recommend' && method === 'POST') {

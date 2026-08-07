@@ -82,6 +82,236 @@ func (h *TeacherHandler) GetCoursewareList(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "请求成功", "data": data})
 }
 
+// ===========================================================================
+// S2 素材库（真实路由，替代前端 Mock 回退）
+//
+// 前端 materialApi.js 调用的 /api/v1/teacher/materials/* 在 Go 端此前未实现，
+// 页面依赖 mockBackend.js 返回种子数据。这里直接复用 coursewares 列表 + parse
+// 任务的 chunks 产出，返回与前端 materialStore 兼容的字段。
+//
+// materialStore.materials[i] 字段:
+//   id, title, type, fileType, fileSize, source, tags,
+//   parseStatus, uploadedAt, chunks[]
+// chunks[i] 字段: chunkId, materialId, content, pageStart, pageEnd,
+//                 timeStart, timeEnd, seqIndex, relevanceScore, metadata
+// ===========================================================================
+
+// materialListItem 把 Course 映射为 S2 素材列表项（兼容前端字段名）。
+func materialListItem(course *model.Course) gin.H {
+	ft := strings.ToLower(strings.TrimSpace(course.FileType))
+	mtype := "document"
+	switch ft {
+	case "mp4", "avi", "mov", "webm", "mkv":
+		mtype = "video"
+	case "mp3", "wav", "m4a", "ogg", "flac":
+		mtype = "audio"
+	case "png", "jpg", "jpeg", "gif", "webp", "bmp":
+		mtype = "image"
+	}
+	source := "教师上传"
+	if course.FileURL != "" {
+		source = "校内资源"
+	}
+	parseStatus := "done"
+	if course.TotalPage <= 0 {
+		parseStatus = "parsing"
+	}
+	return gin.H{
+		"id":             course.ID,
+		"courseId":       course.ID,
+		"title":          course.Title,
+		"type":           mtype,
+		"fileType":       ft,
+		"fileSize":       0,
+		"source":         source,
+		"tags":           []string{},
+		"parseStatus":    parseStatus,
+		"uploadedAt":     course.CreatedAt,
+		"chunks":         []any{},
+		"totalPage":      course.TotalPage,
+		"createdAt":      course.CreatedAt,
+		"teachingCourse": course.TeachingCourseTitle,
+		"courseClass":    course.CourseClassName,
+	}
+}
+
+// parseChunkItem 把 AI 引擎返回的 ChunkItem 映射为前端 chunk 字段。
+func parseChunkItem(c service.ChunkItem, materialID string) gin.H {
+	meta := map[string]any{}
+	if c.SourceType != "" {
+		meta["source_type"] = c.SourceType
+	}
+	chunk := gin.H{
+		"chunkId":       c.ChunkID,
+		"materialId":    materialID,
+		"content":       c.Content,
+		"pageStart":     c.PageRef,
+		"pageEnd":       c.PageRef,
+		"seqIndex":      c.SeqIndex,
+		"timeStart":     nil,
+		"timeEnd":       nil,
+		"relevanceScore": 0.9,
+		"metadata":      meta,
+	}
+	return chunk
+}
+
+// ListMaterials GET /api/v1/teacher/materials[/search] — 素材列表。
+// 兼容前端 materialStore.loadMaterials() 与 /search?keyword= 过滤。
+func (h *TeacherHandler) ListMaterials(c *gin.Context) {
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	page, pageSize := parsePagination(c.Query("page"), c.Query("pageSize"))
+
+	var courses []model.Course
+	q := h.db.Order("created_at desc")
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		q = q.Where("title LIKE ?", like)
+	}
+	if err := q.Find(&courses).Error; err != nil {
+		logger.Errorf("获取素材列表失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取素材列表失败"})
+		return
+	}
+
+	items := make([]any, 0, len(courses))
+	for i := range courses {
+		items = append(items, materialListItem(&courses[i]))
+	}
+
+	total := len(items)
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if start >= total {
+		items = []any{}
+	} else if end > total {
+		items = items[start:]
+	} else {
+		items = items[start:end]
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "请求成功", "data": items})
+}
+
+// GetMaterialDetail GET /api/v1/teacher/materials/:materialId — 素材详情 + chunks。
+func (h *TeacherHandler) GetMaterialDetail(c *gin.Context) {
+	materialID := strings.TrimSpace(c.Param("materialId"))
+	if materialID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 materialId"})
+		return
+	}
+
+	var course model.Course
+	if err := h.db.Preload("Pages").First(&course, "id = ?", materialID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "素材不存在"})
+		return
+	}
+
+	item := materialListItem(&course)
+	item["chunks"] = h.chunksForMaterial(course.ID)
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "请求成功", "data": item})
+}
+
+// GetMaterialChunks GET /api/v1/teacher/materials/:materialId/chunks — 素材切片。
+func (h *TeacherHandler) GetMaterialChunks(c *gin.Context) {
+	materialID := strings.TrimSpace(c.Param("materialId"))
+	if materialID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 materialId"})
+		return
+	}
+
+	var count int64
+	if err := h.db.Model(&model.Course{}).Where("id = ?", materialID).Count(&count).Error; err != nil || count == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "素材不存在"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "请求成功", "data": gin.H{
+		"chunks": h.chunksForMaterial(materialID),
+	}})
+}
+
+// DeleteMaterial DELETE /api/v1/teacher/materials/:materialId — 删除素材（课件）。
+func (h *TeacherHandler) DeleteMaterial(c *gin.Context) {
+	materialID := strings.TrimSpace(c.Param("materialId"))
+	if materialID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 materialId"})
+		return
+	}
+
+	// 兼容前端“占位素材/本地生成”ID（mat_xxx / placeholder_xxx），后端不存在则视为已删除。
+	var count int64
+	if err := h.db.Model(&model.Course{}).Where("id = ?", materialID).Count(&count).Error; err == nil && count == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功", "data": gin.H{"removed": true, "materialId": materialID}})
+		return
+	}
+
+	if err := h.db.Where("id = ?", materialID).Delete(&model.Course{}).Error; err != nil {
+		logger.Errorf("删除素材失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "删除素材失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "删除成功", "data": gin.H{"removed": true, "materialId": materialID}})
+}
+
+// chunksForMaterial 返回该素材的切片。
+// S2 解析任务由 AI 引擎内存持有，Go 端尚未落库 chunks；
+// 这里回退到 CoursePage（PPT/PDF 预览页）映射为 chunk，保证前端可展示，
+// 同时保留真实解析链路的 task 产出可通过 /api/v1/parse/status/:id 获取。
+func (h *TeacherHandler) chunksForMaterial(materialID string) []any {
+	var pages []model.CoursePage
+	if err := h.db.Where("course_id = ?", materialID).Order("page_index asc").Find(&pages).Error; err != nil {
+		return []any{}
+	}
+	if len(pages) == 0 {
+		return []any{}
+	}
+	chunks := make([]any, 0, len(pages))
+	for i := range pages {
+		content := strings.TrimSpace(pages[i].SourceText)
+		if content == "" {
+			content = fmt.Sprintf("第 %d 页（课件预览页，SourceText 待 AI 解析填充）", pages[i].PageIndex)
+		}
+		chunks = append(chunks, gin.H{
+			"chunkId":       "page_" + pages[i].ID,
+			"materialId":    materialID,
+			"content":       content,
+			"pageStart":     pages[i].PageIndex,
+			"pageEnd":       pages[i].PageIndex,
+			"seqIndex":      pages[i].PageIndex - 1,
+			"timeStart":     nil,
+			"timeEnd":       nil,
+			"relevanceScore": 0.9,
+			"metadata": map[string]any{
+				"source_type": sourceTypePreview(pages[i].ImageURL),
+				"page":        pages[i].PageIndex,
+			},
+		})
+	}
+	return chunks
+}
+
+// parsePagination 解析页码参数，返回 (page, pageSize)，均 >= 1。
+func parsePagination(pageStr, pageSizeStr string) (int, int) {
+	page := 1
+	pageSize := 20
+	if n, err := strconv.Atoi(pageStr); err == nil && n >= 1 {
+		page = n
+	}
+	if n, err := strconv.Atoi(pageSizeStr); err == nil && n >= 1 {
+		pageSize = n
+	}
+	return page, pageSize
+}
+
+// sourceTypePreview 判断预览页切片类型：有 image_url 视为 preview，否则 text。
+func sourceTypePreview(imageURL string) string {
+	if strings.TrimSpace(imageURL) != "" {
+		return "preview"
+	}
+	return "text"
+}
+
 func (h *TeacherHandler) GetScript(c *gin.Context) {
 	courseID := c.Param("courseId")
 	pageNum, err := parsePageParam(c.Param("pageNum"), c.Param("page"))

@@ -100,7 +100,7 @@ class PreviewRenderer:
                 dur = s.get("estimated_seconds", 0)
                 dur_str = f' <span class="dur">{dur}s</span>' if dur else ""
                 seg_items.append(f"<li>{badge} {text}{dur_str}</li>")
-            segments_html = f"<h4>讲授分段</h4><ol class='segments'>{"".join(seg_items)}</ol>"
+            segments_html = "<h4>讲授分段</h4><ol class='segments'>" + "".join(seg_items) + "</ol>"
 
         return f"""<div class="slide content-slide">
   <div class="slide-num">{index}</div>

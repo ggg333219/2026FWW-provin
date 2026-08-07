@@ -68,6 +68,24 @@ func RegisterTeacherRoutes(api *gin.RouterGroup,
 			aiV1.POST("/parse-knowledge", compatHandler.ParseKnowledgeV1)
 		}
 
+		// ---- S2: 素材库（真实路由，替换前端 Mock 回退）----
+		// materialApi.js 调用:
+		//   GET    /api/v1/teacher/materials/search → 列表（keyword 过滤）
+		//   GET    /api/v1/teacher/materials        → 列表
+		//   GET    /api/v1/teacher/materials/:id    → 详情
+		//   GET    /api/v1/teacher/materials/:id/chunks → 切片
+		//   DELETE /api/v1/teacher/materials/:id    → 删除
+		// 兼容前端 session 级“素材列表”：coursewares 同时返回 courseId + id，前端可直接消费。
+		materials := v1.Group("/teacher/materials")
+		{
+			materials.GET("/search", teacherHandler.ListMaterials)
+			materials.GET("", teacherHandler.ListMaterials)
+			materials.GET("/", teacherHandler.ListMaterials)
+			materials.GET("/:materialId", teacherHandler.GetMaterialDetail)
+			materials.GET("/:materialId/chunks", teacherHandler.GetMaterialChunks)
+			materials.DELETE("/:materialId", teacherHandler.DeleteMaterial)
+		}
+
 		api.POST("/ai/parseKnowledge", weakPointHandler.ParseKnowledge)
 
 		// Open API Lessons (Typically a teacher/admin feature)
@@ -108,6 +126,7 @@ func RegisterNewSkillRoutes(
 	// ---- S2: 多模态解析 ----
 	parse := v1.Group("/parse")
 	{
+		parse.POST("/upload", parseHandler.Upload)
 		parse.POST("/process", parseHandler.ProcessFile)
 		parse.GET("/status/:task_id", parseHandler.ParseStatus)
 		parse.POST("/video", parseHandler.ProcessVideo)

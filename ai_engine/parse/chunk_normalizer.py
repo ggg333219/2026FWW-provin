@@ -1,38 +1,21 @@
 """
-分块标准化器 (chunk_normalizer.py)
+Chunk normalizer.
 
-将各解析器产出的原始块（raw chunks）统一标准化为 Chunk 模型。
-
-对接下游：
-  - KB 知识库 RAG（Chunk → 向量化 → 索引）
-  - Agent Orchestrator（解析上下文）
-
-使用方式：
-    from ai_engine.parse.chunk_normalizer import ChunkNormalizer
-
-    normalizer = ChunkNormalizer()
-    chunks = normalizer.normalize(raw_chunks=[...], source_ref="doc_uuid", source_type=SourceType.PDF)
+Converts raw parser output into Chunk models and lightly formats content
+for preview/search per source type.
 """
 
+import re
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from ai_engine.core.schema import Chunk, SourceType
 
 
 class ChunkNormalizer:
-    """
-    将各解析器的原始输出统一标准化为 Chunk 模型。
-
-    处理规则：
-      - 按 type 赋予不同的 metadata（page_ref、timestamp_range 等）
-      - 每个原始块生成一个 Chunk
-      - 自动分配 chunk_id 和 seq_index
-      - 大文本自动截断（由 settings.MAX_CONTENT_CHARS 控制）
-    """
+    """Normalize raw parser output into Chunk objects."""
 
     def __init__(self, max_content_chars: int = 0):
-        """max_content_chars=0 表示使用 settings 中的值。"""
         self.max_content_chars = max_content_chars
 
     def normalize(
@@ -41,28 +24,16 @@ class ChunkNormalizer:
         source_ref: str,
         source_type: SourceType = SourceType.TEXT,
     ) -> list[Chunk]:
-        """
-        标准化原始块列表为 Chunk 列表。
-
-        Args:
-            raw_chunks: 解析器输出的原始块列表。
-            source_ref: 来源标识（如 "doc_uuid"、"video_uuid"）。
-            source_type: 来源类型。
-
-        Returns:
-            list[Chunk]: 标准化后的 Chunk 列表。
-        """
         from ai_engine.core.config import settings
 
         max_chars = self.max_content_chars or settings.MAX_CONTENT_CHARS
         chunks: list[Chunk] = []
 
         for idx, raw in enumerate(raw_chunks):
-            content = raw.get("content", "")
+            content = self._format_content(raw, source_type)
             if len(content) > max_chars:
                 content = content[:max_chars] + "\n...(截断)"
 
-            raw_type = raw.get("type", "text")
             page = raw.get("page")
             metadata = raw.get("metadata", {})
             seq = raw.get("seq_index", idx)
@@ -79,3 +50,53 @@ class ChunkNormalizer:
             chunks.append(chunk)
 
         return chunks
+
+    @staticmethod
+    def _format_content(raw: dict[str, Any], source_type: SourceType) -> str:
+        """Format chunk content for its source type."""
+        content = str(raw.get("content", "") or "")
+        page = raw.get("page")
+        metadata = raw.get("metadata", {}) if isinstance(raw.get("metadata", {}), dict) else {}
+        raw_type = str(raw.get("type", "") or "").lower()
+
+        content = re.sub(r"\r\n?", "\n", content).strip()
+        if not content:
+            return ""
+
+        if source_type == SourceType.PDF:
+            if page and not content.startswith("#"):
+                return f"# 第{page}页\n\n{content}"
+            return content
+
+        if source_type == SourceType.PPTX:
+            slide_no = page or metadata.get("slide") or metadata.get("page_number")
+            if slide_no and not content.startswith("#"):
+                return f"# 幻灯片 {slide_no}\n\n{content}"
+            return content
+
+        if source_type == SourceType.DOCX:
+            section = page or metadata.get("section") or metadata.get("page_number")
+            if section and not content.startswith("#"):
+                return f"# 文档段落 {section}\n\n{content}"
+            return content
+
+        if source_type == SourceType.IMAGE:
+            if raw_type == "ocr":
+                return f"【OCR识别】\n{content}"
+            if raw_type == "caption":
+                return f"【图像描述】\n{content}"
+            return f"【图片内容】\n{content}"
+
+        if source_type == SourceType.VIDEO:
+            time_range = metadata.get("timestamp_range")
+            if isinstance(time_range, list) and len(time_range) >= 2:
+                return f"【视频片段 {time_range[0]}s-{time_range[1]}s】\n{content}"
+            return f"【视频内容】\n{content}"
+
+        if source_type == SourceType.AUDIO:
+            time_range = metadata.get("timestamp_range")
+            if isinstance(time_range, list) and len(time_range) >= 2:
+                return f"【音频片段 {time_range[0]}s-{time_range[1]}s】\n{content}"
+            return f"【音频内容】\n{content}"
+
+        return content

@@ -54,7 +54,7 @@ class VideoProcessor:
     def __init__(
         self,
         max_keyframes: int = 5,
-        whisper_model: str = "medium",
+        whisper_model: str = "base",
         asr_language: Optional[str] = None,
         vlm_model: Optional[str] = None,
         llm_model: Optional[str] = None,
@@ -77,7 +77,7 @@ class VideoProcessor:
         """
         self.max_keyframes = max_keyframes
         self.whisper_model_name = whisper_model
-        self.asr_language = asr_language or "zh"
+        self.asr_language = asr_language
         self.initial_prompt = initial_prompt if initial_prompt is not None else (
             "这是一段关于 AI 工具、VS Code、PPT 制作、播客、Plexigate、编程的视频。"
         )

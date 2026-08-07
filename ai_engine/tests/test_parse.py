@@ -137,6 +137,21 @@ class ChunkNormalizerTest(unittest.TestCase):
         self.assertEqual(chunks[0].metadata["timestamp_sec"], 30)
         self.assertEqual(chunks[0].metadata["model"], "qwen-vl")
 
+    def test_normalize_formats_source_specific_content(self):
+        """不同来源应带上更适合预览/检索的格式前缀。"""
+        cases = [
+            (SourceType.PDF, [{"type": "text", "page": 2, "content": "正文"}], "# 第2页"),
+            (SourceType.PPTX, [{"type": "slide", "page": 3, "content": "标题"}], "# 幻灯片 3"),
+            (SourceType.DOCX, [{"type": "text", "page": 4, "content": "段落"}], "# 文档段落 4"),
+            (SourceType.IMAGE, [{"type": "ocr", "content": "识别文本"}], "【OCR识别】"),
+            (SourceType.VIDEO, [{"type": "frame", "content": "视频内容", "metadata": {"timestamp_range": [10, 20]}}], "【视频片段 10s-20s】"),
+            (SourceType.AUDIO, [{"type": "transcript", "content": "音频内容", "metadata": {"timestamp_range": [5, 15]}}], "【音频片段 5s-15s】"),
+        ]
+        for source_type, raw, expected_prefix in cases:
+            chunks = self.normalizer.normalize(raw, source_ref=self.source_ref, source_type=source_type)
+            self.assertGreaterEqual(len(chunks), 1)
+            self.assertTrue(chunks[0].content.startswith(expected_prefix), f"{source_type} => {chunks[0].content}")
+
 
 # =============================================================================
 # 2. material_mapper 测试
@@ -406,6 +421,43 @@ class TaskManagerGetTaskStatusTest(unittest.TestCase):
 # =============================================================================
 # 4. doc_parser 测试
 # =============================================================================
+
+class TaskManagerPlainTextParseTest(unittest.TestCase):
+    """TaskManager 纯文本文件分发与解析回归测试。"""
+
+    def setUp(self):
+        self.manager = TaskManager()
+
+    def test_infer_source_type_text_extensions(self):
+        """.txt / .md / 其他纯文本扩展名应被识别为 TEXT。"""
+        self.assertEqual(_infer_source_type("notes.txt"), SourceType.TEXT)
+        self.assertEqual(_infer_source_type("notes.md"), SourceType.TEXT)
+        self.assertEqual(_infer_source_type("notes.csv"), SourceType.TEXT)
+
+    def test_parse_by_type_reads_real_text_file(self):
+        """SourceType.TEXT 应直接读取真实文本文件。"""
+        content = "第一段内容\n\n第二段内容"
+        with tempfile.NamedTemporaryFile(suffix=".md", delete=False) as f:
+            f.write(content.encode("utf-8"))
+            tmp_path = f.name
+        try:
+            ft = FileTask(file_path=tmp_path, source_type=SourceType.TEXT)
+            raw = self.manager._parse_by_type(ft)
+            self.assertEqual(len(raw), 1)
+            self.assertEqual(raw[0]["type"], "text")
+            self.assertIn("第一段内容", raw[0]["content"])
+
+            chunks = self.manager._chunk_normalizer.normalize(
+                raw_chunks=raw,
+                source_ref=tmp_path,
+                source_type=SourceType.TEXT,
+            )
+            self.assertEqual(len(chunks), 1)
+            self.assertEqual(chunks[0].source_type, SourceType.TEXT)
+            self.assertEqual(chunks[0].source_ref, tmp_path)
+        finally:
+            os.unlink(tmp_path)
+
 
 class DocumentParserConstructorTest(unittest.TestCase):
     """DocumentParser 构造器校验。"""
