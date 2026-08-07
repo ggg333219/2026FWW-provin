@@ -17,6 +17,10 @@ KB 知识库 RAG FastAPI Router (router.py)
 
 from __future__ import annotations
 
+import csv
+import io
+import json
+import re
 import uuid
 from typing import Any, Optional
 
@@ -324,7 +328,7 @@ def _process_file(file_url: str) -> list[Chunk]:
         return []
 
     suffix = path.suffix.lower()
-    text = _read_file_content(path, suffix)
+    text = _read_file_content_compatible(path, suffix)
     if not text:
         return []
 
@@ -393,3 +397,103 @@ def _read_file_content(path, suffix: str) -> str:
 
     # 未知类型：尝试纯文本
     return _Path(path).read_text(encoding="utf-8", errors="ignore")
+def _read_file_content_compatible(path, suffix: str) -> str:
+    """更稳妥的文件内容读取器，按格式输出适合分块的纯文本。"""
+    from pathlib import Path as _Path
+
+    def _normalize(text: str) -> str:
+        return re.sub(r"\r\n?", "\n", text or "").strip()
+
+    def _read_text_fallback() -> str:
+        for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+            try:
+                return _Path(path).read_text(encoding=encoding)
+            except UnicodeDecodeError:
+                continue
+            except Exception:
+                break
+        return _Path(path).read_text(encoding="utf-8", errors="ignore")
+
+    def _strip_html(text: str) -> str:
+        from html.parser import HTMLParser
+
+        class _Parser(HTMLParser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.parts: list[str] = []
+
+            def handle_data(self, data: str) -> None:  # type: ignore[override]
+                if data:
+                    self.parts.append(data)
+
+        parser = _Parser()
+        parser.feed(text)
+        return "\n".join(part.strip() for part in parser.parts if part.strip())
+
+    if suffix in {".txt", ".md", ".log", ".yaml", ".yml", ".js", ".ts", ".py"}:
+        return _normalize(_read_text_fallback())
+
+    if suffix == ".json":
+        raw = _normalize(_read_text_fallback())
+        try:
+            return json.dumps(json.loads(raw), ensure_ascii=False, indent=2)
+        except Exception:
+            return raw
+
+    if suffix == ".csv":
+        raw = _normalize(_read_text_fallback())
+        try:
+            rows = list(csv.reader(io.StringIO(raw)))
+            rows = [row for row in rows if any(cell.strip() for cell in row)]
+            if not rows:
+                return ""
+            widths = [max(len(row[i]) if i < len(row) else 0 for row in rows[:20]) for i in range(max(len(r) for r in rows))]
+            lines: list[str] = []
+            for row in rows[:100]:
+                padded = []
+                for i, cell in enumerate(row):
+                    padded.append(cell + (" " * max(widths[i] - len(cell), 0)))
+                lines.append(" | ".join(padded))
+            return "\n".join(lines)
+        except Exception:
+            return raw
+
+    if suffix in {".html", ".htm", ".xml"}:
+        return _strip_html(_read_text_fallback())
+
+    if suffix == ".pdf":
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(str(path))
+            pages = [page.get_text() for page in doc]
+            doc.close()
+            return _normalize("\n\n".join(pages))
+        except Exception:
+            return _normalize(_read_text_fallback())
+
+    if suffix == ".pptx":
+        try:
+            from pptx import Presentation
+            prs = Presentation(str(path))
+            slides: list[str] = []
+            for slide in prs.slides:
+                parts: list[str] = []
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        for p in shape.text_frame.paragraphs:
+                            if p.text.strip():
+                                parts.append(p.text.strip())
+                slides.append("\n".join(parts))
+            return _normalize("\n\n---\n\n".join(slides))
+        except Exception:
+            return _normalize(_read_text_fallback())
+
+    if suffix == ".docx":
+        try:
+            from docx import Document
+            doc = Document(str(path))
+            return _normalize("\n\n".join(p.text for p in doc.paragraphs if p.text.strip()))
+        except Exception:
+            return _normalize(_read_text_fallback())
+
+    return _normalize(_read_text_fallback())

@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
-load_dotenv()
+# 加载 .env：优先从 workspace 根目录加载，回退为 CWD
+_dotenv_path = Path(__file__).resolve().parent.parent.parent / ".env"
+if _dotenv_path.exists():
+    load_dotenv(dotenv_path=str(_dotenv_path))
+else:
+    load_dotenv()
 
 # ---- 环境变量键名常量 ----
 _KEY_API_KEY = "AI_API_KEY"

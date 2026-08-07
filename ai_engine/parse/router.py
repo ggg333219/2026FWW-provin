@@ -30,6 +30,7 @@ from ai_engine.core.schema import (
     ParseVideoRequest,
 )
 from ai_engine.parse.task_manager import TaskManager
+from ai_engine.parse.minio_client import MinioClient
 
 # =============================================================================
 # Router 定义
@@ -72,8 +73,21 @@ async def process_files(req: ParseProcessRequest) -> ParseProcessResponse:
     if not req.file_paths:
         raise HTTPException(status_code=400, detail="file_paths 不能为空")
 
-    # 验证文件存在
-    missing = [fp for fp in req.file_paths if not os.path.exists(fp)]
+    # 处理可能的 minio:// URL：将其下载为本地临时文件
+    minio_client = MinioClient()
+    resolved_paths: list[str] = []
+    for fp in req.file_paths:
+        if isinstance(fp, str) and fp.startswith("minio://"):
+            try:
+                local = minio_client.download_file(fp)
+                resolved_paths.append(local)
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"下载 MinIO 文件失败: {fp} — {e}")
+        else:
+            resolved_paths.append(fp)
+
+    # 验证文件在本地是否存在
+    missing = [fp for fp in resolved_paths if not os.path.exists(fp)]
     if missing:
         raise HTTPException(
             status_code=400,
@@ -84,7 +98,7 @@ async def process_files(req: ParseProcessRequest) -> ParseProcessResponse:
         # 创建任务
         response = task_manager.create_task(
             session_id=req.session_id,
-            file_paths=req.file_paths,
+            file_paths=resolved_paths,
             intent_id=req.intent_id,
         )
 
@@ -149,14 +163,23 @@ async def process_video(req: ParseVideoRequest) -> ParseProcessResponse:
     if not req.file_path:
         raise HTTPException(status_code=400, detail="file_path 不能为空")
 
-    if not os.path.exists(req.file_path):
-        raise HTTPException(status_code=400, detail=f"文件不存在: {req.file_path}")
+    # 支持 minio:// 视频路径（下载到本地）
+    minio_client = MinioClient()
+    video_path = req.file_path
+    if isinstance(video_path, str) and video_path.startswith("minio://"):
+        try:
+            video_path = minio_client.download_file(video_path)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"下载 MinIO 视频失败: {req.file_path} — {e}")
+
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=400, detail=f"文件不存在: {video_path}")
 
     try:
         # 复用 process 逻辑，传入单个视频路径
         parse_req = ParseProcessRequest(
             session_id=req.session_id,
-            file_paths=[req.file_path],
+            file_paths=[video_path],
         )
         response = task_manager.create_task(
             session_id=parse_req.session_id,
@@ -246,7 +269,21 @@ async def stream_parse_process(req: ParseProcessRequest):
     if not req.file_paths:
         raise HTTPException(status_code=400, detail="file_paths 不能为空")
 
-    missing = [fp for fp in req.file_paths if not os.path.exists(fp)]
+    # 处理可能的 minio:// URL：将其下载为本地临时文件（与 process_files 一致）
+    minio_client = MinioClient()
+    resolved_paths: list[str] = []
+    for fp in req.file_paths:
+        if isinstance(fp, str) and fp.startswith("minio://"):
+            try:
+                local = minio_client.download_file(fp)
+                resolved_paths.append(local)
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"下载 MinIO 文件失败: {fp} — {e}")
+        else:
+            resolved_paths.append(fp)
+
+    # 验证文件在本地是否存在
+    missing = [fp for fp in resolved_paths if not os.path.exists(fp)]
     if missing:
         raise HTTPException(
             status_code=400,
@@ -257,7 +294,7 @@ async def stream_parse_process(req: ParseProcessRequest):
         # 创建任务（与普通 process 共享同一个 TaskManager 实例）
         response = task_manager.create_task(
             session_id=req.session_id,
-            file_paths=req.file_paths,
+            file_paths=resolved_paths,
             intent_id=req.intent_id,
         )
         task_id = response.task_id

@@ -18,7 +18,10 @@
 """
 
 import asyncio
+import csv
+import io
 import json
+import re
 import uuid
 from datetime import datetime
 from enum import Enum
@@ -145,11 +148,97 @@ _FILE_EXT_MAP: dict[str, SourceType] = {
     ".m4a": SourceType.AUDIO,
 }
 
+_TEXT_EXTS = {".txt", ".md", ".csv", ".json", ".log", ".html", ".htm", ".xml", ".yaml", ".yml"}
+
+
+class _HTMLTextStripper:
+    """将 HTML/XML 文本提纯为可读纯文本。"""
+
+    def __init__(self) -> None:
+        from html.parser import HTMLParser
+
+        class _Parser(HTMLParser):
+            def __init__(self) -> None:
+                super().__init__()
+                self.parts: list[str] = []
+
+            def handle_data(self, data: str) -> None:  # type: ignore[override]
+                if data:
+                    self.parts.append(data)
+
+        self._parser = _Parser()
+
+    def strip(self, text: str) -> str:
+        self._parser.parts.clear()
+        self._parser.feed(text)
+        result = "\n".join(part.strip() for part in self._parser.parts if part.strip())
+        self._parser.close()
+        return result
+
+
+def _read_text_file(file_path: str) -> tuple[str, str]:
+    """按常见文本编码读取文件，返回 (text, encoding)。"""
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+        try:
+            with open(file_path, "r", encoding=encoding) as f:
+                return f.read(), encoding
+        except UnicodeDecodeError:
+            continue
+        except Exception:
+            break
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read(), "utf-8-ignore"
+    except Exception:
+        return "", ""
+
+
+def _format_text_by_suffix(text: str, suffix: str) -> str:
+    """按文件格式规范化文本，避免把结构化文件直接当作一行字符串。"""
+    normalized = re.sub(r"\r\n?", "\n", text or "").strip()
+    if not normalized:
+        return ""
+
+    if suffix == ".json":
+        try:
+            parsed = json.loads(normalized)
+            return json.dumps(parsed, ensure_ascii=False, indent=2)
+        except Exception:
+            return normalized
+
+    if suffix == ".csv":
+        try:
+            rows = list(csv.reader(io.StringIO(normalized)))
+            rows = [row for row in rows if any(cell.strip() for cell in row)]
+            if not rows:
+                return ""
+            widths = [max(len(row[i]) if i < len(row) else 0 for row in rows[:20]) for i in range(max(len(r) for r in rows))]
+            out: list[str] = []
+            for row in rows[:100]:
+                cells = []
+                for i, cell in enumerate(row):
+                    pad = widths[i] - len(cell)
+                    cells.append(cell + (" " * max(pad, 0)))
+                out.append(" | ".join(cells))
+            return "\n".join(out)
+        except Exception:
+            return normalized
+
+    if suffix in {".html", ".htm", ".xml"}:
+        try:
+            return _HTMLTextStripper().strip(normalized)
+        except Exception:
+            return normalized
+
+    return normalized
+
 
 def _infer_source_type(file_path: str) -> SourceType:
     """根据文件扩展名推断 SourceType。"""
     import os
     _, ext = os.path.splitext(file_path)
+    if ext.lower() in _TEXT_EXTS:
+        return SourceType.TEXT
     return _FILE_EXT_MAP.get(ext.lower(), SourceType.TEXT)
 
 
@@ -537,6 +626,9 @@ class TaskManager:
         """根据 SourceType 派发到对应的解析器。"""
         st = ft.source_type
 
+        if st == SourceType.TEXT:
+            return self._parse_plain_text(ft.file_path)
+
         if st in (SourceType.PDF, SourceType.PPTX, SourceType.DOCX):
             parser = DocumentParser(ft.file_path, source_type=st)
             return parser.parse()
@@ -554,3 +646,26 @@ class TaskManager:
             return vp.process_audio(ft.file_path)
 
         raise ValueError(f"不支持的 SourceType: {st}")
+
+    @staticmethod
+    def _parse_plain_text(file_path: str) -> list[dict[str, Any]]:
+        """读取纯文本文件（txt/md/csv 等）为解析块。"""
+        import os
+
+        _, suffix = os.path.splitext(file_path)
+        text, encoding = _read_text_file(file_path)
+        text = _format_text_by_suffix(text, suffix.lower())
+        if not text:
+            return []
+        return [{
+            "type": "text",
+            "page": 1,
+            "content": text,
+            "metadata": {
+                "source_type": "text",
+                "tool": "plain",
+                "chars": len(text),
+                "encoding": encoding,
+                "file_format": suffix.lower().lstrip(".") or "text",
+            },
+        }]
