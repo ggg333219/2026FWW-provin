@@ -2145,6 +2145,120 @@ export function handleMockRequest(path, options = {}, originalError = null) {
       return handleRagEvidenceRequest(store, options)
     }
 
+    // ================================================================
+    // gen API（S3 生成 + 修改 + 预览）
+    // ================================================================
+
+    if (pathname === '/api/v1/gen/create' && method === 'POST') {
+      const body = parseJsonBody(options)
+      const taskId = uid('gentask')
+      const genId = uid('gen')
+      const courseId = cleanText(body.course_id) || store.teacher.coursewares?.[0]?.id || 'demo_course'
+      // 存入生成任务，模拟异步生成
+      store.genTasks = store.genTasks || {}
+      store.genTasks[taskId] = {
+        task_id: taskId,
+        generation_id: genId,
+        status: 'processing',
+        progress: 0,
+        stage_text: '正在构建大纲…',
+        nodes: [],
+        created_at: nowIso()
+      }
+
+      // 异步模拟完成
+      if (typeof window !== 'undefined') {
+        setTimeout(() => {
+          const task = store.genTasks[taskId]
+          if (!task) return
+          task.status = 'completed'
+          task.progress = 1
+          task.stage_text = '生成完成'
+          task.nodes = [
+            { node_id: 'node_001', title: '课程导入', summary: '概念引入与学习目标', content: '本节课我们将学习核心概念，了解其在实际中的应用场景。', status: 'completed' },
+            { node_id: 'node_002', title: '核心知识点', summary: '通过示例讲解核心知识点', content: '核心知识点包括定义、性质和常见应用，下面通过具体案例来说明。', status: 'completed' },
+            { node_id: 'node_003', title: '练习与总结', summary: '做题演练并总结易错点', content: '通过两道练习题巩固所学内容，并总结常见易错点。', status: 'completed' }
+          ]
+          persistMockStore()
+        }, 3000)
+      }
+
+      return ok({
+        task_id: taskId,
+        generation_id: genId,
+        status: 'processing',
+        progress: 0,
+        stage_text: '正在构建大纲…'
+      })
+    }
+
+    if (pathname.startsWith('/api/v1/gen/status/') && method === 'GET') {
+      const taskId = decodeURIComponent(pathname.split('/').pop() || '')
+      store.genTasks = store.genTasks || {}
+      const task = store.genTasks[taskId]
+      if (!task) {
+        return ok({ status: 'unknown', error: '任务不存在' })
+      }
+      return ok({
+        task_id: task.task_id,
+        generation_id: task.generation_id,
+        status: task.status,
+        progress: task.progress,
+        stage_text: task.stage_text,
+        nodes: task.nodes || [],
+        error: task.error || null
+      })
+    }
+
+    if (pathname === '/gen/preview' && method === 'POST') {
+      const body = parseJsonBody(options)
+      const nodes = Array.isArray(body.nodes) ? body.nodes : []
+      const courseName = cleanText(body.course_name) || '课件预览'
+      const items = nodes.map((n, i) => {
+        const t = n.title || `节点 ${i + 1}`
+        const c = (n.content || n.scriptText || n.script || n.summary || '').substring(0, 200)
+        return `<div class="slide"><h2>${t}</h2><p>${c.replace(/\n/g, '<br>')}</p></div>`
+      }).join('\n')
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${courseName}</title>
+<style>body{font-family:-apple-system,sans-serif;max-width:800px;margin:0 auto;padding:20px;background:#f8fafc;}
+.slide{background:#fff;border-radius:12px;padding:32px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.1);}
+.slide h2{color:#111827;font-size:20px;margin:0 0 12px;}
+.slide p{color:#475569;line-height:1.6;margin:0;}
+</style></head><body><h1>${courseName}</h1>${items}</body></html>`
+      return ok({ html })
+    }
+
+    if (pathname === '/gen/modify' && method === 'POST') {
+      const body = parseJsonBody(options)
+      const commands = Array.isArray(body.commands) ? body.commands : []
+      const nodes = Array.isArray(body.nodes) ? deepClone(body.nodes) : []
+
+      commands.forEach((cmd) => {
+        if (cmd.type === 'update_node' && cmd.node_id) {
+          const target = nodes.find(n => n.node_id === cmd.node_id)
+          if (target) target.content = cmd.content || target.content
+        }
+        if (cmd.type === 'add_node' && cmd.after_node_id) {
+          const idx = nodes.findIndex(n => n.node_id === cmd.after_node_id)
+          const newNode = { node_id: uid('node'), title: cmd.title || '新节点', content: cmd.content || '', summary: cmd.summary || '', status: 'completed' }
+          if (idx >= 0) nodes.splice(idx + 1, 0, newNode)
+          else nodes.push(newNode)
+        }
+        if (cmd.type === 'delete_node' && cmd.node_id) {
+          const idx = nodes.findIndex(n => n.node_id === cmd.node_id)
+          if (idx >= 0) nodes.splice(idx, 1)
+        }
+        if (cmd.type === 'swap_nodes' && Array.isArray(cmd.node_ids) && cmd.node_ids.length >= 2) {
+          const [a, b] = cmd.node_ids
+          const ia = nodes.findIndex(n => n.node_id === a)
+          const ib = nodes.findIndex(n => n.node_id === b)
+          if (ia >= 0 && ib >= 0) [nodes[ia], nodes[ib]] = [nodes[ib], nodes[ia]]
+        }
+      })
+
+      return ok({ nodes, commands_applied: commands.length })
+    }
+
     if (pathname === '/api/v1/teacher/recommend' && method === 'POST') {
       return handleRecommendRequest(options)
     }

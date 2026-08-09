@@ -102,5 +102,57 @@ export const teacherGenerationApi = {
         mode: params.mode || 'llm'
       })
     }).then(r => r.json())
-  }
+  },
+
+  // ================================================================
+  // gen API（S3 生成 + 修改 + 预览）
+  // ================================================================
+
+  /**
+   * 创建生成任务 (gen/create)
+   * 执行 outline → nodes 全流程
+   */
+  createGeneration: ({ course_id, title, markdown } = {}) =>
+    requestJson('/api/v1/gen/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        course_id,
+        title: title || '',
+        markdown: markdown || ''
+      })
+    }),
+
+  /**
+   * 查询生成任务状态 (gen/status)
+   */
+  getGenerationStatus: (taskId) =>
+    requestJson(`/api/v1/gen/status/${encodeURIComponent(taskId)}`),
+
+  /**
+   * 提交修改命令 (gen/modify)
+   */
+  modifyNodes: ({ generation_id, commands, nodes } = {}) =>
+    requestJson('/gen/modify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        generation_id,
+        commands: commands || [],
+        nodes: nodes || []
+      })
+    }),
+
+  /**
+   * 获取预览 (gen/preview)
+   */
+  preview: ({ nodes, generation_id } = {}) =>
+    requestJson('/gen/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodes: nodes || [],
+        generation_id: generation_id || ''
+      })
+    })
 }
