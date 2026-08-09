@@ -528,6 +528,9 @@ class EvidenceResponse(BaseModel):
 
 class GenerationCreateRequest(BaseModel):
     session_id: str = ""
+    course_id: str = ""
+    title: str = ""
+    markdown: str = ""
     intent: IntentSummary = Field(default_factory=IntentSummary)
     evidence_packet: Optional[EvidencePacket] = None
     template_id: str = "default"
@@ -535,6 +538,7 @@ class GenerationCreateRequest(BaseModel):
 
 class GenerationCreateResponse(BaseModel):
     task_id: str = ""
+    generation_id: str = ""
     status: GenerationStatus = GenerationStatus.PENDING
     generation_type: str = "ppt"
 
@@ -548,6 +552,9 @@ class GenerationStatusResponse(BaseModel):
     nodes: list[TeachingNode] = Field(default_factory=list)
     preview_url: Optional[str] = None
     error: Optional[str] = None
+    # 前端兼容字段（由后端填充）
+    progress: float = 0.0
+    stage_text: str = ""
 
 
 # ---- S4 ----

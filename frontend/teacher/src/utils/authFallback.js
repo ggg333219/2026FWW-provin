@@ -1,5 +1,4 @@
 const STORAGE_KEY = 'teacher-local-auth-users'
-const FALLBACK_STORE_KEY = 'localAuthUsers'
 
 function isStorageLike(storage) {
   return Boolean(storage && typeof storage.getItem === 'function' && typeof storage.setItem === 'function')
@@ -7,9 +6,6 @@ function isStorageLike(storage) {
 
 export function getLocalAuthStore(storage = window.localStorage) {
   if (!storage) return {}
-  if (!isStorageLike(storage)) {
-    return storage[FALLBACK_STORE_KEY] || {}
-  }
   try {
     const raw = storage.getItem(STORAGE_KEY)
     return raw ? JSON.parse(raw) : {}
@@ -20,11 +16,11 @@ export function getLocalAuthStore(storage = window.localStorage) {
 
 export function saveLocalAuthStore(store, storage = window.localStorage) {
   if (!storage) return
-  if (!isStorageLike(storage)) {
-    storage[FALLBACK_STORE_KEY] = store
-    return
+  try {
+    storage.setItem(STORAGE_KEY, JSON.stringify(store))
+  } catch {
+    // noop
   }
-  storage.setItem(STORAGE_KEY, JSON.stringify(store))
 }
 
 export function registerLocalUser(username, password, role, storage = window.localStorage) {

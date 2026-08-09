@@ -2210,7 +2210,7 @@ export function handleMockRequest(path, options = {}, originalError = null) {
       })
     }
 
-    if (pathname === '/gen/preview' && method === 'POST') {
+    if (pathname === '/api/v1/gen/preview' && method === 'POST') {
       const body = parseJsonBody(options)
       const nodes = Array.isArray(body.nodes) ? body.nodes : []
       const courseName = cleanText(body.course_name) || '课件预览'
@@ -2228,15 +2228,23 @@ export function handleMockRequest(path, options = {}, originalError = null) {
       return ok({ html })
     }
 
-    if (pathname === '/gen/modify' && method === 'POST') {
+    if (pathname === '/api/v1/gen/modify' && method === 'POST') {
       const body = parseJsonBody(options)
       const commands = Array.isArray(body.commands) ? body.commands : []
       const nodes = Array.isArray(body.nodes) ? deepClone(body.nodes) : []
 
       commands.forEach((cmd) => {
         if (cmd.type === 'update_node' && cmd.node_id) {
-          const target = nodes.find(n => n.node_id === cmd.node_id)
-          if (target) target.content = cmd.content || target.content
+          const target = nodes.find(n => n.node_id === cmd.node_id || n.id === cmd.node_id)
+          if (target) {
+            if (cmd.patch) {
+              Object.assign(target, cmd.patch)
+            } else {
+              target.content = cmd.content || target.content
+              target.title = cmd.title || target.title
+              target.summary = cmd.summary || target.summary
+            }
+          }
         }
         if (cmd.type === 'add_node' && cmd.after_node_id) {
           const idx = nodes.findIndex(n => n.node_id === cmd.after_node_id)

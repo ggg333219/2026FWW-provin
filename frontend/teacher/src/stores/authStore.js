@@ -27,6 +27,7 @@ export const useAuthStore = defineStore('auth', {
       if (typeof window !== 'undefined') {
         localStorage.setItem('fuww_teacher_logged_in', '1')
         localStorage.setItem('fuww_teacher_username', this.username)
+        localStorage.setItem('fuww_teacher_role', this.role)
       }
     },
 
@@ -40,6 +41,7 @@ export const useAuthStore = defineStore('auth', {
       if (typeof window !== 'undefined') {
         localStorage.removeItem('fuww_teacher_logged_in')
         localStorage.removeItem('fuww_teacher_username')
+        localStorage.removeItem('fuww_teacher_role')
       }
     },
 
@@ -57,10 +59,11 @@ export const useAuthStore = defineStore('auth', {
       if (typeof window === 'undefined') return false
       const loggedIn = localStorage.getItem('fuww_teacher_logged_in')
       const username = localStorage.getItem('fuww_teacher_username')
+      const role = localStorage.getItem('fuww_teacher_role')
       if (loggedIn && username) {
         this.isLoggedIn = true
         this.username = username
-        this.role = 'teacher'
+        this.role = role || 'teacher'
         this.token = `local_${Date.now()}`
         return true
       }
