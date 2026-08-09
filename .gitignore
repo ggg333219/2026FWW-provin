@@ -70,4 +70,7 @@ Thumbs.db
 .deepseek/
 .agents
 docs-selected/
-projects/
+projects/data/versions/
+ai_engine/data/
+
+data/versions/

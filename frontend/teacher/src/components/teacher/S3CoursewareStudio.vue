@@ -198,7 +198,7 @@ import { useGenerationStore } from '../../stores/generationStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import LoadingState from '../common/LoadingState.vue'
 
-const emit = defineEmits(['generate', 'preview', 'save-nodes', 'sync-nodes'])
+const emit = defineEmits(['generate', 'preview', 'sync-nodes'])
 
 const generationStore = useGenerationStore()
 const workspaceStore = useWorkspaceStore()
@@ -299,7 +299,8 @@ watch(() => generationStore.currentScriptNodes, (nodes) => {
 }, { deep: true })
 
 watch(() => generationStore.isGenerating, (v) => {
-  if (!v) {
+  // 只在进度 100% 时记录生成完成（避免失败/超时也触发）
+  if (!v && generationStore.generateProgress === 100) {
     addLog('生成完成', 'success')
   }
 })

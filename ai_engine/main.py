@@ -698,7 +698,7 @@ async def generate_interactive(req: InteractiveRequest):
 
 # — S4 个性化满足接口 —
 
-@app.post("/gen/preview")
+@app.post("/api/v1/gen/preview")
 async def render_preview(req: PreviewRequest):
     """[S4] 预览渲染：节点树 → HTML"""
     renderer = PreviewRenderer()
@@ -709,7 +709,7 @@ async def render_preview(req: PreviewRequest):
         raise HTTPException(status_code=500, detail=f"预览渲染失败: {str(e)}")
 
 
-@app.post("/gen/modify")
+@app.post("/api/v1/gen/modify")
 async def modify_nodes(req: ModifyRequest):
     """[S4] 修改命令：应用编辑命令到节点树"""
     parser = CommandParser()
@@ -905,14 +905,21 @@ async def gen_create(req: GenerationCreateRequest):
     gen_id = f"course_{uuid.uuid4().hex[:12]}"
 
     # 构建任务对象
+    # 如果有 course_id/title/markdown，构建 intent
+    intent = req.intent
+    if req.course_id and not req.session_id:
+        # 前端调用时只传了 course_id，构建默认 intent
+        if not intent.topic and req.title:
+            intent.topic = req.title
+
     task = GenerationTask(
         task_id=task_id,
-        session_id=req.session_id,
+        session_id=req.session_id or req.course_id,
         generation_id=gen_id,
         status=GenerationStatus.PENDING,
         stage=GenerationStage.INTENT_LOCKED,
         progress_pct=0.0,
-        intent=req.intent,
+        intent=intent,
         evidence=req.evidence_packet,
         template_id=req.template_id,
         nodes=[],
@@ -927,6 +934,7 @@ async def gen_create(req: GenerationCreateRequest):
 
     return GenerationCreateResponse(
         task_id=task_id,
+        generation_id=gen_id,
         status=GenerationStatus.PENDING,
         generation_type="ppt" if not req.intent.output_format else (req.intent.output_format[0] if req.intent.output_format else "ppt"),
     )
@@ -1023,11 +1031,23 @@ async def gen_status(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
 
+    stage_map = {
+        "intent_locked": "正在解析意图…",
+        "evidence_gathering": "正在收集素材…",
+        "structuring": "正在构建大纲…",
+        "generating": "正在生成讲稿…",
+        "preview": "正在生成预览…",
+        "modifying": "正在应用修改…",
+        "done": "生成完成",
+    }
+
     return GenerationStatusResponse(
         task_id=task.task_id,
         status=task.status,
         stage=task.stage,
         progress_pct=task.progress_pct,
+        progress=task.progress_pct / 100.0 if task.progress_pct else 0.0,
+        stage_text=stage_map.get(task.stage.value if hasattr(task.stage, 'value') else str(task.stage or ""), ""),
         current_node=task.current_node or "",
         nodes=task.nodes,
         preview_url=None,
@@ -1167,6 +1187,67 @@ async def export_status(job_id: str):
 def health_check():
     """健康检查接口，供前端联调测试"""
     return {"status": "running", "version": "v1.0.0", "llm": _llm_health_payload()}
+
+
+# =============================================================================
+# Auth 端点（注册/登录，无 Go 后端时本地兜底）
+# =============================================================================
+
+import json as _json
+import hashlib as _hashlib
+_AUTH_FILE = CURRENT_DIR / "data" / "auth_users.json"
+
+def _load_auth_users():
+    if _AUTH_FILE.exists():
+        try:
+            return _json.loads(_AUTH_FILE.read_text())
+        except Exception:
+            return {}
+    return {}
+
+def _save_auth_users(users):
+    _AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _AUTH_FILE.write_text(_json.dumps(users, ensure_ascii=False, indent=2))
+
+def _hash_pw(password: str) -> str:
+    return _hashlib.sha256(password.encode()).hexdigest()
+
+class AuthRegisterRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "teacher"
+
+class AuthLoginRequest(BaseModel):
+    username: str
+    password: str
+
+class AuthResponse(BaseModel):
+    code: int = 200
+    message: str = "ok"
+    data: Optional[dict] = None
+
+@app.post("/api/v1/auth/register")
+def auth_register(req: AuthRegisterRequest):
+    users = _load_auth_users()
+    name = req.username.strip().lower()
+    if name in users:
+        return AuthResponse(code=400, message="账号已存在")
+    users[name] = {
+        "username": name,
+        "password": _hash_pw(req.password),
+        "role": req.role if req.role in ("teacher", "student") else "teacher"
+    }
+    _save_auth_users(users)
+    return AuthResponse(code=200, message="注册成功", data={"username": name, "role": users[name]["role"]})
+
+@app.post("/api/v1/auth/login")
+def auth_login(req: AuthLoginRequest):
+    users = _load_auth_users()
+    name = req.username.strip().lower()
+    user = users.get(name)
+    if not user or user["password"] != _hash_pw(req.password):
+        return AuthResponse(code=400, message="账号或密码错误")
+    return AuthResponse(code=200, message="登录成功", data={"username": name, "role": user["role"]})
 
 
 if __name__ == "__main__":

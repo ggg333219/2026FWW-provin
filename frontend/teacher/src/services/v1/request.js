@@ -49,7 +49,7 @@ async function isBackendReachable() {
   try {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 1500)
-    const resp = await fetch(`${API_BASE}/api/health`, {
+    const resp = await fetch(`${API_BASE}/health`, {
       method: 'GET',
       signal: controller.signal,
       cache: 'no-store'
