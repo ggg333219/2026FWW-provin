@@ -1,7 +1,20 @@
 # Skill 1: 意图理解 (Intent Understanding) — 详细设计
 
 > 基于 Phase 2 工作流分析结果编写
-> 最后更新: 2026-07-21
+> 最后更新: 2026-08-10
+
+## 实施状态（2026-08-10）
+
+S1 的首条可演示全栈链路已经完成：
+
+- Vue 教师端：多轮共创对话、意图完整度、字段画像、快捷补充、确认与进入 S2。
+- Go Backend：`ConversationHandler` 请求校验、完整 DTO 透传、AI Engine 4xx 错误映射。
+- Python AI Engine：单次提取、规则降级、1–2 个追问、8 轮/30 分钟边界、确认校验与稳定 `intent_id`。
+- 跨 Skill：浏览器持久化统一 `workflow_session_id`，确认结果写入 `fuww_s1_confirmed_intent`，S2 复用同一会话。
+- 已验证：Go `AIEngineClient` → FastAPI `extract` → `confirm` 真实调用通过。
+- 本地演示：`cmd/teacher` 检测到 PostgreSQL 或 MinIO 不可用时自动启动 `s1-standalone`，仅暴露健康检查与 S1 路由，保证零基础设施也能完成 Vue → Go → Python 演示。
+
+当前会话仓库为 Python 进程内 `SESSIONS`，生产部署时应替换为 Redis/PostgreSQL 持久化；生成请求触发 `confirmed → locked` 仍由后续 Orchestrator 接入。
 
 ## 0. 当前阶段任务说明
 
@@ -137,11 +150,14 @@ confirmed → locked: 生成请求到达时自动锁定
 
 ## 4. 接口契约
 
-### POST /api/v1/teacher/conversations/{id}/messages
+### POST /api/v1/intent/extract
 
 ```json
 // 请求
-{ "message": "帮我做一份45分钟的排序算法课件", "session_id": "conv_xxx" }
+{
+  "session_id": "sess_xxx",
+  "messages": [{ "role": "teacher", "content": "帮我做一份45分钟的排序算法课件" }]
+}
 
 // 响应（有缺失字段时）
 {
@@ -151,12 +167,16 @@ confirmed → locked: 生成请求到达时自动锁定
     "need_followup": true,
     "followup_questions": ["面向哪个年级？", "什么风格？"],
     "intent_summary": { "topic": "排序算法", "duration_minutes": 45, ... },
-    "session_status": "clarifying"
+    "session_status": "clarifying",
+    "completion_pct": 50,
+    "turn_count": 1,
+    "max_turns": 8,
+    "can_confirm": true
   }
 }
 ```
 
-### POST /api/v1/teacher/conversations/{id}/confirm
+### POST /api/v1/intent/confirm
 
 ```json
 // 请求
@@ -167,8 +187,10 @@ confirmed → locked: 生成请求到达时自动锁定
   "code": 200,
   "data": {
     "confirmed": true,
+    "intent_id": "intent_xxx",
     "intent_summary": { /* 完整结构化意图 */ },
-    "session_status": "confirmed"
+    "session_status": "confirmed",
+    "next_step": "material_upload"
   }
 }
 ```

@@ -49,20 +49,24 @@ func main() {
 	applogger.Info("教师端系统启动中...",
 		zap.Int("port", 8082), // Default teacher port
 	)
+	aiClient := service.NewAIEngineClient(cfg.AI.BaseURL, cfg.AI.Timeout)
 
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN()), &gorm.Config{
 		Logger: gormlogger.Default.LogMode(gormlogger.Info),
 	})
 	if err != nil {
-		applogger.Sugar.Fatalf("连接数据库失败: %v", err)
+		applogger.Sugar.Warnf("数据库不可用，自动进入 S1 轻量模式: %v", err)
+		runS1Standalone(cfg.Server.Mode, aiClient)
+		return
 	}
 
 	minioClient, err := oss.NewMinioClient(&cfg.OSS)
 	if err != nil {
-		applogger.Sugar.Fatalf("初始化MinIO失败: %v", err)
+		applogger.Sugar.Warnf("MinIO 不可用，自动进入 S1 轻量模式: %v", err)
+		runS1Standalone(cfg.Server.Mode, aiClient)
+		return
 	}
 
-	aiClient := service.NewAIEngineClient(cfg.AI.BaseURL, cfg.AI.Timeout)
 	courseService := service.NewCourseService(db, minioClient, aiClient)
 
 	courseHandler := handler.NewCourseHandler(courseService, db)
@@ -78,39 +82,7 @@ func main() {
 	versionHandler := handler.NewVersionHandler(aiClient)
 	exportHandler := handler.NewExportHandler(aiClient)
 
-	if cfg.Server.Mode == "release" {
-		gin.SetMode(gin.ReleaseMode)
-	}
-
-	r := gin.New()
-	r.Use(gin.Recovery())
-
-	// CORS & Global Middlewares
-	r.Use(func(c *gin.Context) {
-		p := c.Request.URL.Path
-		if !(strings.Contains(p, "/courseware/") && strings.Contains(p, "/page/")) {
-			c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-		}
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
-		c.Next()
-	})
-
-	r.Use(func(c *gin.Context) {
-		bodyBytes, readErr := io.ReadAll(c.Request.Body)
-		if readErr == nil && len(bodyBytes) > 0 {
-			if !utf8.Valid(bodyBytes) {
-				applogger.Warn("请求体包含非 UTF-8 字符")
-			}
-			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-		}
-		c.Next()
-	})
+	r := newBaseEngine(cfg.Server.Mode)
 
 	api := r.Group("/api")
 	router.RegisterTeacherRoutes(api, teacherHandler, courseHandler, compatHandler, weakPointHandler)
@@ -125,5 +97,56 @@ func main() {
 	applogger.Info("教师端服务运行中", zap.Int("port", 8082))
 	if err := r.Run(":8082"); err != nil {
 		applogger.Sugar.Fatalf("启动服务失败: %v", err)
+	}
+}
+
+func newBaseEngine(mode string) *gin.Engine {
+	if mode == "release" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(func(c *gin.Context) {
+		p := c.Request.URL.Path
+		if !(strings.Contains(p, "/courseware/") && strings.Contains(p, "/page/")) {
+			c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+		}
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	})
+	r.Use(func(c *gin.Context) {
+		bodyBytes, readErr := io.ReadAll(c.Request.Body)
+		if readErr == nil && len(bodyBytes) > 0 {
+			if !utf8.Valid(bodyBytes) {
+				applogger.Warn("请求体包含非 UTF-8 字符")
+			}
+			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		}
+		c.Next()
+	})
+	return r
+}
+
+// runS1Standalone 在 PostgreSQL/MinIO 未启动时只暴露 S1 所需路由。
+// 这样前端仍然经过 Go Backend 调用 AI Engine，不会退化为直连 Python。
+func runS1Standalone(mode string, aiClient service.AIEngine) {
+	r := newBaseEngine(mode)
+	convHandler := handler.NewConversationHandler(aiClient)
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "UP", "mode": "s1-standalone"})
+	})
+	intent := r.Group("/api/v1/intent")
+	intent.POST("/extract", convHandler.ExtractIntent)
+	intent.POST("/confirm", convHandler.ConfirmIntent)
+
+	applogger.Info("S1 轻量服务运行中（无需 PostgreSQL/MinIO）", zap.Int("port", 8082))
+	if err := r.Run(":8082"); err != nil {
+		applogger.Sugar.Fatalf("启动 S1 轻量服务失败: %v", err)
 	}
 }

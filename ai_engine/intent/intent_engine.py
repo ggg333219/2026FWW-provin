@@ -21,7 +21,7 @@ class IntentEngine:
             content = m.get("content") if isinstance(m, dict) else getattr(m, "content", "")
             if role and role.lower() == "teacher":
                 parts.append(content or "")
-        return "\n".join(parts)
+        return "。".join(parts)
 
     @staticmethod
     def _extract_duration(text: str):
@@ -59,7 +59,13 @@ class IntentEngine:
     @staticmethod
     def _extract_topic(text: str):
         # Common patterns
-        m = re.search(r"(?:帮我做|我想要|需要|请给我|来一份)(?:\d+\s*分钟)?([\u4e00-\u9fa5\w\s]{2,80}?)的?(?:课件|课程|讲稿|讲解|教学|练习)?", text)
+        m = re.search(
+            r"(?:帮我做|帮我准备|请设计|设计|准备|我想做|我想要|我需要|需要|请给我|来一份)"
+            r"(?:一份|一节)?(?:\d+\s*分钟)?(?:的)?(?:关于)?"
+            r"([\u4e00-\u9fa5A-Za-z0-9+\-]{2,40}?)"
+            r"(?:的)?(?:课件|课程|课|讲稿|讲解|教学|练习|教案)(?:[，,。；;]|$)",
+            text,
+        )
         if m:
             candidate = m.group(1).strip()
             candidate = re.sub(r"(课件|课程|一节|一份|课|讲稿|讲解)$", "", candidate)
@@ -77,9 +83,11 @@ class IntentEngine:
             return m3.group(1).strip()
 
         # fallback: take nouns-like phrase from first 40 chars
-        cleaned = re.sub(r"(请帮我|帮我|请|麻烦|做一份|做一节|我要)", "", text)
+        cleaned = re.sub(r"(请帮我|帮我|请|麻烦|做一份|做一节|我要|我需要)", "", text)
         cleaned = re.sub(r"(课件|课程|一节|一份|的课|讲稿)", "", cleaned)
-        return cleaned.strip().splitlines()[0][:80].strip()
+        cleaned = re.split(r"[，,。；;]", cleaned.strip())[0]
+        cleaned = re.sub(r"^\d+\s*分钟(?:的)?", "", cleaned)
+        return cleaned[:80].strip() or None
 
     @staticmethod
     def extract_intent(messages: List[Dict[str, Any]]) -> IntentSummary:
@@ -89,18 +97,18 @@ class IntentEngine:
         intent.duration_minutes = IntentEngine._extract_duration(text)
 
         # try to extract target student and style with simple heuristics
-        m = re.search(r"面向([\u4e00-\u9fa5\w\s]+?)(?:学生|专业|年级|，|,|的|$)", text)
+        m = re.search(r"(?:面向|适合)([\u4e00-\u9fa5A-Za-z0-9\s]+?)(?:，|,|。|；|$)", text)
         if m:
             intent.target_student = m.group(1).strip()
-        m2 = re.search(r"(讲练结合|案例驱动|项目制|理论为主|讨论|课堂测验)", text)
+        m2 = re.search(r"(讲练结合|案例驱动|项目式|项目制|理论为主|探究式|讨论式|翻转课堂|课堂测验)", text)
         if m2:
             intent.style = m2.group(1)
 
         # knowledge points: look for keywords after '包括' or '涉及'
         kp = []
-        m3 = re.search(r"(?:包括|包含|涉及|主要有)\s*([\u4e00-\u9fa5\w\s,，；;]+)", text)
+        m3 = re.search(r"(?:包括|包含|涉及|重点讲解|知识点(?:是|为|包括)?)\s*([^。！？!?]+)", text)
         if m3:
-            items = re.split(r"[，,；;]\s*", m3.group(1))
+            items = re.split(r"[、，,；;]\s*", m3.group(1))
             kp = [i.strip() for i in items if i.strip()]
         else:
             # try to collect short noun phrases separated by '、' or commas
@@ -112,15 +120,13 @@ class IntentEngine:
         # detect if teacher mentioned interactive exercises
         intent.with_interactive = bool(re.search(r"互动|练习|测验|小测|讨论|问答", text))
 
-        # detect output format hints (ppt, 讲稿, 习题)
+        # 输出格式与下游 S3 契约保持一致：仅使用 ppt/doc。
         of = []
         if re.search(r"PPT|ppt|幻灯|课件", text):
             of.append("ppt")
-        if re.search(r"讲稿|讲义|讲稿", text):
-            of.append("script")
-        if re.search(r"习题|练习题|题目", text):
-            of.append("exercise")
-        intent.output_format = of
+        if re.search(r"Word|word|DOCX|docx|教案|讲义|讲稿", text):
+            of.append("doc")
+        intent.output_format = list(dict.fromkeys(of)) or ["ppt"]
 
         # key difficulties and expected outcomes
         kd = re.findall(r"难点[:：]?\s*([\u4e00-\u9fa5\w\s,，]+)", text)
