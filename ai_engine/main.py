@@ -42,7 +42,9 @@ from ai_engine.core.schema import (
 
 app = FastAPI(title="泛雅 AI 智课系统后端", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
 app.include_router(recommendation_router)
+# 保留旧的 /intent/* 供历史调试工具使用，同时提供 Go Backend 约定的 /api/v1/intent/*。
 app.include_router(intent_router)
+app.include_router(intent_router, prefix="/api/v1")
 
 # ---- Phase 4: Skill 模块注册（新增，互不冲突） ----
 from ai_engine.parse.router import router as parse_router

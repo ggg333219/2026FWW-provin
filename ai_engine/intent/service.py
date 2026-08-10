@@ -1,121 +1,252 @@
-"""S1 意图理解服务：从多轮对话中提取结构化教学意图。"""
+"""S1 意图理解服务：多轮澄清、结构化摘要与确认状态机。"""
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from ai_engine.core import LLMClient, IntentSummary, DialogueTurn, SessionStatus, ConversationSession
-from ai_engine.intent.intent_engine import IntentEngine, LLMIntentEngine
+from ai_engine.intent.intent_engine import IntentEngine
 
-# In-memory session store for S1
+
+# 单进程会话仓库。生产环境可在不改变服务接口的情况下替换为 Redis。
 SESSIONS: dict[str, ConversationSession] = {}
 
 
+class IntentSessionError(RuntimeError):
+    """S1 会话不可继续。"""
+
+
+class IntentSessionNotFound(IntentSessionError):
+    pass
+
+
+class IntentSessionExpired(IntentSessionError):
+    pass
+
+
+class IntentSessionLocked(IntentSessionError):
+    pass
+
+
+class IntentNotReady(IntentSessionError):
+    def __init__(self, missing_fields: list[str]) -> None:
+        self.missing_fields = missing_fields
+        super().__init__("核心教学意图尚未补充完整")
+
+
 class IntentUnderstandingService:
-    """实现意图提取、追问生成与确认逻辑。"""
+    """S1 应用服务，确保一次请求只执行一次提取并推进会话状态。"""
+
+    CORE_REQUIRED_FIELDS = ("topic", "duration_minutes")
+    QUALITY_FIELDS = ("style", "target_student", "knowledge_points")
+    FIELD_LABELS = {
+        "topic": "课程主题",
+        "duration_minutes": "授课时长",
+        "style": "教学风格",
+        "target_student": "授课对象",
+        "knowledge_points": "核心知识点",
+    }
 
     def __init__(self, client: LLMClient | None = None, engine: object | None = None) -> None:
-        """If `engine` is provided it should implement `extract_intent(messages)`.
-
-        When `engine` is None, the service will try `LLMClient.chat_json` and
-        fall back to the local rule-based `IntentEngine` on error.
-        """
         self.client = client or LLMClient(model="qwen-turbo", temperature=0.1)
         self.engine = engine
 
     def extract_intent(self, session_id: str, messages: list[DialogueTurn]) -> dict[str, Any]:
-        """从对话历史提取结构化教学意图。"""
-        # normalize messages to simple dicts
-        raw_msgs = []
-        for item in messages:
-            raw_msgs.append({"role": getattr(item, "role", ""), "content": getattr(item, "content", "")})
+        """从完整对话历史提取意图，并推进 collecting/clarifying/confirming。"""
+        session_id = (session_id or "").strip()
+        if not session_id:
+            raise ValueError("session_id 不能为空")
+        if not messages:
+            raise ValueError("messages 不能为空")
 
-        # 1) If a concrete engine is provided, use it (could be rule-based or LLM wrapper)
-        if self.engine:
-            try:
-                res = self.engine.extract_intent(raw_msgs)
-                if isinstance(res, IntentSummary):
-                    summary = res
-                elif isinstance(res, dict):
-                    summary = IntentSummary(**res)
-                else:
-                    summary = IntentEngine().extract_intent(raw_msgs)
-            except Exception:
-                summary = IntentEngine().extract_intent(raw_msgs)
-        else:
-            # 2) Default: try shared LLM client, then fallback to rule-based
-            prompt = self._build_extract_prompt(messages)
-            try:
-                result = self.client.chat_json(
-                    system=(
-                        "你是一个教学设计助手，负责从教师与助手的多轮对话中提取结构化教学意图。"
-                        "请严格输出 JSON，字段包含 topic、duration_minutes、style、target_student、"
-                        "knowledge_points、output_format、with_interactive、key_difficulties、expected_outcomes、missing_fields。"
-                    ),
-                    user=prompt,
-                )
-                if not result or not result.get("topic"):
-                    raise ValueError("LLM returned incomplete result, falling back")
-                summary = IntentSummary(**result)
-            except Exception:
-                summary = IntentEngine().extract_intent(raw_msgs)
+        previous = SESSIONS.get(session_id)
+        if previous:
+            if previous.is_timed_out:
+                SESSIONS.pop(session_id, None)
+                raise IntentSessionExpired("会话已超过 30 分钟，请重新开始")
+            if previous.is_locked:
+                raise IntentSessionLocked("意图已锁定，无法继续修改")
 
+        raw_messages = [
+            {"role": item.role, "content": item.content.strip()}
+            for item in messages
+            if item.content and item.content.strip()
+        ]
+        if not any(item["role"].lower() == "teacher" for item in raw_messages):
+            raise ValueError("至少需要一条教师消息")
+
+        summary, engine_name, used_fallback = self._extract_summary(messages, raw_messages)
         summary.missing_fields = self._infer_missing_fields(summary)
 
-        # persist minimal session state
-        session = ConversationSession(session_id=session_id or "", intent=summary, status=SessionStatus.CLARIFYING)
-        SESSIONS[session.session_id] = session
+        teacher_turns = sum(1 for item in raw_messages if item["role"].lower() == "teacher")
+        max_turns = previous.max_turns if previous else 8
+        core_missing = [field for field in self.CORE_REQUIRED_FIELDS if field in summary.missing_fields]
+        can_confirm = not core_missing
+
+        if can_confirm:
+            status = SessionStatus.CONFIRMING
+        elif teacher_turns >= max_turns:
+            status = SessionStatus.CONFIRMING
+        elif teacher_turns <= 1:
+            status = SessionStatus.COLLECTING
+        else:
+            status = SessionStatus.CLARIFYING
+
+        followups = self.build_followup_questions(summary, core_only=teacher_turns >= max_turns)
+        response = self._build_assistant_response(summary, followups, can_confirm, teacher_turns, max_turns)
+
+        session = previous or ConversationSession(session_id=session_id)
+        session.intent = summary
+        session.status = status
+        session.turn_count = teacher_turns
+        session.updated_at = datetime.now()
+        SESSIONS[session_id] = session
 
         return {
             "session_id": session_id,
             "intent_summary": summary.model_dump(),
-            "session_status": SessionStatus.CLARIFYING.value,
+            "session_status": status.value,
+            "response": response,
+            "need_followup": bool(followups),
+            "followup_questions": followups,
+            "human_summary": IntentEngine.render_human_summary(summary),
+            "completion_pct": self._completion_pct(summary),
+            "turn_count": teacher_turns,
+            "max_turns": max_turns,
+            "can_confirm": can_confirm,
+            "engine": engine_name,
+            "used_fallback": used_fallback,
         }
 
-    def build_followup_questions(self, summary: IntentSummary) -> list[str]:
-        """根据当前意图摘要生成追问。"""
-        questions: list[str] = []
-        if not summary.topic:
-            questions.append("您想讲的主题是什么？")
-        if summary.duration_minutes is None:
-            questions.append("这节课预计多长时间？")
-        if not summary.style:
-            questions.append("您希望采用什么教学风格？")
-        if not summary.target_student:
-            questions.append("课程面向哪些学生？")
+    def build_followup_questions(self, summary: IntentSummary, core_only: bool = False) -> list[str]:
+        """一次只突出一个关键追问，附一个可选质量追问，保持对话自然。"""
+        qmap = {
+            "topic": "这节课最想讲清楚的主题是什么？",
+            "duration_minutes": "这节课计划安排多少分钟？",
+            "style": "你更偏好案例驱动、讲练结合，还是项目式教学？",
+            "target_student": "这节课主要面向哪个年级、专业或基础层次的学生？",
+            "knowledge_points": "希望重点覆盖哪些知识点？列出 2–5 个即可。",
+        }
+        ordered = list(self.CORE_REQUIRED_FIELDS)
+        if not core_only:
+            ordered.extend(self.QUALITY_FIELDS)
+        questions = [qmap[field] for field in ordered if field in summary.missing_fields]
         return questions[:2]
 
-    def confirm_intent(self, session_id: str, summary: IntentSummary) -> dict[str, Any]:
-        """确认意图并返回可供下游使用的摘要。"""
-        summary.missing_fields = self._infer_missing_fields(summary)
-        # update persisted session if exists
-        if session_id in SESSIONS:
-            sess = SESSIONS[session_id]
-            sess.intent = summary
-            sess.status = SessionStatus.CONFIRMED
-            SESSIONS[session_id] = sess
+    def confirm_intent(self, session_id: str) -> dict[str, Any]:
+        """确认核心字段完整的意图，生成稳定 intent_id 供 S2/S3 关联。"""
+        session = SESSIONS.get((session_id or "").strip())
+        if not session:
+            raise IntentSessionNotFound("未找到对应的意图会话")
+        if session.is_timed_out:
+            SESSIONS.pop(session.session_id, None)
+            raise IntentSessionExpired("会话已超过 30 分钟，请重新开始")
+        if session.is_locked:
+            raise IntentSessionLocked("意图已经锁定")
 
+        session.intent.missing_fields = self._infer_missing_fields(session.intent)
+        core_missing = [field for field in self.CORE_REQUIRED_FIELDS if field in session.intent.missing_fields]
+        if core_missing:
+            raise IntentNotReady(core_missing)
+
+        session.status = SessionStatus.CONFIRMED
+        session.updated_at = datetime.now()
+        SESSIONS[session.session_id] = session
+        intent_id = f"intent_{uuid5(NAMESPACE_URL, session.session_id).hex[:16]}"
         return {
-            "session_id": session_id,
+            "session_id": session.session_id,
+            "intent_id": intent_id,
             "confirmed": True,
-            "intent_summary": summary.model_dump(),
+            "intent_summary": session.intent.model_dump(),
             "session_status": SessionStatus.CONFIRMED.value,
+            "completion_pct": self._completion_pct(session.intent),
+            "next_step": "material_upload",
         }
 
-    def _build_extract_prompt(self, messages: list[DialogueTurn]) -> str:
-        lines: list[str] = []
-        for item in messages:
-            lines.append(f"{item.role}: {item.content}")
-        return "\n".join(lines) or "用户尚未提供明确内容。"
+    def _extract_summary(
+        self,
+        messages: list[DialogueTurn],
+        raw_messages: list[dict[str, str]],
+    ) -> tuple[IntentSummary, str, bool]:
+        if self.engine is not None:
+            try:
+                result = self.engine.extract_intent(raw_messages)
+                if isinstance(result, IntentSummary):
+                    return result, self.engine.__class__.__name__, False
+                if isinstance(result, dict) and not result.get("error"):
+                    summary = IntentSummary(**result)
+                    if summary.topic:
+                        return summary, self.engine.__class__.__name__, False
+            except Exception:
+                pass
+            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True
+
+        prompt = self._build_extract_prompt(messages)
+        try:
+            result = self.client.chat_json(
+                system=(
+                    "你是教学设计智能体。根据教师与助手的完整多轮对话合并信息，严格返回 JSON。"
+                    "字段为 topic、duration_minutes、style、target_student、knowledge_points、"
+                    "output_format、with_interactive、key_difficulties、expected_outcomes、missing_fields。"
+                    "不要把助手的追问误当成教师需求；output_format 仅使用 ppt、doc。"
+                ),
+                user=prompt,
+            )
+            summary = IntentSummary(**(result or {}))
+            if not summary.topic:
+                raise ValueError("LLM 未返回有效主题")
+            return summary, "LLM", False
+        except Exception:
+            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True
+
+    @staticmethod
+    def _build_extract_prompt(messages: list[DialogueTurn]) -> str:
+        return "\n".join(f"{item.role}: {item.content}" for item in messages) or "用户尚未提供明确内容。"
 
     def _infer_missing_fields(self, summary: IntentSummary) -> list[str]:
-        missing: list[str] = []
-        if not summary.topic:
-            missing.append("topic")
-        if summary.duration_minutes is None:
-            missing.append("duration_minutes")
-        if not summary.style:
-            missing.append("style")
-        if not summary.target_student:
-            missing.append("target_student")
-        return missing
+        return [
+            field
+            for field in (*self.CORE_REQUIRED_FIELDS, *self.QUALITY_FIELDS)
+            if getattr(summary, field, None) in (None, "", [])
+        ]
+
+    @staticmethod
+    def _completion_pct(summary: IntentSummary) -> int:
+        weights = {
+            "topic": 25,
+            "duration_minutes": 25,
+            "style": 15,
+            "target_student": 15,
+            "knowledge_points": 20,
+        }
+        return sum(weight for field, weight in weights.items() if getattr(summary, field, None) not in (None, "", []))
+
+    def _build_assistant_response(
+        self,
+        summary: IntentSummary,
+        followups: list[str],
+        can_confirm: bool,
+        turn_count: int,
+        max_turns: int,
+    ) -> str:
+        if can_confirm:
+            quality_missing = [self.FIELD_LABELS[f] for f in self.QUALITY_FIELDS if f in summary.missing_fields]
+            if quality_missing and turn_count < max_turns:
+                return f"核心需求已经清楚了。为了让成品更贴合课堂，我还可以补充确认：{'、'.join(quality_missing)}。你也可以直接确认当前方案。"
+            return "教学意图已经完整，我已整理成右侧方案卡。确认后即可进入资料融合。"
+        if followups:
+            return followups[0]
+        return "我已达到本轮澄清上限，请在右侧检查核心信息后确认或重新开始。"
+
+
+__all__ = [
+    "IntentUnderstandingService",
+    "SESSIONS",
+    "IntentSessionError",
+    "IntentSessionNotFound",
+    "IntentSessionExpired",
+    "IntentSessionLocked",
+    "IntentNotReady",
+]

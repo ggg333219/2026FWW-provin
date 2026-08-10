@@ -189,11 +189,11 @@ type ScriptSegment struct {
 }
 
 type GenerateScriptResponse struct {
-	Page            int    `json:"page"`
-	Script          string `json:"script"`
-	MindmapMarkdown string `json:"mindmap_markdown"`
+	Page              int    `json:"page"`
+	Script            string `json:"script"`
+	MindmapMarkdown   string `json:"mindmap_markdown"`
 	UseEnhancedSchema bool   `json:"use_enhanced_schema"`
-	Scripts         []any  `json:"scripts,omitempty"`
+	Scripts           []any  `json:"scripts,omitempty"`
 }
 
 type GenerateEnhancedRequest struct {
@@ -203,13 +203,13 @@ type GenerateEnhancedRequest struct {
 }
 
 type GenerateEnhancedResponse struct {
-	CourseName       string `json:"course_name"`
-	SourceMarkdown   string `json:"source_markdown"`
-	KeyPoints        []string `json:"key_points"`
-	NodeTree         map[string]any `json:"node_tree"`
-	Scripts          []any `json:"scripts"`
-	UseEnhancedSchema bool `json:"use_enhanced_schema"`
-	UsedFallback     bool   `json:"used_fallback"`
+	CourseName        string         `json:"course_name"`
+	SourceMarkdown    string         `json:"source_markdown"`
+	KeyPoints         []string       `json:"key_points"`
+	NodeTree          map[string]any `json:"node_tree"`
+	Scripts           []any          `json:"scripts"`
+	UseEnhancedSchema bool           `json:"use_enhanced_schema"`
+	UsedFallback      bool           `json:"used_fallback"`
 }
 
 type GenerateAudioNode struct {
@@ -302,11 +302,11 @@ type ParseKnowledgeResponse struct {
 type SessionStatus string
 
 const (
-	SessionStatusCollecting  SessionStatus = "collecting"
-	SessionStatusClarifying  SessionStatus = "clarifying"
-	SessionStatusConfirming  SessionStatus = "confirming"
-	SessionStatusConfirmed   SessionStatus = "confirmed"
-	SessionStatusLocked      SessionStatus = "locked"
+	SessionStatusCollecting SessionStatus = "collecting"
+	SessionStatusClarifying SessionStatus = "clarifying"
+	SessionStatusConfirming SessionStatus = "confirming"
+	SessionStatusConfirmed  SessionStatus = "confirmed"
+	SessionStatusLocked     SessionStatus = "locked"
 )
 
 // IntentSummary 结构化教学意图摘要
@@ -334,11 +334,19 @@ type IntentExtractRequest struct {
 }
 
 type IntentExtractResponse struct {
-	IntentSummary  *IntentSummary `json:"intent_summary"`
-	SessionStatus  SessionStatus  `json:"session_status"`
-	Response       string         `json:"response,omitempty"`
-	NeedFollowup   bool           `json:"need_followup"`
-	FollowupQs     []string       `json:"followup_questions,omitempty"`
+	SessionID     string         `json:"session_id"`
+	IntentSummary *IntentSummary `json:"intent_summary"`
+	SessionStatus SessionStatus  `json:"session_status"`
+	Response      string         `json:"response,omitempty"`
+	NeedFollowup  bool           `json:"need_followup"`
+	FollowupQs    []string       `json:"followup_questions,omitempty"`
+	HumanSummary  string         `json:"human_summary,omitempty"`
+	CompletionPct int            `json:"completion_pct"`
+	TurnCount     int            `json:"turn_count"`
+	MaxTurns      int            `json:"max_turns"`
+	CanConfirm    bool           `json:"can_confirm"`
+	Engine        string         `json:"engine,omitempty"`
+	UsedFallback  bool           `json:"used_fallback"`
 }
 
 type IntentConfirmRequest struct {
@@ -346,9 +354,13 @@ type IntentConfirmRequest struct {
 }
 
 type IntentConfirmResponse struct {
+	SessionID     string         `json:"session_id"`
+	IntentID      string         `json:"intent_id"`
 	Confirmed     bool           `json:"confirmed"`
 	IntentSummary *IntentSummary `json:"intent_summary"`
 	SessionStatus SessionStatus  `json:"session_status"`
+	CompletionPct int            `json:"completion_pct"`
+	NextStep      string         `json:"next_step"`
 }
 
 // =============================================================================
@@ -361,11 +373,11 @@ type ParseProcessRequest struct {
 }
 
 type MaterialAsset struct {
-	AssetID    string `json:"asset_id"`
-	FileName   string `json:"file_name"`
-	SourceType string `json:"source_type"`
+	AssetID     string `json:"asset_id"`
+	FileName    string `json:"file_name"`
+	SourceType  string `json:"source_type"`
 	ParseStatus string `json:"parse_status"`
-	FileSize   int    `json:"file_size"`
+	FileSize    int    `json:"file_size"`
 }
 
 type ParseProcessResponse struct {
@@ -375,10 +387,10 @@ type ParseProcessResponse struct {
 }
 
 type ParseStatusResponse struct {
-	TaskID string          `json:"task_id"`
-	Status string          `json:"status"`
-	Chunks []ChunkItem     `json:"chunks,omitempty"`
-	Error  string          `json:"error,omitempty"`
+	TaskID string      `json:"task_id"`
+	Status string      `json:"status"`
+	Chunks []ChunkItem `json:"chunks,omitempty"`
+	Error  string      `json:"error,omitempty"`
 }
 
 type ChunkItem struct {
@@ -400,10 +412,10 @@ type ParseVideoRequest struct {
 // =============================================================================
 
 type RAGSearchRequest struct {
-	Query              string   `json:"query"`
-	KnowledgeBaseIDs   []string `json:"knowledge_base_ids,omitempty"`
-	TopK               int      `json:"top_k,omitempty"`
-	MinScore           float64  `json:"min_score,omitempty"`
+	Query            string   `json:"query"`
+	KnowledgeBaseIDs []string `json:"knowledge_base_ids,omitempty"`
+	TopK             int      `json:"top_k,omitempty"`
+	MinScore         float64  `json:"min_score,omitempty"`
 }
 
 type RAGSearchResponse struct {
@@ -420,14 +432,14 @@ type SearchResultItem struct {
 }
 
 type RAGEvidenceRequest struct {
-	Query             string         `json:"query"`
-	Context           map[string]any `json:"context,omitempty"`
-	KnowledgeBaseIDs  []string       `json:"knowledge_base_ids,omitempty"`
+	Query            string         `json:"query"`
+	Context          map[string]any `json:"context,omitempty"`
+	KnowledgeBaseIDs []string       `json:"knowledge_base_ids,omitempty"`
 }
 
 type EvidencePacket struct {
-	RelevantChunks     []ChunkItem  `json:"relevant_chunks"`
-	SynthesizedContext string       `json:"synthesized_context"`
+	RelevantChunks     []ChunkItem    `json:"relevant_chunks"`
+	SynthesizedContext string         `json:"synthesized_context"`
 	Citations          []CitationItem `json:"citations"`
 }
 
@@ -446,10 +458,10 @@ type KnowledgeUploadRequest struct {
 }
 
 type KnowledgeUploadResponse struct {
-	TaskID      string `json:"task_id"`
-	Status      string `json:"status"`
-	ChunkCount  int    `json:"chunk_count"`
-	DocumentID  string `json:"document_id,omitempty"`
+	TaskID     string `json:"task_id"`
+	Status     string `json:"status"`
+	ChunkCount int    `json:"chunk_count"`
+	DocumentID string `json:"document_id,omitempty"`
 }
 
 // =============================================================================
@@ -471,16 +483,16 @@ type TeachingNodeItem struct {
 }
 
 type GenerationCreateRequest struct {
-	SessionID       string          `json:"session_id"`
-	Intent          *IntentSummary  `json:"intent,omitempty"`
-	EvidencePacket  *EvidencePacket `json:"evidence_packet,omitempty"`
-	TemplateID      string          `json:"template_id,omitempty"`
+	SessionID      string          `json:"session_id"`
+	Intent         *IntentSummary  `json:"intent,omitempty"`
+	EvidencePacket *EvidencePacket `json:"evidence_packet,omitempty"`
+	TemplateID     string          `json:"template_id,omitempty"`
 }
 
 type GenerationCreateResponse struct {
-	TaskID          string `json:"task_id"`
-	Status          string `json:"status"`
-	GenerationType  string `json:"generation_type,omitempty"`
+	TaskID         string `json:"task_id"`
+	Status         string `json:"status"`
+	GenerationType string `json:"generation_type,omitempty"`
 }
 
 type GenerationStatusResponse struct {
@@ -499,14 +511,14 @@ type GenerationStatusResponse struct {
 // =============================================================================
 
 type ModifyCommandItem struct {
-	CommandType    string   `json:"command_type"`
-	NodeID         string   `json:"node_id,omitempty"`
-	TargetNodeIDs  []string `json:"target_node_ids,omitempty"`
-	Content        string   `json:"content,omitempty"`
-	AfterNodeID    string   `json:"after_node_id,omitempty"`
-	TemplateID     string   `json:"template_id,omitempty"`
-	SplitPoint     string   `json:"split_point,omitempty"`
-	Regenerate     bool     `json:"regenerate"`
+	CommandType   string   `json:"command_type"`
+	NodeID        string   `json:"node_id,omitempty"`
+	TargetNodeIDs []string `json:"target_node_ids,omitempty"`
+	Content       string   `json:"content,omitempty"`
+	AfterNodeID   string   `json:"after_node_id,omitempty"`
+	TemplateID    string   `json:"template_id,omitempty"`
+	SplitPoint    string   `json:"split_point,omitempty"`
+	Regenerate    bool     `json:"regenerate"`
 }
 
 type GenerationModifyRequest struct {
@@ -514,19 +526,19 @@ type GenerationModifyRequest struct {
 }
 
 type GenerationModifyResponse struct {
-	TaskID      string `json:"task_id"`
-	NewVersion  int    `json:"new_version"`
-	Status      string `json:"status"`
+	TaskID     string `json:"task_id"`
+	NewVersion int    `json:"new_version"`
+	Status     string `json:"status"`
 }
 
 type VersionSnapshot struct {
-	ID             string             `json:"id"`
-	GenerationID   string             `json:"generation_id"`
-	VersionNumber  int                `json:"version_number"`
-	NodesSnapshot  []TeachingNodeItem `json:"nodes_snapshot,omitempty"`
-	Summary        string             `json:"summary,omitempty"`
-	Locked         bool               `json:"locked"`
-	CreatedAt      string             `json:"created_at"`
+	ID            string             `json:"id"`
+	GenerationID  string             `json:"generation_id"`
+	VersionNumber int                `json:"version_number"`
+	NodesSnapshot []TeachingNodeItem `json:"nodes_snapshot,omitempty"`
+	Summary       string             `json:"summary,omitempty"`
+	Locked        bool               `json:"locked"`
+	CreatedAt     string             `json:"created_at"`
 }
 
 type VersionHistoryResponse struct {
@@ -899,11 +911,39 @@ func (c *aiEngineClient) postJSON(ctx context.Context, path string, reqBody any,
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("AI引擎返回异常状态: %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		detail := strings.TrimSpace(string(body))
+		var payload struct {
+			Detail any `json:"detail"`
+		}
+		if json.Unmarshal(body, &payload) == nil && payload.Detail != nil {
+			switch value := payload.Detail.(type) {
+			case string:
+				detail = value
+			default:
+				if encoded, marshalErr := json.Marshal(value); marshalErr == nil {
+					detail = string(encoded)
+				}
+			}
+		}
+		return &AIEngineHTTPError{StatusCode: resp.StatusCode, Detail: detail}
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("解析AI引擎响应失败: %w", err)
 	}
 	return nil
+}
+
+// AIEngineHTTPError 保留 Python AI Engine 的 HTTP 状态与错误详情，供 Handler 精确映射。
+type AIEngineHTTPError struct {
+	StatusCode int
+	Detail     string
+}
+
+func (e *AIEngineHTTPError) Error() string {
+	if e.Detail == "" {
+		return fmt.Sprintf("AI引擎返回异常状态: %d", e.StatusCode)
+	}
+	return fmt.Sprintf("AI引擎返回异常状态 %d: %s", e.StatusCode, e.Detail)
 }

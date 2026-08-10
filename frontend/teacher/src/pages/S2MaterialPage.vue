@@ -107,7 +107,7 @@ const router = useRouter()
 
 const EVIDENCE_KEY = 'fuww_s2_bound_evidence'
 const SELECTION_KEY = 'fuww_s2_selected_materials'
-const SESSION_KEY = 'fuww_s2_session_id'
+const SESSION_KEY = 'fuww_workflow_session_id'
 const NODE_REF_KEY = 'fuww_s2_current_node_ref'
 
 /** 会话ID：同一浏览器会话内保持稳定，供 S2 → KB → S3 串联 */

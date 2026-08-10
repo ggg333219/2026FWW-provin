@@ -81,12 +81,13 @@ export async function requestJson(path, options = {}) {
   }
 
   try {
-    const isMultipart = typeof FormData !== 'undefined' && options.body instanceof FormData
+    const { timeoutMs = REQUEST_TIMEOUT_MS, ...fetchOptions } = options
+    const isMultipart = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData
     const controller = new AbortController()
     const timer = isMultipart
       ? 0
-      : setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
-    const response = await fetch(`${API_BASE}${path}`, { ...options, signal: controller.signal })
+      : setTimeout(() => controller.abort(), timeoutMs)
+    const response = await fetch(`${API_BASE}${path}`, { ...fetchOptions, signal: controller.signal })
     if (timer) clearTimeout(timer)
     const payload = await response.json().catch(() => ({}))
     if (!response.ok || (typeof payload.code !== 'undefined' && payload.code !== 200)) {
