@@ -262,7 +262,9 @@ function Ensure-NodeDependencies {
 }
 
 Start-Background -Name "ai_engine" -FilePath "conda" -ArgumentList @('run','-n','fuww_ai','python','ai_engine/main.py') -WorkingDirectory $root -StdOut "$logsDir\ai_engine.log" -StdErr "$logsDir\ai_engine.err.log"
-Start-Background -Name "backend" -FilePath "go" -ArgumentList @('run','./api/main.go') -WorkingDirectory (Join-Path $root "backend") -StdOut "$logsDir\backend.log" -StdErr "$logsDir\backend.err.log"
+# 教师端后端（cmd/teacher，端口 8082）。前端 API_BASE 默认指向 localhost:8082，
+# 因此这里启动的是教师端专属后端，而非通用 api/main.go（18080）。
+Start-Background -Name "backend" -FilePath "go" -ArgumentList @('run','./cmd/teacher') -WorkingDirectory (Join-Path $root "backend") -StdOut "$logsDir\backend.log" -StdErr "$logsDir\backend.err.log"
 Ensure-NodeDependencies -ProjectName "student_frontend" -WorkingDirectory (Join-Path $root "frontend\student")
 Start-Background -Name "student_frontend" -FilePath "npm" -ArgumentList @('run','serve') -WorkingDirectory (Join-Path $root "frontend\student") -StdOut "$logsDir\student_frontend.log" -StdErr "$logsDir\student_frontend.err.log"
 Ensure-NodeDependencies -ProjectName "teacher_frontend" -WorkingDirectory (Join-Path $root "frontend\teacher")
@@ -274,8 +276,8 @@ $pids | ConvertTo-Json | Out-File -Encoding utf8 $pidFile
 Write-Host "Started components. PID file: $pidFile"
 Write-Host "Logs: $logsDir"
 Write-Host "If something fails, check the log files and run scripts/stop-all.ps1 to stop the background processes."
-if (Test-EndpointReady -Url 'http://localhost:18080/health' -RetryCount 25 -DelayMilliseconds 1000) {
-    Write-Host "Backend health check: OK (http://localhost:18080/health)"
+if (Test-EndpointReady -Url 'http://localhost:8082/api/health' -RetryCount 25 -DelayMilliseconds 1000) {
+    Write-Host "Backend health check: OK (http://localhost:8082/api/health)"
 } else {
     Write-Warning "Backend health check failed. Please inspect logs/backend.log and logs/backend.err.log"
 }
@@ -300,7 +302,8 @@ Write-Host ""
 Write-Host "Access URLs (local):"
 Write-Host "- 学生端前端: http://localhost:8080 (vue-cli serve 默认端口)"
 Write-Host "- 教师端前端: http://localhost:5173 (vite 默认端口)"
-Write-Host "- 统一后端: http://localhost:18080 (健康检查: /health, API 根路径: /api)"
+Write-Host "- 教师端后端: http://localhost:8082 (健康检查: /health, API 根路径: /api)"
+Write-Host "- AI 引擎: http://localhost:8000"
 Write-Host ""
 Write-Host "Notes:"
 Write-Host "- 如果使用 Docker 启动，端口映射在 backend/docker-compose.yml 中定义。"

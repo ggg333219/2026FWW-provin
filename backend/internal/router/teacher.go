@@ -75,7 +75,7 @@ func RegisterTeacherRoutes(api *gin.RouterGroup,
 		//   GET    /api/v1/teacher/materials/:id    → 详情
 		//   GET    /api/v1/teacher/materials/:id/chunks → 切片
 		//   DELETE /api/v1/teacher/materials/:id    → 删除
-		// 兼容前端 session 级“素材列表”：coursewares 同时返回 courseId + id，前端可直接消费。
+		// 兼容前端 session 级"素材列表"：coursewares 同时返回 courseId + id，前端可直接消费。
 		materials := v1.Group("/teacher/materials")
 		{
 			materials.GET("/search", teacherHandler.ListMaterials)
@@ -155,6 +155,7 @@ func RegisterNewSkillRoutes(
 	// ---- S4: 版本管理 ----
 	ver := v1.Group("/version")
 	{
+		ver.GET("/:gen_id", versionHandler.Load)
 		ver.GET("/:gen_id/history", versionHandler.History)
 		ver.POST("/:gen_id/rollback", versionHandler.Rollback)
 		ver.POST("/:gen_id/lock", versionHandler.Lock)
