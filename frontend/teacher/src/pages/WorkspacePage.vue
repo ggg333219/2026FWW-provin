@@ -97,6 +97,9 @@
             <div v-else-if="activeTab === 'intent'" class="tab-container">
               <TeacherIntentPanel />
             </div>
+            <div v-else-if="activeTab === 'material'" class="tab-container">
+              <S2MaterialWorkspace />
+            </div>
             <div v-else-if="activeTab === 'version'" class="tab-container">
               <div class="version-panel-inline">
                 <div class="vp-toolbar">
@@ -234,6 +237,7 @@ import TeacherCoursewareSidebar from '../components/teacher/TeacherCoursewareSid
 import CourseIterationPanel from '../components/teacher/CourseIterationPanel.vue'
 import TeacherIntentPanel from '../components/teacher/TeacherIntentPanel.vue'
 import S4VersionExportCenter from '../components/teacher/S4VersionExportCenter.vue'
+import S2MaterialWorkspace from '../components/teacher/S2MaterialWorkspace.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -263,6 +267,7 @@ const menuItems = [
   { key: 'knowledge', label: '知识库', iconPath: '<path d="M3 6.5C3 5.12 4.12 4 5.5 4H10v16H5.5A2.5 2.5 0 0 1 3 17.5v-11z"/><path d="M21 6.5C21 5.12 19.88 4 18.5 4H14v16h4.5a2.5 2.5 0 0 0 2.5-2.5v-11z"/>' },
   { key: 'iteration', label: '学情迭代', iconPath: '<path d="M21.5 2v6h-6"/><path d="M2.5 22v-6h6"/><path d="M2 11.5a10 10 0 0 1 18.8-4.3"/><path d="M22 12.5a10 10 0 0 1-18.8 2.2"/>' },
   { key: 'intent', label: '意图理解', iconPath: '<path d="M12 2v6"/><path d="M12 22v-6"/><circle cx="12" cy="12" r="3"/>' },
+  { key: 'material', label: '资料中心', iconPath: '<path d="M4 4h16v16H4z"/><path d="M4 9h16"/><path d="M9 9v11"/>' },
   { key: 'version', label: '版本管理', iconPath: '<polyline points="6 9 12 15 18 9"/>' }
 ]
 

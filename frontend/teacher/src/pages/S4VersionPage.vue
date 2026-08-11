@@ -2,8 +2,18 @@
   <AppShell>
     <div class="s4-page">
       <div class="page-header">
-        <h2>S4 版本管理</h2>
-        <p>课件版本控制、修改指令与导出管理</p>
+        <div>
+          <h2>S4 版本管理</h2>
+          <p>课件版本控制、修改指令与导出管理</p>
+        </div>
+        <div class="page-header-right">
+          <div class="step-pills">
+            <router-link :to="{ name: 'S1Intent' }" class="pill">S1 意图</router-link>
+            <router-link :to="{ name: 'S2Material' }" class="pill">S2 资料</router-link>
+            <router-link :to="{ name: 'S3Studio' }" class="pill">S3 生成</router-link>
+            <span class="pill active">S4 版本</span>
+          </div>
+        </div>
       </div>
       <div class="page-body">
         <!-- 工具栏 -->
@@ -247,9 +257,14 @@ function formatTime(iso) {
 
 <style scoped>
 .s4-page { padding: 20px; min-height: calc(100vh - 140px); }
-.page-header { margin-bottom: 16px; }
+.page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .page-header h2 { margin: 0; font-size: 22px; color: #111827; }
 .page-header p { margin: 6px 0 0; font-size: 14px; color: #607a71; }
+.page-header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.step-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill { font-size: 12px; font-weight: 600; color: #5f7467; background: #f0f5f2; border: 1px solid #e2ece6; border-radius: 999px; padding: 6px 14px; text-decoration: none; transition: all 0.15s; }
+.pill:hover { border-color: #5ca68f; color: #2f605a; }
+.pill.active { color: #fff; background: #2f605a; border-color: #2f605a; }
 .page-body { flex: 1; }
 
 /* 工具栏 */

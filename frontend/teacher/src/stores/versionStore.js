@@ -169,20 +169,13 @@ export const useVersionStore = defineStore('version', {
       this.loading = true
       this.error = ''
       try {
-        // 构建后端 ModifyRequest 格式
-        const nodes = this.currentVersionDetail.nodes.map(n => ({
-          node_id: n.node_id,
-          title: n.title || '',
-          content: n.content || '',
-          summary: n.summary || '',
-          node_type: n.node_type || 'slide'
-        }))
+        // 构建 commands 格式
         const commands = pending.map(c => ({
           type: c.type,
           node_id: c.target,
           content: c.after || ''
         }))
-        await teacherV1Api.version.modify(nodes, commands)
+        await teacherV1Api.version.modify(genId, commands)
         // 全部标记为已应用
         pending.forEach(c => {
           c.status = 'applied'

@@ -25,8 +25,8 @@ import (
 
 func main() {
 	_, filename, _, _ := runtime.Caller(0)
-	// Adjusted path since it's now in cmd/teacher/
-	projectRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filename))))
+	// 本文件位于 backend/cmd/teacher/main.go，向上 3 级即为 backend 根目录。
+	projectRoot := filepath.Dir(filepath.Dir(filepath.Dir(filename)))
 
 	cfg, err := config.LoadConfig(filepath.Join(projectRoot, "config"))
 	if err != nil {

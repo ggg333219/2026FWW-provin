@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -46,6 +47,7 @@ type AIEngine interface {
 	// ---- S4: 个性化 & 版本 & 导出 ----
 	GenerationModify(ctx context.Context, genID string, req GenerationModifyRequest) (*GenerationModifyResponse, error)
 	VersionHistory(ctx context.Context, genID string) (*VersionHistoryResponse, error)
+	VersionLoad(ctx context.Context, genID string, versionNumber int) (*VersionSnapshot, error)
 	VersionRollback(ctx context.Context, genID string, req VersionRollbackRequest) (*VersionRollbackResponse, error)
 	VersionLock(ctx context.Context, genID string) (*VersionLockResponse, error)
 	ExportCreate(ctx context.Context, genID string, req ExportCreateRequest) (*ExportCreateResponse, error)
@@ -844,6 +846,27 @@ func (c *aiEngineClient) VersionHistory(ctx context.Context, genID string) (*Ver
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("解析版本历史响应失败: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) VersionLoad(ctx context.Context, genID string, versionNumber int) (*VersionSnapshot, error) {
+	var result VersionSnapshot
+	path := "/api/v1/version/" + genID + "?v=" + strconv.Itoa(versionNumber)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("构造版本加载请求失败: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("版本加载请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("版本加载返回异常: %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("解析版本加载响应失败: %w", err)
 	}
 	return &result, nil
 }
