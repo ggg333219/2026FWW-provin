@@ -156,7 +156,7 @@
               <div class="action-strip__row">
                 <button type="button" class="btn-tool" @click="addNode" :disabled="!currentCourseId">+ 新增节点</button>
                 <button type="button" class="btn-tool" @click="$emit('generate-ai-script')" :disabled="!currentCourseId || scriptGenerating || scriptSaving">
-                  {{ scriptGenerating ? '生成中…' : '智能生成节点建议' }}
+                  {{ scriptGenerating ? '生成中…' : 'AI 生成脚本' }}
                 </button>
                 <button type="button" class="btn-tool btn-tool--warn" @click="rebuildNodesFromScript" :disabled="!currentCourseId">按全文重建节点</button>
               </div>
@@ -233,6 +233,18 @@
 
         <div class="editor-split">
           <aside class="copilot-panel">
+            <!-- 整页讲稿：AI 生成完整讲稿（含知识库证据注入），与节点讲稿联动展示 -->
+            <section class="panel-block grow page-script-block">
+              <h5 class="panel-block__title">整页讲稿</h5>
+              <p class="copilot-sub">AI 生成完整讲稿（含知识库证据注入），生成后自动填充</p>
+              <textarea
+                class="page-script-editor"
+                :value="currentScript"
+                placeholder="AI 生成讲稿将显示在这里（含知识库证据段落）..."
+                @input="updatePageScript($event.target.value)"
+              ></textarea>
+            </section>
+
             <div class="copilot-heading">
               <h4>节点讲稿</h4>
               <p class="copilot-sub">与左侧时间线选中项一一对应，切换节点分别编辑</p>
@@ -575,6 +587,10 @@ const rebuildNodesFromScript = () => {
   selectedNodeIndex.value = 0
   emitNodes()
   syncScriptFromNodes()
+}
+
+const updatePageScript = (value) => {
+  emit('update:current-script', value)
 }
 
 const updateSelectedNodeText = (value) => {
@@ -1709,6 +1725,28 @@ button:disabled {
   display: flex;
   flex-direction: column;
   overflow: visible;
+}
+
+/* 整页讲稿：AI 生成完整讲稿（含知识库证据段落） */
+.page-script-block {
+  min-height: 200px;
+}
+
+.page-script-editor {
+  width: 100%;
+  height: 150px;
+  min-height: 130px;
+  margin-top: 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 12px;
+  box-sizing: border-box;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.8;
+  resize: vertical;
+  overflow-y: auto;
 }
 
 .node-tabs {

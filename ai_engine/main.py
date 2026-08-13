@@ -86,6 +86,7 @@ class GenerateScriptRequest(BaseModel):
     content: str
     course_name: Optional[str] = None
     mode: str = "llm"
+    evidence: Optional[dict[str, Any]] = None
 
 
 class AskWithContextRequest(BaseModel):
@@ -112,6 +113,7 @@ class GenerateNodeScriptRequest(BaseModel):
     teaching_node: dict[str, Any]
     course_name: Optional[str] = None
     mode: str = "llm"
+    evidence: Optional[dict[str, Any]] = None
 
 
 class GenerateFromMarkdownRequest(BaseModel):
@@ -273,7 +275,7 @@ async def generate_script(req: GenerateScriptRequest):
             ],
         }
         generator = LessonGenerator(GenerationConfig(mode=req.mode))
-        result = generator.generate(parsed_document)
+        result = generator.generate(parsed_document, evidence=req.evidence)
         lesson = (result.get("lessons") or [{}])[0]
         return {
             "page": req.page,
@@ -289,7 +291,7 @@ async def generate_node_script(req: GenerateNodeScriptRequest):
     """基于讲授节点生成可交互讲稿。"""
     try:
         generator = LessonGenerator(GenerationConfig(mode=req.mode))
-        return generator.generate_node_script(req.teaching_node, req.course_name)
+        return generator.generate_node_script(req.teaching_node, req.course_name, evidence=req.evidence)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"节点讲稿生成失败: {str(e)}")
 

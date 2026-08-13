@@ -555,13 +555,26 @@ function recalcKnowledgePointCount(store, courseId) {
   course.updated_at = nowIso()
 }
 
-function buildGeneratedScript(courseTitle, page, nodes) {
+function buildGeneratedScript(courseTitle, page, nodes, evidence = null) {
   const parts = [
     `${courseTitle} · 第${page}页 AI 预制讲稿`,
     '',
     '开场：先用1分钟回顾上页关键点，并抛出本页目标。',
     ''
   ]
+  // 如果有证据包，在生成讲稿时附加证据上下文提示
+  if (evidence && evidence.synthesized_context) {
+    parts.push(`📋 证据上下文：${evidence.synthesized_context}`)
+    parts.push('')
+  }
+  if (evidence && Array.isArray(evidence.relevant_chunks) && evidence.relevant_chunks.length > 0) {
+    parts.push('参考资料：')
+    evidence.relevant_chunks.forEach((chunk, idx) => {
+      const snippet = String(chunk.content || '').slice(0, 80)
+      parts.push(`  [${idx + 1}] ${snippet}${chunk.content && chunk.content.length > 80 ? '...' : ''}`)
+    })
+    parts.push('')
+  }
   nodes.forEach((node, idx) => {
     parts.push(`节点${idx + 1}：${node.title}`)
     parts.push(`讲解提示：${node.summary || node.scriptText || '围绕该节点展开讲解，并结合一道课堂练习。'}`)
@@ -786,7 +799,8 @@ function handleTeacherCoursewareRequest(store, pathname, searchParams, method, o
     const page = Math.max(1, safeNumber(body.pageNum, 1))
     const scriptData = ensureScriptPage(store, courseId, page)
     const nodes = Array.isArray(scriptData?.nodes) ? scriptData.nodes : []
-    const content = buildGeneratedScript(course.title, page, nodes)
+    const evidence = body.evidence
+    const content = buildGeneratedScript(course.title, page, nodes, evidence)
     scriptData.content = content
     scriptData.updatedAt = nowIso()
     persistMockStore()

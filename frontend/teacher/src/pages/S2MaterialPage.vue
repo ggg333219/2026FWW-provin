@@ -21,6 +21,13 @@
 
       <!-- 独立路由入口：复用 S2 资料中心工作台（与 Workspace 内嵌 tab 同一组件，路由/内嵌统一） -->
       <S2MaterialWorkspace />
+
+      <!-- 下一步：S2 → S3（跳转到 Workspace 的 S3 讲稿工作台，真正的透传验收路径） -->
+      <div class="next-step-bar">
+        <router-link :to="{ name: 'Workspace' }" class="next-step-btn">
+          下一步：进入 S3 生成 →
+        </router-link>
+      </div>
     </div>
   </AppShell>
 </template>
@@ -125,6 +132,29 @@ const exitMockMode = () => {
   color: #fff;
   background: #2f605a;
   border-color: #2f605a;
+}
+
+.next-step-bar {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e2ece6;
+  text-align: right;
+}
+
+.next-step-btn {
+  display: inline-block;
+  padding: 10px 24px;
+  background: #2f605a;
+  color: #fff;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+
+.next-step-btn:hover {
+  background: #1e4a44;
 }
 
 @media (max-width: 760px) {

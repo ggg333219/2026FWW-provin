@@ -11,7 +11,8 @@ func RegisterTeacherRoutes(api *gin.RouterGroup,
 	teacherHandler *handler.TeacherHandler,
 	courseHandler *handler.CourseHandler,
 	compatHandler *handler.CompatibilityHandler,
-	weakPointHandler *handler.WeakPointHandler) {
+	weakPointHandler *handler.WeakPointHandler,
+	authHandler *handler.AuthHandler) {
 
 	// Health Check
 	api.GET("/health", func(c *gin.Context) {
@@ -39,6 +40,15 @@ func RegisterTeacherRoutes(api *gin.RouterGroup,
 	// Teacher V1 Routes
 	v1 := api.Group("/v1")
 	{
+		// 注册/登录（前端 HomeLogin 调用）
+		if authHandler != nil {
+			authV1 := v1.Group("/auth")
+			{
+				authV1.POST("/register", authHandler.Register)
+				authV1.POST("/login", authHandler.Login)
+			}
+		}
+
 		v1.GET("/courseware/:courseId/page/:pageNum", courseHandler.GetPagePreview)
 
 		teacherV1 := v1.Group("/teacher/coursewares")

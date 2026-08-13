@@ -73,6 +73,7 @@ func main() {
 	teacherHandler := handler.NewTeacherHandler(db, aiClient)
 	weakPointHandler := handler.NewWeakPointHandler(db, aiClient)
 	compatHandler := handler.NewCompatibilityHandler(db, aiClient, courseService)
+	authHandler := handler.NewAuthHandler(db)
 
 	// ---- 4 Skill + KB 新处理器 ----
 	convHandler := handler.NewConversationHandler(aiClient)
@@ -85,7 +86,7 @@ func main() {
 	r := newBaseEngine(cfg.Server.Mode)
 
 	api := r.Group("/api")
-	router.RegisterTeacherRoutes(api, teacherHandler, courseHandler, compatHandler, weakPointHandler)
+	router.RegisterTeacherRoutes(api, teacherHandler, courseHandler, compatHandler, weakPointHandler, authHandler)
 
 	// 4 Skill + KB 新路由（v1 子路由）
 	skillV1 := api.Group("/v1")
