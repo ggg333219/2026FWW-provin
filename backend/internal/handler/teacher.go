@@ -97,7 +97,9 @@ func (h *TeacherHandler) GetCoursewareList(c *gin.Context) {
 // ===========================================================================
 
 // materialListItem 把 Course 映射为 S2 素材列表项（兼容前端字段名）。
-func materialListItem(course *model.Course) gin.H {
+// chunks 从 CoursePage 映射（复用 chunksForMaterial 逻辑），保证前端
+// materialStore.allChunks / 知识库索引能拿到真实可索引文本。
+func materialListItem(course *model.Course, h *TeacherHandler) gin.H {
 	ft := strings.ToLower(strings.TrimSpace(course.FileType))
 	mtype := "document"
 	switch ft {
@@ -127,7 +129,7 @@ func materialListItem(course *model.Course) gin.H {
 		"tags":           []string{},
 		"parseStatus":    parseStatus,
 		"uploadedAt":     course.CreatedAt,
-		"chunks":         []any{},
+		"chunks":         h.chunksForMaterial(course.ID),
 		"totalPage":      course.TotalPage,
 		"createdAt":      course.CreatedAt,
 		"teachingCourse": course.TeachingCourseTitle,
@@ -176,7 +178,7 @@ func (h *TeacherHandler) ListMaterials(c *gin.Context) {
 
 	items := make([]any, 0, len(courses))
 	for i := range courses {
-		items = append(items, materialListItem(&courses[i]))
+		items = append(items, materialListItem(&courses[i], h))
 	}
 
 	total := len(items)
@@ -207,7 +209,7 @@ func (h *TeacherHandler) GetMaterialDetail(c *gin.Context) {
 		return
 	}
 
-	item := materialListItem(&course)
+	item := materialListItem(&course, h)
 	item["chunks"] = h.chunksForMaterial(course.ID)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "请求成功", "data": item})
 }
@@ -472,7 +474,7 @@ func (h *TeacherHandler) AIGenerateScript(c *gin.Context) {
 	mindmapMarkdown := ""
 	teachingNodes := loadTeachingNodesByPage(h.db, courseID, pageNum)
 	if h.aiClient != nil {
-		if generatedScript, generatedMindmap, usedNodes, err := generateAndStoreTeachingNodeScripts(c.Request.Context(), h.db, h.aiClient, courseName, defaultTeacherMode(req.Mode), teachingNodes); usedNodes && err == nil {
+		if generatedScript, generatedMindmap, usedNodes, err := generateAndStoreTeachingNodeScripts(c.Request.Context(), h.db, h.aiClient, courseName, defaultTeacherMode(req.Mode), teachingNodes, nil); usedNodes && err == nil {
 			script = generatedScript
 			mindmapMarkdown = generatedMindmap
 		} else {

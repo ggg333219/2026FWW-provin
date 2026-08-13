@@ -32,11 +32,18 @@ export const teacherCoursewareApi = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ nodes })
   }),
-  generateScript: ({ courseId, pageNum, mode = 'llm' }) => requestJson(`/api/v1/teacher/coursewares/${encodeURIComponent(courseId)}/scripts/ai-generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pageNum, mode })
-  }),
+  generateScript: ({ courseId, pageNum, mode = 'llm', evidence = null }) => {
+    // evidence 为可选参数（S2 证据透传）：有则附加到请求 body，无则行为与原来一致
+    const body = { pageNum, mode }
+    if (evidence) {
+      body.evidence = evidence
+    }
+    return requestJson(`/api/v1/teacher/coursewares/${encodeURIComponent(courseId)}/scripts/ai-generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+  },
   generateAudio: ({ courseId, pageNum }) => requestJson(`/api/v1/teacher/coursewares/${encodeURIComponent(courseId)}/pages/${pageNum}/audio`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

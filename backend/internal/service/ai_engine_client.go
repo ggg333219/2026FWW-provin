@@ -60,10 +60,11 @@ type aiEngineClient struct {
 }
 
 type GenerateScriptRequest struct {
-	Page       int    `json:"page"`
-	Content    string `json:"content"`
-	CourseName string `json:"course_name"`
-	Mode       string `json:"mode"`
+	Page       int             `json:"page"`
+	Content    string          `json:"content"`
+	CourseName string          `json:"course_name"`
+	Mode       string          `json:"mode"`
+	Evidence   *EvidencePacket `json:"evidence,omitempty"`
 }
 
 type ParsedPage struct {
@@ -113,9 +114,10 @@ type ReconstructDocumentResponse struct {
 }
 
 type GenerateNodeScriptRequest struct {
-	TeachingNode map[string]any `json:"teaching_node"`
-	CourseName   string         `json:"course_name"`
-	Mode         string         `json:"mode"`
+	TeachingNode map[string]any  `json:"teaching_node"`
+	CourseName   string          `json:"course_name"`
+	Mode         string          `json:"mode"`
+	Evidence     *EvidencePacket `json:"evidence,omitempty"`
 }
 
 type GenerateNodeScriptResponse struct {
@@ -456,7 +458,10 @@ type RAGEvidenceResponse struct {
 }
 
 type KnowledgeUploadRequest struct {
-	SessionID string `json:"session_id"`
+	SessionID        string   `json:"session_id"`
+	KnowledgeBaseID  string   `json:"knowledge_base_id,omitempty"`
+	Files            []string `json:"files,omitempty"`
+	Texts            []string `json:"texts,omitempty"`
 }
 
 type KnowledgeUploadResponse struct {

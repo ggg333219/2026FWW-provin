@@ -99,6 +99,12 @@
             </div>
             <div v-else-if="activeTab === 'material'" class="tab-container">
               <S2MaterialWorkspace />
+              <!-- 下一步：S2 → S3 讲稿编辑（同 Workspace 内嵌 S3 工作台） -->
+              <div class="next-step-bar">
+                <button type="button" class="next-step-btn" @click="activeTab = 'script'">
+                  下一步：进入 S3 生成 →
+                </button>
+              </div>
             </div>
             <div v-else-if="activeTab === 'version'" class="tab-container">
               <div class="version-panel-inline">
@@ -322,9 +328,22 @@ const handleGenerateAIScript = async () => {
   generationStore.setGenerating(true)
   generationStore.setGenerateProgress(8, '正在分析课件内容')
   try {
+    // 尝试从 localStorage 读取证据包（S2 证据透传，成员B）
+    let evidence = null
+    try {
+      const raw = window.localStorage.getItem('fuww_s2_evidence_packet')
+      if (raw) {
+        evidence = JSON.parse(raw)
+        console.log('[WorkspacePage] 从 localStorage 读取证据包:', evidence)
+      }
+    } catch (e) {
+      console.warn('[WorkspacePage] 读取证据包失败', e)
+    }
+
     await teacherV1Api.coursewares.generateScript({
       courseId: workspaceStore.currentCourseId,
-      pageNum: workspaceStore.currentEditPage
+      pageNum: workspaceStore.currentEditPage,
+      evidence
     })
     await loadScriptAndNodes(workspaceStore.currentCourseId, workspaceStore.currentEditPage)
     generationStore.setGenerateProgress(100, '生成完成')
@@ -646,6 +665,32 @@ onMounted(async () => {
   background: #f7f8fc;
   transform: translateY(-1px);
   box-shadow: 0 8px 16px rgba(15, 23, 42, 0.1);
+}
+
+/* 下一步：S2 → S3 讲稿编辑 */
+.next-step-bar {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e2ece6;
+  text-align: right;
+}
+
+.next-step-btn {
+  display: inline-block;
+  padding: 10px 24px;
+  background: #2f605a;
+  color: #fff;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  border: 0;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.next-step-btn:hover {
+  background: #1e4a44;
 }
 
 /* ---- 版本管理面板样式 ---- */

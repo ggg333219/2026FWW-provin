@@ -50,6 +50,31 @@ except ImportError:
 load_dotenv()
 
 
+def format_evidence_for_prompt(evidence: dict[str, Any] | None) -> str:
+    """把 S2 证据包格式化为 LLM prompt 的「知识库证据参考」段落。
+
+    契约与前端 mockBackend 一致：EvidencePacket 含
+    synthesized_context（LLM 综合摘要）与 relevant_chunks[].content（原始切片）。
+    """
+    if not evidence:
+        return ""
+    parts: list[str] = []
+    synthesized = str(evidence.get("synthesized_context") or "").strip()
+    if synthesized:
+        parts.append(f"📋 证据上下文：{synthesized}")
+    chunks = evidence.get("relevant_chunks") or []
+    if isinstance(chunks, list):
+        chunk_texts: list[str] = []
+        for chunk in chunks:
+            content = str((chunk or {}).get("content") or "").strip()
+            if content:
+                chunk_texts.append(content)
+        if chunk_texts:
+            parts.append("参考资料：")
+            parts.extend(f"- {text}" for text in chunk_texts[:5])
+    return "\n".join(parts).strip()
+
+
 @dataclass
 class GenerationConfig:
     mode: str = "llm"  # 默认使用真实模型
@@ -69,14 +94,14 @@ class LessonGenerator:
             max_content_chars=int(os.getenv("AI_MAX_CONTENT_CHARS", "3500")),
         )
 
-    def generate(self, parsed_document: dict[str, Any]) -> dict[str, Any]:
+    def generate(self, parsed_document: dict[str, Any], evidence: dict[str, Any] | None = None) -> dict[str, Any]:
         pages = parsed_document.get("parsed_pages", [])
         outputs: list[dict[str, Any]] = []
 
         for page_item in pages:
             page = page_item["page"]
             content = page_item["content"]
-            generated = self._generate_llm(page, content)
+            generated = self._generate_llm(page, content, evidence)
 
             outputs.append(generated)
 
@@ -289,9 +314,11 @@ class LessonGenerator:
             "generation_error": "enhanced_fallback", "used_fallback": True,
         }
 
-    def _generate_llm(self, page: int, content: str) -> dict[str, Any]:
+    def _generate_llm(self, page: int, content: str, evidence: dict[str, Any] | None = None) -> dict[str, Any]:
         normalized_content = self._prepare_content(content)
         outline = self._build_outline(normalized_content)
+
+        evidence_text = format_evidence_for_prompt(evidence)
 
         system_prompt = (
             "你是高校教师讲稿生成助手。"
@@ -299,10 +326,12 @@ class LessonGenerator:
             "必须准确覆盖原文关键信息，不要编造课件中不存在的结论、数据或公式。"
             "输出只能是 JSON 对象，且只包含 script 与 mindmap_markdown 两个字段。"
         )
+        evidence_block = f"\n知识库证据参考:\n{evidence_text}\n" if evidence_text else ""
         user_prompt = (
             f"页面: {page}\n"
             f"原始内容:\n{normalized_content}\n\n"
             f"提炼要点:\n{outline}\n\n"
+            f"{evidence_block}"
             "请生成：\n"
             "1. script: 220-420 字，口语化、按老师上课讲述方式展开，包含开场点题、核心解释、必要举例和本页收束。\n"
             "2. mindmap_markdown: 使用 Markdown 列表，第一行为本页主题，下面给出 3-6 个要点分支。\n"
@@ -323,7 +352,7 @@ class LessonGenerator:
         except Exception as e:
             return self._fallback_generation(page, normalized_content, str(e))
 
-    def generate_node_script(self, teaching_node: dict[str, Any], course_name: str | None = None) -> dict[str, Any]:
+    def generate_node_script(self, teaching_node: dict[str, Any], course_name: str | None = None, evidence: dict[str, Any] | None = None) -> dict[str, Any]:
         node_id = str(teaching_node.get("node_id") or "node_unknown")
         title = str(teaching_node.get("title") or "未命名节点")
         core_points = teaching_node.get("core_points") or []
@@ -341,7 +370,8 @@ class LessonGenerator:
             ]
         ).strip()
 
-        fallback = self._fallback_node_script(node_id, title, summary, core_points, examples, confusions)
+        evidence_text = format_evidence_for_prompt(evidence)
+        fallback = self._fallback_node_script(node_id, title, summary, core_points, examples, confusions, evidence)
 
         try:
             client = self._build_llm_client()
@@ -352,6 +382,7 @@ class LessonGenerator:
                 "必须包含 script、mindmap_markdown、interactive_questions、reteach_script、transition。"
                 "可选包含 structured_markdown、knowledge_nodes、script_segments。"
             )
+            evidence_block = f"\n知识库证据参考:\n{evidence_text}\n" if evidence_text else ""
             user_prompt = (
                 f"课程名: {course_name or '未提供'}\n"
                 f"节点标题: {title}\n"
@@ -360,6 +391,7 @@ class LessonGenerator:
                 f"示例: {json.dumps(examples, ensure_ascii=False)}\n"
                 f"易错点: {json.dumps(confusions, ensure_ascii=False)}\n"
                 f"补充内容: {assembled_content}\n"
+                f"{evidence_block}"
                 "请输出适合老师直接讲授、并支持后续追问的结果。\n"
                 "要求：\n"
                 "1) script 语言要像真实教师课堂讲解，不要机械罗列。\n"
@@ -508,14 +540,18 @@ class LessonGenerator:
         core_points: list[str],
         examples: list[str],
         confusions: list[str],
+        evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         details = "；".join(core_points[:3]) if core_points else summary or title
         example_text = examples[0] if examples else f"可以结合 {title} 的典型应用场景帮助学生理解。"
         reteach_focus = confusions[0] if confusions else f"重新解释 {title} 的核心概念"
+        evidence_text = format_evidence_for_prompt(evidence)
+        evidence_note = f"可参考知识库证据：“{evidence_text[:80]}”。" if evidence_text else ""
         script = (
             f"这一部分我们围绕“{title}”来讲。"
             f"先抓住几个关键点：{details}。"
             f"讲到这里时，可以用“{example_text}”作为课堂例子，让学生把抽象概念和真实情境对应起来。"
+            f"{evidence_note}"
             "最后再回到本节点结论，帮助学生形成完整理解。"
         )
         mindmap = "\n".join([f"- {title}"] + [f"  - {item}" for item in (core_points[:4] or [summary or "核心内容"])])

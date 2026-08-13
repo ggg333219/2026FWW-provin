@@ -139,6 +139,7 @@ func generateAndStoreTeachingNodeScripts(
 	courseName string,
 	mode string,
 	nodes []model.TeachingNode,
+	evidence *service.EvidencePacket,
 ) (string, string, bool, error) {
 	if aiClient == nil || len(nodes) == 0 {
 		return "", "", false, nil
@@ -160,6 +161,7 @@ func generateAndStoreTeachingNodeScripts(
 			},
 			CourseName: courseName,
 			Mode:       mode,
+			Evidence:   evidence,
 		})
 		if err != nil {
 			return "", "", true, err

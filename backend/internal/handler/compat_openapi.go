@@ -74,7 +74,7 @@ func (h *CompatibilityHandler) OpenGenerateScript(c *gin.Context) {
 	}
 	script := ""
 	teachingNodes := loadTeachingNodesByPage(h.db, req.ParseID, 1)
-	if generatedScript, _, usedNodes, err := generateAndStoreTeachingNodeScripts(c.Request.Context(), h.db, h.aiClient, course.Title, "llm", teachingNodes); usedNodes && err == nil {
+	if generatedScript, _, usedNodes, err := generateAndStoreTeachingNodeScripts(c.Request.Context(), h.db, h.aiClient, course.Title, "llm", teachingNodes, nil); usedNodes && err == nil {
 		script = generatedScript
 	} else {
 		resp, err := h.aiClient.GenerateScript(c.Request.Context(), service.GenerateScriptRequest{Page: 1, Content: content, CourseName: course.Title, Mode: "llm"})

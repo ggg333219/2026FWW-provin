@@ -87,8 +87,9 @@ func (h *CompatibilityHandler) GenerateTeacherAudioV1(c *gin.Context) {
 func (h *CompatibilityHandler) AIGenerateTeacherScriptV1(c *gin.Context) {
 	courseID := c.Param("courseId")
 	var req struct {
-		PageNum int    `json:"pageNum" binding:"required"`
-		Mode    string `json:"mode"`
+		PageNum  int                     `json:"pageNum" binding:"required"`
+		Mode     string                  `json:"mode"`
+		Evidence *service.EvidencePacket `json:"evidence"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误"})
@@ -107,11 +108,11 @@ func (h *CompatibilityHandler) AIGenerateTeacherScriptV1(c *gin.Context) {
 	script := ""
 	mindmapMarkdown := ""
 	teachingNodes := loadTeachingNodesByPage(h.db, courseID, req.PageNum)
-	if generatedScript, generatedMindmap, usedNodes, err := generateAndStoreTeachingNodeScripts(c.Request.Context(), h.db, h.aiClient, course.Title, defaultString(req.Mode, "llm"), teachingNodes); usedNodes && err == nil {
+	if generatedScript, generatedMindmap, usedNodes, err := generateAndStoreTeachingNodeScripts(c.Request.Context(), h.db, h.aiClient, course.Title, defaultString(req.Mode, "llm"), teachingNodes, req.Evidence); usedNodes && err == nil {
 		script = generatedScript
 		mindmapMarkdown = generatedMindmap
 	} else {
-		resp, err := h.aiClient.GenerateScript(c.Request.Context(), service.GenerateScriptRequest{Page: req.PageNum, Content: contextText, CourseName: course.Title, Mode: defaultString(req.Mode, "llm")})
+		resp, err := h.aiClient.GenerateScript(c.Request.Context(), service.GenerateScriptRequest{Page: req.PageNum, Content: contextText, CourseName: course.Title, Mode: defaultString(req.Mode, "llm"), Evidence: req.Evidence})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "AI生成失败"})
 			return

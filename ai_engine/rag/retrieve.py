@@ -208,12 +208,22 @@ class HybridRetriever:
         """
         # 1. 向量检索（召回 top_k × 4 作为候选池）
         query_vec = self.embed.embed_text(query)
+        # Embedding 可用性检测：query 向量非零才认为向量侧有效。
+        # 当 AI_API_KEY 缺失/占位符或 embed API 失败时，LLMClient.embed 回退为
+        # 全零向量，此时混合融合分数上限只有 0.3（BM25 权重），会被 min_score
+        # 全部滤掉 → 退化为纯 BM25 兜底，保证无 embedding key 时 RAG 仍可检索。
+        vector_available = bool(query_vec) and any(v != 0.0 for v in query_vec)
+
         vector_hits = self.store.search(
             query_vec,
             top_k=min(top_k * 4, 200),
             min_score=0.0,  # 向量侧不过滤，留给融合后统一阈值
             source_type=source_type,
         )
+
+        # 向量不可用 → 纯 BM25 检索
+        if not vector_available:
+            return self._bm25_only_search(query, top_k, min_score, source_type)
 
         if not vector_hits:
             return []
@@ -304,6 +314,50 @@ class HybridRetriever:
                 scored[self._bm25_doc_ids[doc_idx]] = score
 
         return self._normalize_scores(scored)
+
+    def _bm25_only_search(
+        self,
+        query: str,
+        top_k: int,
+        min_score: float,
+        source_type: Optional[SourceType] = None,
+    ) -> list[SearchResult]:
+        """
+        Embedding 不可用时的纯 BM25 兜底检索。
+
+        与混合路径构造完全一致的 SearchResult，分数为归一化 BM25 分数（[0,1]），
+        因此 min_score 语义不变（0.6 阈值对精确匹配仍可通过）。
+        """
+        b_scores = self._bm25_scores(query)
+        if not b_scores:
+            return []
+
+        scored = sorted(b_scores.items(), key=lambda x: x[1], reverse=True)
+        results: list[SearchResult] = []
+        for cid, score in scored[:top_k]:
+            if score < min_score:
+                continue
+            indexed = self.store.get_chunk(cid)
+            if indexed is None:
+                continue
+            if source_type is not None and indexed.source_type != source_type:
+                continue
+            results.append(SearchResult(
+                chunk_id=indexed.chunk_id,
+                content=indexed.content,
+                score=round(score, 4),
+                source={
+                    "file_name": indexed.source_ref,
+                    "page": indexed.page_ref or 0,
+                    "type": indexed.source_type.value,
+                },
+                metadata={
+                    "doc_id": indexed.doc_id,
+                    "seq_index": indexed.seq_index,
+                    **indexed.metadata,
+                },
+            ))
+        return results
 
     @staticmethod
     def _normalize_scores(scored: dict[str, float]) -> dict[str, float]:

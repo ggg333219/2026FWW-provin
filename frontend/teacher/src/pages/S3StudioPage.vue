@@ -158,9 +158,22 @@ async function handleGenerateAIScript() {
   generationStore.setGenerating(true)
   generationStore.setGenerateProgress(8, '正在分析课件内容')
   try {
+    // 尝试从 localStorage 读取证据包（S2 证据透传）
+    let evidence = null
+    try {
+      const raw = window.localStorage.getItem('fuww_s2_evidence_packet')
+      if (raw) {
+        evidence = JSON.parse(raw)
+        console.log('[S3StudioPage] 从 localStorage 读取证据包:', evidence)
+      }
+    } catch (e) {
+      console.warn('[S3StudioPage] 读取证据包失败', e)
+    }
+
     await teacherV1Api.coursewares.generateScript({
       courseId: courseId.value,
-      pageNum: editPage.value
+      pageNum: editPage.value,
+      evidence
     })
     await loadScriptAndNodes()
     generationStore.setGenerateProgress(100, '生成完成')
