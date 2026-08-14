@@ -29,8 +29,65 @@
 </template>
 
 <script setup>
+import { watch } from 'vue'
 import AppShell from '../components/layout/AppShell.vue'
 import TeacherIntentPanel from '../components/teacher/TeacherIntentPanel.vue'
+import { useIntentStore } from '../stores/intentStore'
+
+const INTENT_HANDOFF_KEY = 'fuww_intent_parsed'
+const intentStore = useIntentStore()
+
+/**
+ * S1 → S2 的冻结交接契约。
+ *
+ * 只发布已经确认的意图，避免 S2 在教师仍然澄清需求时使用半成品数据。
+ * 保留当前 IntentSummary 的 snake_case 字段，同时兼容旧任务文档中的
+ * subject 等字段，便于 S2 和后续 Workspace 编排统一消费。
+ */
+const persistConfirmedIntent = (summary, status, intentId) => {
+  if (typeof window === 'undefined') return
+
+  if (!['confirmed', 'locked'].includes(status)) {
+    // “重新开始”会生成新 session 并清空摘要；同步清理旧交接，避免 S2 误用上一次意图。
+    if (intentStore.sessionId && status === 'collecting' && !summary) {
+      try {
+        window.localStorage.removeItem(INTENT_HANDOFF_KEY)
+      } catch {
+        // localStorage 不可用时不阻塞 S1 初始化。
+      }
+    }
+    return
+  }
+
+  const topic = String(summary?.topic || '').trim()
+  if (!topic) return
+
+  const subject = String(summary?.subject || summary?.discipline || '').trim()
+  const payload = {
+    ...summary,
+    topic,
+    ...(subject ? { subject } : {}),
+    search_query: [topic, subject].filter(Boolean).join(' '),
+    intent_id: intentId || summary?.intent_id || '',
+    session_id: intentStore.sessionId || summary?.session_id || '',
+    schema_version: 1
+  }
+
+  try {
+    const serialized = JSON.stringify(payload)
+    if (window.localStorage.getItem(INTENT_HANDOFF_KEY) !== serialized) {
+      window.localStorage.setItem(INTENT_HANDOFF_KEY, serialized)
+    }
+  } catch {
+    // localStorage 不可用时不阻塞确认与页面跳转主流程。
+  }
+}
+
+watch(
+  () => [intentStore.intentSummary, intentStore.sessionStatus, intentStore.intentId],
+  ([summary, status, intentId]) => persistConfirmedIntent(summary, status, intentId),
+  { deep: true, immediate: true }
+)
 </script>
 
 <style scoped>
