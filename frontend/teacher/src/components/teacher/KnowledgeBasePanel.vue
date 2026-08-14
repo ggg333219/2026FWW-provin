@@ -143,8 +143,10 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useMaterialStore } from '../../stores/materialStore'
+
+const INTENT_HANDOFF_KEY = 'fuww_intent_parsed'
 
 const props = defineProps({
   /** 会话ID，传递给知识库索引 */
@@ -195,6 +197,32 @@ const handleSearch = async () => {
   searched.value = true
   await materialStore.searchRag({ query: query.value, topK: topK.value })
 }
+
+/**
+ * 独立 S2 页面与 Workspace 内嵌 S2 都复用本组件，因此在这里消费交接数据。
+ * 只填充空输入框，确保父层预设值或教师手动输入始终具有更高优先级。
+ */
+onMounted(() => {
+  if (typeof window === 'undefined' || query.value.trim()) return
+
+  try {
+    const raw = window.localStorage.getItem(INTENT_HANDOFF_KEY)
+    if (!raw) return
+
+    const intent = JSON.parse(raw)
+    if (!intent || typeof intent !== 'object' || Array.isArray(intent)) return
+
+    const topic = String(intent.topic || '').trim()
+    const subject = String(intent.subject || intent.discipline || '').trim()
+    const keywords = String(intent.search_query || [topic, subject].filter(Boolean).join(' ')).trim()
+    if (!topic || !keywords || query.value.trim()) return
+
+    query.value = keywords
+    void handleSearch()
+  } catch {
+    // 非法/过期缓存应被忽略，S2 仍保持可手动输入的正常空状态。
+  }
+})
 
 const handleFuseEvidence = async () => {
   if (!query.value.trim()) return
