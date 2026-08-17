@@ -15,14 +15,17 @@ export const teacherGenerationApi = {
   // ================================================================
 
   /** 创建生成任务 (gen/create) */
-  createGeneration: ({ course_id, title, markdown } = {}) =>
+  createGeneration: ({ session_id, course_id, title, markdown, evidence_packet, template_id } = {}) =>
     requestJson('/api/v1/gen/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        session_id: session_id || '',
         course_id,
         title: title || '',
-        markdown: markdown || ''
+        markdown: markdown || '',
+        evidence_packet: evidence_packet || null,
+        template_id: template_id || 'default'
       })
     }),
 

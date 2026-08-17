@@ -458,10 +458,10 @@ type RAGEvidenceResponse struct {
 }
 
 type KnowledgeUploadRequest struct {
-	SessionID        string   `json:"session_id"`
-	KnowledgeBaseID  string   `json:"knowledge_base_id,omitempty"`
-	Files            []string `json:"files,omitempty"`
-	Texts            []string `json:"texts,omitempty"`
+	SessionID       string   `json:"session_id"`
+	KnowledgeBaseID string   `json:"knowledge_base_id,omitempty"`
+	Files           []string `json:"files,omitempty"`
+	Texts           []string `json:"texts,omitempty"`
 }
 
 type KnowledgeUploadResponse struct {
@@ -491,6 +491,9 @@ type TeachingNodeItem struct {
 
 type GenerationCreateRequest struct {
 	SessionID      string          `json:"session_id"`
+	CourseID       string          `json:"course_id,omitempty"`
+	Title          string          `json:"title,omitempty"`
+	Markdown       string          `json:"markdown,omitempty"`
 	Intent         *IntentSummary  `json:"intent,omitempty"`
 	EvidencePacket *EvidencePacket `json:"evidence_packet,omitempty"`
 	TemplateID     string          `json:"template_id,omitempty"`
@@ -498,6 +501,7 @@ type GenerationCreateRequest struct {
 
 type GenerationCreateResponse struct {
 	TaskID         string `json:"task_id"`
+	GenerationID   string `json:"generation_id"`
 	Status         string `json:"status"`
 	GenerationType string `json:"generation_type,omitempty"`
 }

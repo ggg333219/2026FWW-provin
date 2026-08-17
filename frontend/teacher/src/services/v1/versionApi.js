@@ -70,14 +70,14 @@ export const teacherVersionApi = {
 
   /**
    * 提交修改命令
-   * POST /api/v1/gen/modify/{genId}
+   * POST /api/v1/gen/modify
    * @param {string} genId - generation ID
    * @param {Array} commands - 修改命令列表 [{type, node_id, content, ...}]
    */
   modify: (genId, commands) =>
-    requestJson(`/api/v1/gen/modify/${encodeURIComponent(genId)}`, {
+    requestJson('/api/v1/gen/modify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ commands })
+      body: JSON.stringify({ generation_id: genId, commands })
     })
 }

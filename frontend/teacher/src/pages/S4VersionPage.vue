@@ -186,14 +186,21 @@
 <script setup>
 import { ref } from 'vue'
 import { useVersionStore } from '../stores/versionStore'
+import { useGenerationStore } from '../stores/generationStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import AppShell from '../components/layout/AppShell.vue'
 import S4VersionExportCenter from '../components/teacher/S4VersionExportCenter.vue'
 
 const versionStore = useVersionStore()
+const generationStore = useGenerationStore()
 const workspaceStore = useWorkspaceStore()
 
-const genIdInput = ref(workspaceStore.currentCourseId || '')
+const genIdInput = ref(
+  generationStore.lastGenId ||
+  generationStore.restoreLastGenId() ||
+  workspaceStore.currentCourseId ||
+  ''
+)
 const rollbackTarget = ref(null)
 const changeType = ref('update_node')
 const changeTarget = ref('')

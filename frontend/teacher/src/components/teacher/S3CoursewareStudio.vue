@@ -134,6 +134,12 @@
         <header class="panel-header">
           <h3 class="panel-title">课件预览</h3>
           <div class="panel-header__right">
+            <!-- 主题切换 -->
+            <select v-model="previewTheme" class="theme-select" title="主题切换">
+              <option value="default">默认</option>
+              <option value="dark">暗色</option>
+              <option value="minimal">简约</option>
+            </select>
             <button
               class="studio-btn studio-btn--sm"
               :disabled="!previewHtml"
@@ -151,7 +157,26 @@
             size="sm"
           />
           <LoadingState v-else-if="previewLoading" type="loading" text="加载预览…" size="sm" variant="dots" />
-          <div v-else class="preview-canvas" v-html="previewHtml" />
+          <div v-else class="preview-wrapper">
+            <!-- 导航栏 -->
+            <div class="preview-nav" v-if="totalPages > 1">
+              <button class="nav-btn" :disabled="!hasPrevPage" @click="previewPage--">‹ 上一页</button>
+              <span class="nav-label">{{ currentPageLabel }}</span>
+              <button class="nav-btn" :disabled="!hasNextPage" @click="previewPage++">下一页 ›</button>
+            </div>
+            <!-- 预览内容（按页分片） -->
+            <div class="preview-canvas" :class="`preview-theme--${previewTheme}`" v-html="currentPageHtml" />
+            <!-- 进度条 -->
+            <div class="preview-progress" v-if="totalPages > 1">
+              <div
+                v-for="p in totalPages"
+                :key="p"
+                class="preview-progress__dot"
+                :class="{ 'preview-progress__dot--active': p - 1 === previewPage }"
+                @click="previewPage = p - 1"
+              />
+            </div>
+          </div>
         </div>
       </section>
 
@@ -215,9 +240,23 @@ const previewLoading = ref(false)
 const generationLogs = ref([])
 const logEnd = ref(null)
 
+// 预览导航
+const previewTheme = ref('default') // default | dark | minimal
+const previewPage = ref(0)
+const previewPages = ref([])
+
 const isGenerating = computed(() => generationStore.isGenerating)
 const progressPercent = computed(() => generationStore.generateProgress || 0)
 const progressText = computed(() => generationStore.generateStageText || '准备中…')
+
+const totalPages = computed(() => Math.max(1, previewPages.value.length))
+const hasPrevPage = computed(() => previewPage.value > 0)
+const hasNextPage = computed(() => previewPage.value < totalPages.value - 1)
+const currentPageLabel = computed(() => totalPages.value > 1 ? `${previewPage.value + 1} / ${totalPages.value}` : '预览')
+const currentPageHtml = computed(() => {
+  if (previewPages.value.length === 0) return previewHtml.value
+  return previewPages.value[previewPage.value] || previewHtml.value
+})
 
 const statusClass = computed(() => {
   if (generationStore.isGenerating) return 'badge--busy'
@@ -309,7 +348,25 @@ watch(() => generationStore.isGenerating, (v) => {
 function setPreviewHtml(html) {
   previewHtml.value = html
   previewLoading.value = false
-  addLog('预览已更新', 'success')
+  previewPage.value = 0
+  // 按 .slide 分割成独立页面
+  const slideRegex = /<div class="slide[^"]*"[^>]*>[\s\S]*?<\/div>\s*<\/div>/g
+  const slides = html.match(slideRegex)
+  if (slides && slides.length > 1) {
+    // 提取 HTML 骨架（head/body 结构）
+    const headEnd = html.indexOf('</head>')
+    const head = headEnd >= 0 ? html.slice(0, headEnd + 7) : '<html><head></head>'
+    const bodyEnd = html.lastIndexOf('</body>')
+    const bodyClose = bodyEnd >= 0 ? html.slice(bodyEnd) : '</body></html>'
+    // 每页嵌入一个 slide
+    previewPages.value = slides.map(s => {
+      // 提取 slide 内部的 class（用于区分主题）
+      return head + '\n<body>\n<div class="presentation">\n' + s + '\n</div>\n' + bodyClose
+    })
+  } else {
+    previewPages.value = [html]
+  }
+  addLog('预览已更新，共 ' + previewPages.value.length + ' 页', 'success')
 }
 
 function setPreviewError(msg) {
@@ -455,4 +512,35 @@ defineExpose({ setPreviewHtml, setPreviewError, setOutlineNodes, addLog })
 .log-entry--error { color: #dc2626; }
 .log-entry--warn { color: #92400e; }
 .log-entry__time { color: #94a3b8; flex-shrink: 0; }
+
+/* 预览导航 */
+.preview-wrapper { display: flex; flex-direction: column; height: 100%; }
+.preview-nav { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px; border-bottom: 1px solid #f1f5f9; flex-shrink: 0; }
+.nav-btn { padding: 4px 12px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; color: #475569; font-size: 12px; cursor: pointer; }
+.nav-btn:hover:not(:disabled) { border-color: #2d5f58; color: #2d5f58; }
+.nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.nav-label { font-size: 12px; color: #64748b; min-width: 60px; text-align: center; }
+.preview-canvas { flex: 1; overflow-y: auto; padding: 14px; }
+.preview-progress { display: flex; justify-content: center; gap: 6px; padding: 8px; border-top: 1px solid #f1f5f9; flex-shrink: 0; }
+.preview-progress__dot { width: 8px; height: 8px; border-radius: 50%; background: #e2e8f0; cursor: pointer; transition: all 0.15s; }
+.preview-progress__dot--active { background: #2d5f58; transform: scale(1.3); }
+.preview-progress__dot:hover { background: #94a3b8; }
+
+/* 主题选择器 */
+.theme-select { padding: 4px 8px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px; color: #475569; background: #fff; cursor: pointer; outline: none; }
+.theme-select:focus { border-color: #2d5f58; }
+
+/* 暗色主题 */
+.preview-theme--dark { background: #1e293b; color: #e2e8f0; }
+.preview-theme--dark :deep(h1), .preview-theme--dark :deep(h2) { color: #f1f5f9; }
+.preview-theme--dark :deep(p), .preview-theme--dark :deep(li) { color: #cbd5e1; }
+.preview-theme--dark :deep(.slide) { background: #334155; box-shadow: 0 2px 12px rgba(0,0,0,0.3); }
+.preview-theme--dark :deep(.title-slide) { background: linear-gradient(135deg, #1e40af, #4f46e5); }
+.preview-theme--dark :deep(.section-slide) { background: linear-gradient(135deg, #9d174d, #7e22ce); }
+
+/* 简约主题 */
+.preview-theme--minimal { background: #fff; color: #111827; }
+.preview-theme--minimal :deep(.slide) { background: #fff; box-shadow: none; border: 1px solid #e5e7eb; border-radius: 4px; padding: 24px; }
+.preview-theme--minimal :deep(.title-slide) { background: #f9fafb; border: 1px solid #d1d5db; }
+.preview-theme--minimal :deep(.section-slide) { background: #f9fafb; border-left: 3px solid #111827; }
 </style>
