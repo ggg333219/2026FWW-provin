@@ -170,13 +170,14 @@ async function handleGenerateAIScript() {
       console.warn('[S3StudioPage] 读取证据包失败', e)
     }
 
-    await teacherV1Api.coursewares.generateScript({
-      courseId: courseId.value,
-      pageNum: editPage.value,
-      evidence
+    const task = await generationStore.createCoursewareGeneration({
+      course_id: courseId.value,
+      title: courseName.value || `课件 ${courseId.value}`,
+      markdown: generationStore.currentScript,
+      evidence_packet: evidence
     })
-    await loadScriptAndNodes()
-    generationStore.setGenerateProgress(100, '生成完成')
+    if (!task.task_id) throw new Error('生成服务未返回 task_id')
+    await generationStore.waitForCoursewareGeneration(task.task_id)
   } catch (err) {
     console.warn('生成讲稿失败', err)
   } finally {

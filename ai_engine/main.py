@@ -141,14 +141,15 @@ class GenerateAudioRequest(BaseModel):
     nodes: List[GenerateAudioNode] = Field(default_factory=list)
     playback_id: str = ""
 
-# --- 核心接口实现 ---
+# =============================================================================
+# 旧版 generator.py 路由（已废弃，仅保留供兼容）
+# 前端已全部改用 /api/v1/gen/* 系列路由
+# =============================================================================
 
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
-    """
-    1. 上传接口：接收 PDF/PPTX，并自动触发解析
-    对应：智课生成模块 - 文档解析
-    """
+    """[DEPRECATED] 旧版上传接口，请使用 /api/v1/teacher/coursewares/upload"""
+    # 旧版实现：接收 PDF/PPTX，并自动触发解析
     file_id = f"doc_{uuid.uuid4().hex[:8]}"
     file_ext = Path(file.filename).suffix
     file_path = UPLOAD_DIR / f"{file_id}{file_ext}"
@@ -180,7 +181,7 @@ async def upload_document(file: UploadFile = File(...)):
 
 @app.post("/parse-document")
 async def parse_document(file: UploadFile = File(...)):
-    """直接返回结构化解析结果，供 Go 后端上传后落库。"""
+    """[DEPRECATED] 旧版解析接口，请使用 /api/v1/parse/process"""
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in {".pdf", ".pptx"}:
         raise HTTPException(status_code=400, detail="仅支持 PDF/PPTX 文件")
@@ -200,7 +201,7 @@ async def parse_document(file: UploadFile = File(...)):
 
 @app.post("/reconstruct-document")
 async def reconstruct_document(req: ReconstructDocumentRequest):
-    """将解析后的页文本重构为章节与讲授节点。"""
+    """[DEPRECATED] 旧版重构接口，已由 S3 节点生成替代"""
     parsed_document = req.parsed_document or {}
     if not parsed_document.get("parsed_pages"):
         raise HTTPException(status_code=400, detail="parsed_document.parsed_pages 不能为空")
@@ -213,10 +214,7 @@ async def reconstruct_document(req: ReconstructDocumentRequest):
 
 @app.get("/lessons/{doc_id}")
 async def get_lessons(doc_id: str, mode: str = "llm"):
-    """
-    2. 智课生成接口：获取生成的讲稿和思维导图
-    对应：创新点1 (导图) & 智课生成模块 (脚本)
-    """
+    """[DEPRECATED] 旧版课程获取接口，由 S3 生成流程替代"""
     if doc_id not in STORAGE:
         raise HTTPException(status_code=404, detail="文档未找到")
     
@@ -231,10 +229,7 @@ async def get_lessons(doc_id: str, mode: str = "llm"):
 
 @app.post("/chat")
 async def chat_with_ai(req: ChatRequest):
-    """
-    3. 实时问答与案例重讲接口
-    对应：创新点2 (溯源) & 创新点3 (重讲案例)
-    """
+    """[DEPRECATED] 旧版问答接口，已由 S1 意图理解 + RAG 替代"""
     if req.doc_id not in STORAGE:
         # 如果 doc_id 不存在且 STORAGE 非空，尝试匹配最近的一个文档（方便调试）
         if STORAGE:
@@ -261,7 +256,7 @@ async def chat_with_ai(req: ChatRequest):
 
 @app.post("/generate-script")
 async def generate_script(req: GenerateScriptRequest):
-    """基于页内容直接生成讲稿与导图（供 Go 后端调用）。"""
+    """[DEPRECATED] 旧版讲稿生成，请使用 /api/v1/gen/create"""
     try:
         parsed_document = {
             "doc_id": f"inline_{uuid.uuid4().hex[:8]}",
@@ -288,7 +283,7 @@ async def generate_script(req: GenerateScriptRequest):
 
 @app.post("/generate-node-script")
 async def generate_node_script(req: GenerateNodeScriptRequest):
-    """基于讲授节点生成可交互讲稿。"""
+    """[DEPRECATED] 旧版节点讲稿生成，请使用 /api/v1/gen/create"""
     try:
         generator = LessonGenerator(GenerationConfig(mode=req.mode))
         return generator.generate_node_script(req.teaching_node, req.course_name, evidence=req.evidence)
@@ -298,7 +293,7 @@ async def generate_node_script(req: GenerateNodeScriptRequest):
 
 @app.post("/generate-enhanced")
 async def generate_enhanced(req: GenerateFromMarkdownRequest):
-    """增强版三阶段生成：输出带 segment_type/estimated_seconds/interaction_hint/knowledge_card 的结构化脚本。"""
+    """[DEPRECATED] 旧版增强生成，请使用 /api/v1/gen/create"""
     try:
         generator = LessonGenerator(GenerationConfig(mode=req.mode))
         return generator.generate_from_markdown_enhanced(req.markdown, req.course_name)
@@ -308,7 +303,7 @@ async def generate_enhanced(req: GenerateFromMarkdownRequest):
 
 @app.post("/generate-from-markdown")
 async def generate_from_markdown(req: GenerateFromMarkdownRequest):
-    """三阶段最小链路：Markdown -> 节点树(node_id) -> 节点讲稿(node_id)。"""
+    """[DEPRECATED] 旧版 markdown 生成，请使用 /api/v1/gen/create"""
     try:
         generator = LessonGenerator(GenerationConfig(mode=req.mode))
         return generator.generate_from_markdown(req.markdown, req.course_name)
@@ -591,7 +586,8 @@ class PreviewRequest(BaseModel):
 
 class ModifyRequest(BaseModel):
     """修改命令请求"""
-    nodes: list[dict[str, Any]]
+    generation_id: str | None = None
+    nodes: list[dict[str, Any]] = []
     commands: list[dict[str, Any]]  # 结构化命令列表
     regenerate: bool = False
     course_name: str | None = None
@@ -719,13 +715,24 @@ async def modify_nodes(req: ModifyRequest):
     parser = CommandParser()
     patcher = NodePatcher()
 
+    # 版本管理页面只持有 generation_id；Studio 可以直接提交当前节点树。
+    # 两种调用都统一为同一条修改链路，避免前端重复读取快照。
+    nodes = req.nodes
+    if not nodes and req.generation_id:
+        snapshot = get_version_manager().load_version(req.generation_id)
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="版本不存在")
+        nodes = [node.model_dump() if hasattr(node, "model_dump") else node for node in snapshot.nodes_snapshot]
+    if not nodes:
+        raise HTTPException(status_code=400, detail="nodes 或 generation_id 至少提供一个")
+
     # 解析命令
     parse_result = parser.parse(req.commands)
     if parse_result.errors:
         return {"status": "parse_error", "errors": parse_result.errors}
 
     # 验证命令
-    valid_ids = {n["node_id"] for n in req.nodes}
+    valid_ids = {n["node_id"] for n in nodes}
     all_errors = []
     for cmd in parse_result.commands:
         errs = parser.validate(cmd, valid_ids)
@@ -736,13 +743,23 @@ async def modify_nodes(req: ModifyRequest):
     # 执行修补
     generator = NodeGenerator(NodeGenConfig()) if req.regenerate else None
     regenerate_fn = (lambda nid, node: generator.generate_single(node, req.course_name)) if generator else None
-    result = patcher.apply(req.nodes, parse_result.commands, regenerate_fn)
+    result = patcher.apply(nodes, parse_result.commands, regenerate_fn)
+
+    version_number = None
+    if req.generation_id and not result.errors:
+        version = get_version_manager().save_snapshot(
+            generation_id=req.generation_id,
+            nodes=result.nodes,
+            summary="编辑修改",
+        )
+        version_number = version.version_number
 
     return {
         "status": "ok" if not result.errors else "partial_error",
         "nodes": result.nodes,
         "changes": result.changes,
         "errors": result.errors,
+        "version_number": version_number,
     }
 
 

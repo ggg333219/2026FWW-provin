@@ -222,9 +222,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/authStore'
+import { useIntentStore } from '../stores/intentStore'
+import { useMaterialStore } from '../stores/materialStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import { useGenerationStore } from '../stores/generationStore'
 import { useAnalyticsStore } from '../stores/analyticsStore'
@@ -247,6 +249,8 @@ import S2MaterialWorkspace from '../components/teacher/S2MaterialWorkspace.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const intentStore = useIntentStore()
+const materialStore = useMaterialStore()
 const workspaceStore = useWorkspaceStore()
 const generationStore = useGenerationStore()
 const analyticsStore = useAnalyticsStore()
@@ -280,6 +284,73 @@ const menuItems = [
 const switchTab = (item) => {
   activeTab.value = item.key
 }
+
+function readHandoff(key) {
+  try {
+    return window.localStorage.getItem(key) || ''
+  } catch {
+    return ''
+  }
+}
+
+function writeHandoff(key, value) {
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // localStorage 不可用时不影响当前 Tab 的独立工作。
+  }
+}
+
+function persistWorkspaceIntent(summary, status, intentId) {
+  if (!['confirmed', 'locked'].includes(status)) return
+  const topic = String(summary?.topic || '').trim()
+  if (!topic) return
+  const subject = String(summary?.subject || summary?.discipline || '').trim()
+  writeHandoff('fuww_intent_parsed', JSON.stringify({
+    ...summary,
+    topic,
+    ...(subject ? { subject } : {}),
+    search_query: [topic, subject].filter(Boolean).join(' '),
+    intent_id: intentId || summary?.intent_id || '',
+    session_id: intentStore.sessionId || summary?.session_id || '',
+    schema_version: 1
+  }))
+}
+
+function restoreGenIdToVersion() {
+  const generationId = generationStore.lastGenId ||
+    generationStore.restoreLastGenId() ||
+    readHandoff('fuww_last_gen_id')
+  if (!generationId) return
+  versionGenId.value = generationId
+  if (!versionStore.genId) versionStore.genId = generationId
+}
+
+watch(
+  () => [intentStore.intentSummary, intentStore.sessionStatus, intentStore.intentId],
+  ([summary, status, intentId]) => persistWorkspaceIntent(summary, status, intentId),
+  { deep: true, immediate: true }
+)
+
+watch(
+  () => materialStore.latestEvidencePacket,
+  (entry) => {
+    if (entry?.packet) writeHandoff('fuww_s2_evidence_packet', JSON.stringify(entry.packet))
+  },
+  { deep: true }
+)
+
+watch(
+  () => generationStore.lastGenId,
+  (generationId) => {
+    if (generationId) writeHandoff('fuww_last_gen_id', generationId)
+  }
+)
+
+watch(activeTab, async (tab) => {
+  await nextTick()
+  if (tab === 'version') restoreGenIdToVersion()
+})
 
 const backToMiddle = () => {
   workspaceStore.backToMiddle()
@@ -340,13 +411,14 @@ const handleGenerateAIScript = async () => {
       console.warn('[WorkspacePage] 读取证据包失败', e)
     }
 
-    await teacherV1Api.coursewares.generateScript({
-      courseId: workspaceStore.currentCourseId,
-      pageNum: workspaceStore.currentEditPage,
-      evidence
+    const task = await generationStore.createCoursewareGeneration({
+      course_id: workspaceStore.currentCourseId,
+      title: workspaceStore.currentCourseName || '课件',
+      markdown: generationStore.currentScript,
+      evidence_packet: evidence
     })
-    await loadScriptAndNodes(workspaceStore.currentCourseId, workspaceStore.currentEditPage)
-    generationStore.setGenerateProgress(100, '生成完成')
+    if (!task.task_id) throw new Error('生成服务未返回 task_id')
+    await generationStore.waitForCoursewareGeneration(task.task_id)
   } catch (err) {
     console.warn('生成讲稿失败', err)
   } finally {
@@ -468,6 +540,7 @@ function formatVersionTime(iso) {
 }
 
 onMounted(async () => {
+  restoreGenIdToVersion()
   await workspaceStore.loadCoursewareList()
   if (workspaceStore.currentCourseId) {
     await loadCourseContext(workspaceStore.currentCourseId)

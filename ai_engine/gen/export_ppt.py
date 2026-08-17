@@ -96,7 +96,8 @@ class PPTExporter:
 
     def _create_presentation(self, template_id: str) -> Presentation:
         """创建或加载模板"""
-        if template_id != "default" and self.config.template_dir:
+        # 如果有模板目录，优先从模板文件加载
+        if self.config.template_dir:
             tmpl_path = Path(self.config.template_dir) / f"{template_id}.pptx"
             if tmpl_path.exists():
                 return Presentation(str(tmpl_path))

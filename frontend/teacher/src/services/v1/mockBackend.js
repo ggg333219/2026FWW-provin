@@ -514,7 +514,10 @@ function buildDefaultStore() {
     },
     materials: buildDefaultMaterialStore(),
     parseTasks: {},
-    ragDocuments: []
+    ragDocuments: [],
+    genTasks: {},
+    versionSnapshots: {},
+    exportJobs: {}
   }
 }
 
@@ -2180,6 +2183,18 @@ export function handleMockRequest(path, options = {}, originalError = null) {
         created_at: nowIso()
       }
 
+      // 预创建版本快照（供 S4 版本/导出 mock 使用）
+      store.versionSnapshots = store.versionSnapshots || {}
+      store.versionSnapshots[genId] = store.versionSnapshots[genId] || []
+      store.versionSnapshots[genId].push({
+        version_number: 1,
+        id: uid('ver'),
+        nodes_snapshot: [],
+        summary: '初始版本',
+        locked: false,
+        created_at: nowIso()
+      })
+
       // 异步模拟完成
       if (typeof window !== 'undefined') {
         setTimeout(() => {
@@ -2193,6 +2208,11 @@ export function handleMockRequest(path, options = {}, originalError = null) {
             { node_id: 'node_002', title: '核心知识点', summary: '通过示例讲解核心知识点', content: '核心知识点包括定义、性质和常见应用，下面通过具体案例来说明。', status: 'completed' },
             { node_id: 'node_003', title: '练习与总结', summary: '做题演练并总结易错点', content: '通过两道练习题巩固所学内容，并总结常见易错点。', status: 'completed' }
           ]
+          // 同步更新版本快照（供 S4 版本管理/导出使用）
+          if (store.versionSnapshots?.[genId]?.length > 0) {
+            const latest = store.versionSnapshots[genId][store.versionSnapshots[genId].length - 1]
+            latest.nodes_snapshot = deepClone(task.nodes)
+          }
           persistMockStore()
         }, 3000)
       }
@@ -2283,6 +2303,161 @@ export function handleMockRequest(path, options = {}, originalError = null) {
 
     if (pathname === '/api/v1/teacher/recommend' && method === 'POST') {
       return handleRecommendRequest(options)
+    }
+
+    // ================================================================
+    // version API（S4 版本管理）
+    // ================================================================
+
+    if (pathname.startsWith('/api/v1/version/') && method === 'GET') {
+      // /api/v1/version/{gen_id}/history
+      // /api/v1/version/{gen_id}/diff?v1=1&v2=2
+      // /api/v1/version/{gen_id}?v=N
+      const segments = pathname.split('/').filter(Boolean)
+      const genId = segments[3] || ''
+      const action = segments[4] || ''
+
+      if (action === 'history') {
+        const snapshots = store.versionSnapshots?.[genId] || []
+        return ok({
+          versions: snapshots.map(s => ({
+            version_number: s.version_number,
+            id: s.id,
+            summary: s.summary,
+            locked: s.locked || false,
+            created_at: s.created_at
+          }))
+        })
+      }
+
+      if (action === 'diff') {
+        const v1 = parseInt(searchParams.get('v1') || '0', 10)
+        const v2 = parseInt(searchParams.get('v2') || '0', 10)
+        const snapshots = store.versionSnapshots?.[genId] || []
+        const s1 = snapshots.find(s => s.version_number === v1)
+        const s2 = snapshots.find(s => s.version_number === v2)
+        return ok({
+          v1: { version_number: v1, nodes_count: s1?.nodes_snapshot?.length || 0 },
+          v2: { version_number: v2, nodes_count: s2?.nodes_snapshot?.length || 0 },
+          changes: [],
+          summary: `${v1} → ${v2} 对比`
+        })
+      }
+
+      if (!action) {
+        // 加载指定版本 /api/v1/version/{gen_id}
+        const v = parseInt(searchParams.get('v') || '0', 10)
+        const snapshots = store.versionSnapshots?.[genId] || []
+        const snap = v ? snapshots.find(s => s.version_number === v) : snapshots[snapshots.length - 1]
+        if (!snap) return ok({ version_number: 1, id: uid('ver'), nodes_snapshot: [], summary: '初始版本', locked: false, created_at: nowIso() })
+        return ok({
+          version_number: snap.version_number,
+          id: snap.id,
+          nodes_snapshot: snap.nodes_snapshot || [],
+          summary: snap.summary,
+          locked: snap.locked || false,
+          created_at: snap.created_at
+        })
+      }
+    }
+
+    if (pathname.startsWith('/api/v1/version/') && method === 'POST') {
+      const segments = pathname.split('/').filter(Boolean)
+      const genId = segments[3] || ''
+      const action = segments[4] || ''
+
+      if (action === 'rollback') {
+        const body = parseJsonBody(options)
+        const targetVersion = body.target_version || 1
+        store.versionSnapshots = store.versionSnapshots || {}
+        store.versionSnapshots[genId] = store.versionSnapshots[genId] || []
+        const snapshots = store.versionSnapshots[genId]
+        const target = snapshots.find(s => s.version_number === targetVersion)
+        if (!target) return ok({ current_version: targetVersion, status: 'done' })
+        // 回滚：创建新版本，内容来自目标版本
+        const newVer = {
+          version_number: snapshots.length + 1,
+          id: uid('ver'),
+          nodes_snapshot: deepClone(target.nodes_snapshot || []),
+          summary: `回滚到版本 ${targetVersion}`,
+          locked: false,
+          created_at: nowIso()
+        }
+        snapshots.push(newVer)
+        persistMockStore()
+        return ok({ current_version: newVer.version_number, status: 'done' })
+      }
+
+      if (action === 'lock') {
+        store.versionSnapshots = store.versionSnapshots || {}
+        store.versionSnapshots[genId] = store.versionSnapshots[genId] || []
+        const snapshots = store.versionSnapshots[genId]
+        if (snapshots.length > 0) {
+          snapshots[snapshots.length - 1].locked = true
+        }
+        persistMockStore()
+        return ok({ version: snapshots.length, locked: true })
+      }
+    }
+
+    // ================================================================
+    // export API（S4 异步导出）
+    // ================================================================
+
+    if (pathname.startsWith('/api/v1/export/') && method === 'POST') {
+      const segments = pathname.split('/').filter(Boolean)
+      const genId = segments[3] || ''
+      const body = parseJsonBody(options)
+      const jobId = uid('exp')
+
+      store.exportJobs = store.exportJobs || {}
+      store.exportJobs[jobId] = {
+        job_id: jobId,
+        generation_id: genId,
+        format: body.format || 'pptx',
+        status: 'pending',
+        download_url: null,
+        error: null,
+        created_at: nowIso()
+      }
+
+      // 模拟异步完成
+      if (typeof window !== 'undefined') {
+        setTimeout(() => {
+          const job = store.exportJobs[jobId]
+          if (!job) return
+          job.status = 'done'
+          job.download_url = `/download/${jobId}.${body.format || 'pptx'}`
+          persistMockStore()
+        }, 2000)
+      }
+
+      persistMockStore()
+      return ok({
+        job_id: jobId,
+        status: 'pending',
+        download_url: null,
+        error: null
+      })
+    }
+
+    if (pathname.startsWith('/api/v1/export/status/') && method === 'GET') {
+      const jobId = decodeURIComponent(pathname.split('/').pop() || '')
+      const job = store.exportJobs?.[jobId]
+      if (!job) {
+        return ok({
+          job_id: jobId,
+          status: 'done',
+          download_url: `/download/${jobId}.pptx`,
+          error: null
+        })
+      }
+      return ok({
+        job_id: job.job_id,
+        status: job.status,
+        download_url: job.download_url,
+        error: job.error || null
+      })
     }
 
     if (pathname.startsWith('/api/v1/teacher/iteration')) {

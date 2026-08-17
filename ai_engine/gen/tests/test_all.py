@@ -338,8 +338,8 @@ class TestFullPipeline(unittest.TestCase):
     def test_api_routes_registered(self):
         from ai_engine.main import app
         routes = {r.path for r in app.routes if hasattr(r, "path")}
-        expected = {"/gen/outline", "/gen/nodes", "/gen/export/ppt", "/gen/preview",
-                    "/gen/modify", "/gen/interactive", "/gen/full-pipeline", "/gen/parse-command"}
+        expected = {"/gen/outline", "/gen/nodes", "/gen/export/ppt", "/api/v1/gen/preview",
+                    "/api/v1/gen/modify", "/gen/interactive", "/gen/full-pipeline", "/gen/parse-command"}
         self.assertTrue(expected.issubset(routes), f"缺少路由: {expected - routes}")
 
 
