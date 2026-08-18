@@ -26,7 +26,7 @@
       </div>
     </section>
 
-    <div v-else class="window-grid" :class="windowGridClass">
+    <div v-else class="window-grid" :class="windowGridClass" :style="{ '--panel-width': panelWidthRatio + '%' }">
       <section v-if="isPreviewWindowOpen" class="dock-window">
         <header class="dock-head dock-head--labeled">
           <div class="dock-title">
@@ -226,6 +226,13 @@
         </section>
       </section>
 
+      <div
+        v-if="isPreviewWindowOpen && isEditorWindowOpen"
+        class="resize-handle"
+        @mousedown.prevent="startResize"
+        title="拖拽调整面板宽度"
+      ></div>
+
       <section v-if="isEditorWindowOpen" class="dock-window editor-dock">
         <header class="dock-head dock-head--labeled">
           <div class="dock-title">
@@ -386,6 +393,24 @@ const audioEl = ref(null)
 const isPlaying = ref(false)
 const currentSectionIndex = ref(0)
 const playbackRate = ref(1)
+const panelWidthRatio = ref(56) // preview panel width percent
+
+function startResize(e) {
+  document.addEventListener('mousemove', onResize)
+  document.addEventListener('mouseup', stopResize)
+  e.preventDefault()
+}
+function onResize(e) {
+  const grid = document.querySelector('.window-grid')
+  if (!grid) return
+  const rect = grid.getBoundingClientRect()
+  const ratio = Math.max(20, Math.min(80, ((e.clientX - rect.left) / rect.width) * 100))
+  panelWidthRatio.value = ratio
+}
+function stopResize() {
+  document.removeEventListener('mousemove', onResize)
+  document.removeEventListener('mouseup', stopResize)
+}
 
 const currentSection = computed(() => sections.value[currentSectionIndex.value] || null)
 
@@ -858,13 +883,23 @@ function estimateDuration(text) {
 .window-grid {
   flex: 1;
   min-height: 0;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1.28fr) minmax(0, 1fr);
+  display: flex;
+  flex-direction: row;
+  gap: 0;
+  overflow: hidden;
+  align-items: stretch;
 }
 
-.window-grid.two-open {
-  grid-template-columns: minmax(0, 1.28fr) minmax(0, 1fr);
+.window-grid.two-open > .dock-window {
+  flex-basis: auto;
+  flex-shrink: 1;
+  flex-grow: 1;
+  overflow: hidden;
+}
+.window-grid.two-open > .dock-window:first-child {
+  flex-basis: var(--panel-width, 56%);
+  flex-shrink: 0;
+  flex-grow: 0;
 }
 
 .window-grid.single-open {
@@ -875,18 +910,49 @@ function estimateDuration(text) {
   height: 100%;
 }
 
-.window-grid.single-open.preview-only {
-  grid-template-columns: minmax(0, 1.28fr) minmax(0, 1fr);
-}
-.window-grid.single-open.preview-only .dock-window {
-  grid-column: 1 / 2;
+.dock-window {
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 22px;
+  background: var(--wb-surface);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
-.window-grid.single-open.editor-only {
-  grid-template-columns: minmax(0, 1.28fr) minmax(0, 1fr);
+.window-grid.single-open.preview-only .dock-window {
+  width: 100%;
+  flex: 1;
 }
+
 .window-grid.single-open.editor-only .dock-window {
-  grid-column: 2 / 3;
+  width: 100%;
+  flex: 1;
+}
+
+.resize-handle {
+  width: 12px;
+  cursor: col-resize;
+  flex-shrink: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  transition: background 0.15s;
+}
+.resize-handle::after {
+  content: '';
+  width: 4px;
+  height: 40px;
+  border-radius: 2px;
+  background: var(--border-color, #e5e7eb);
+  transition: background 0.15s;
+}
+.resize-handle:hover::after,
+.resize-handle:active::after {
+  background: var(--accent-color, #3b82f6);
 }
 
 .dock-window {

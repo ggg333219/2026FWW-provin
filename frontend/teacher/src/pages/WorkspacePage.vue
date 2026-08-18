@@ -59,6 +59,8 @@
                 @save-script="handleSaveScript"
                 @update:current-script="generationStore.setScript($event)"
                 @update:current-script-nodes="generationStore.setNodes($event)"
+                @prev-page="handlePrevPage"
+                @next-page="handleNextPage"
               />
             </div>
             <div v-else-if="activeTab === 'stats'" class="tab-container">
@@ -367,6 +369,23 @@ const handleSelectPage = async (page) => {
   await loadScriptAndNodes(workspaceStore.currentCourseId, page)
 }
 
+const handlePrevPage = () => {
+  const page = workspaceStore.currentEditPage - 1
+  if (page >= 1) {
+    workspaceStore.currentEditPage = page
+    loadScriptAndNodes(workspaceStore.currentCourseId, page)
+  }
+}
+
+const handleNextPage = () => {
+  const page = workspaceStore.currentEditPage + 1
+  const max = workspaceStore.currentCourseTotalPages || Infinity
+  if (page <= max) {
+    workspaceStore.currentEditPage = page
+    loadScriptAndNodes(workspaceStore.currentCourseId, page)
+  }
+}
+
 const loadCourseContext = async (courseId) => {
   await Promise.all([
     loadScriptAndNodes(courseId, workspaceStore.currentEditPage),
@@ -396,6 +415,7 @@ const loadScriptAndNodes = async (courseId, page) => {
 }
 
 const handleGenerateAIScript = async () => {
+  if (!workspaceStore.currentCourseId) return
   generationStore.setGenerating(true)
   generationStore.setGenerateProgress(8, '正在分析课件内容')
   try {
@@ -411,14 +431,22 @@ const handleGenerateAIScript = async () => {
       console.warn('[WorkspacePage] 读取证据包失败', e)
     }
 
-    const task = await generationStore.createCoursewareGeneration({
-      course_id: workspaceStore.currentCourseId,
-      title: workspaceStore.currentCourseName || '课件',
-      markdown: generationStore.currentScript,
-      evidence_packet: evidence
+    generationStore.setGenerateProgress(30, '正在调用 AI 生成讲稿')
+    const resp = await teacherV1Api.coursewares.generateScript({
+      courseId: workspaceStore.currentCourseId,
+      pageNum: workspaceStore.currentEditPage,
+      evidence
     })
-    if (!task.task_id) throw new Error('生成服务未返回 task_id')
-    await generationStore.waitForCoursewareGeneration(task.task_id)
+    generationStore.setGenerateProgress(80, '正在加载讲稿')
+
+    // 重新从后端拉取刚生成的讲稿与节点
+    const payload = resp?.data || resp || {}
+    if (payload.content) {
+      generationStore.setScript(payload.content)
+    }
+    await loadScriptAndNodes(workspaceStore.currentCourseId, workspaceStore.currentEditPage)
+
+    generationStore.setGenerateProgress(100, '生成完成')
   } catch (err) {
     console.warn('生成讲稿失败', err)
   } finally {

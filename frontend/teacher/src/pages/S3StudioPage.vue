@@ -35,8 +35,8 @@
             <span class="page-indicator" v-if="courseId">
               第 <strong>{{ editPage }}</strong> / {{ totalPages || 1 }} 页
             </span>
-            <button class="btn btn-icon-round" :disabled="editPage <= 1" @click="editPage--; loadScriptAndNodes()" title="上一页">‹</button>
-            <button class="btn btn-icon-round" :disabled="editPage >= (totalPages || 1)" @click="editPage++; loadScriptAndNodes()" title="下一页">›</button>
+            <button class="btn btn-icon-round" :disabled="editPage <= 1" @click="editPage--; loadScriptAndNodes(); console.log('[S3] prev:', editPage)" title="上一页">‹</button>
+            <button class="btn btn-icon-round" :disabled="editPage >= (totalPages || 1)" @click="editPage++; loadScriptAndNodes(); console.log('[S3] next:', editPage, 'totalPages:', totalPages)" title="下一页">›</button>
           </div>
         </div>
 
@@ -52,7 +52,6 @@
         <template v-else>
           <TeacherScriptPanel
             :preview-url="previewUrl"
-            :preview-html="generationStore.previewHtml"
             :current-course-name="courseName"
             :current-course-id="courseId"
             :current-edit-page="editPage"
@@ -72,6 +71,8 @@
             @save-script="handleSaveScript"
             @update:current-script="generationStore.setScript($event)"
             @update:current-script-nodes="generationStore.setNodes($event)"
+            @prev-page="editPage--; loadScriptAndNodes()"
+            @next-page="editPage++; loadScriptAndNodes()"
           />
         </template>
       </div>
@@ -110,25 +111,41 @@ const previewUrl = computed(() => {
   return `${API_BASE}/api/courseware/${courseId.value}/page/${editPage.value}`
 })
 
-function loadCourseContext() {
+async function loadCourseContext() {
   const id = courseIdInput.value.trim()
   if (!id) {
     loadDemoMode()
     return
   }
   loading.value = true
-  generationStore.clearPreview()
   courseId.value = id
   courseName.value = `课件 ${id}`
   editPage.value = 1
   totalPages.value = 1
+
+  // Fetch course detail to get total pages
+  try {
+    const resp = await teacherV1Api.coursewares.list()
+    const list = resp?.data?.list || resp?.data || []
+    console.log('[S3] course list:', list.length, 'items, looking for id:', id)
+    const course = list.find(c => String(c.id) === id || c.course_id === id)
+    console.log('[S3] matched course:', course)
+    if (course && course.total_page > 0) {
+      totalPages.value = course.total_page
+      console.log('[S3] totalPages set to:', course.total_page)
+    } else {
+      console.warn('[S3] course not found in list or total_page=0')
+    }
+  } catch (e) {
+    console.error('[S3] load course list failed:', e)
+  }
+
   loadScriptAndNodes().finally(() => {
     loading.value = false
   })
 }
 
 function loadDemoMode() {
-  generationStore.clearPreview()
   courseId.value = DEMO_COURSE_ID
   courseName.value = '演示课件'
   editPage.value = 1
@@ -158,8 +175,8 @@ async function loadScriptAndNodes() {
 }
 
 async function handleGenerateAIScript() {
+  if (!courseId.value) return
   generationStore.setGenerating(true)
-  generationStore.clearPreview()
   generationStore.setGenerateProgress(8, '正在分析课件内容')
   try {
     // 尝试从 localStorage 读取证据包（S2 证据透传）
@@ -174,15 +191,22 @@ async function handleGenerateAIScript() {
       console.warn('[S3StudioPage] 读取证据包失败', e)
     }
 
-    const task = await generationStore.createCoursewareGeneration({
-      course_id: courseId.value,
-      title: courseName.value || `课件 ${courseId.value}`,
-      markdown: generationStore.currentScript,
-      evidence_packet: evidence
+    generationStore.setGenerateProgress(30, '正在调用 AI 生成讲稿')
+    const resp = await teacherV1Api.coursewares.generateScript({
+      courseId: courseId.value,
+      pageNum: editPage.value,
+      evidence
     })
-    if (!task.task_id) throw new Error('生成服务未返回 task_id')
-    await generationStore.waitForCoursewareGeneration(task.task_id)
-    await generationStore.renderCoursewarePreview(courseName.value || '课件预览')
+    generationStore.setGenerateProgress(80, '正在加载讲稿')
+
+    // 重新从后端拉取刚生成的讲稿与节点
+    const payload = resp?.data || resp || {}
+    if (payload.content) {
+      generationStore.setScript(payload.content)
+    }
+    await loadScriptAndNodes()
+
+    generationStore.setGenerateProgress(100, '生成完成')
   } catch (err) {
     console.warn('生成讲稿失败', err)
   } finally {
@@ -270,8 +294,11 @@ function buildDemoNodes(page) {
 
 <style scoped>
 .s3-page {
+  display: flex;
+  flex-direction: column;
   padding: 20px;
   min-height: calc(100vh - 140px);
+  overflow: hidden;
 }
 .page-header {
   display: flex;
