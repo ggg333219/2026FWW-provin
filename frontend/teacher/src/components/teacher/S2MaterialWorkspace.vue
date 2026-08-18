@@ -252,6 +252,15 @@ watch(
   () => materialStore.selectedMaterials.join(','),
   () => persistSelection()
 )
+
+// ---- 跨 Store 编排：供 WorkspacePage 调用 ----
+const searchQuery = ref('')
+
+function setSearchQuery(keywords) {
+  searchQuery.value = String(keywords || '').trim()
+}
+
+defineExpose({ setSearchQuery })
 </script>
 
 <style scoped>

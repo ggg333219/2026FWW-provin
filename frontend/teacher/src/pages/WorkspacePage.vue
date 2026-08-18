@@ -39,6 +39,7 @@
           <div :key="activeTab" class="tab-switch-host">
             <div v-if="activeTab === 'script'" class="tab-container">
               <TeacherScriptPanel
+                ref="scriptPanelRef"
                 :preview-url="previewUrl"
                 :current-course-name="workspaceStore.currentCourseName"
                 :current-course-id="workspaceStore.currentCourseId"
@@ -100,7 +101,7 @@
               <TeacherIntentPanel />
             </div>
             <div v-else-if="activeTab === 'material'" class="tab-container">
-              <S2MaterialWorkspace />
+              <S2MaterialWorkspace ref="materialWsRef" />
               <!-- 下一步：S2 → S3 讲稿编辑（同 Workspace 内嵌 S3 工作台） -->
               <div class="next-step-bar">
                 <button type="button" class="next-step-btn" @click="activeTab = 'script'">
@@ -258,6 +259,8 @@ const generationStore = useGenerationStore()
 const analyticsStore = useAnalyticsStore()
 const versionStore = useVersionStore()
 const shellRef = ref(null)
+const materialWsRef = ref(null)
+const scriptPanelRef = ref(null)
 
 const activeTab = ref('script')
 const isLeftMenuCollapsed = ref(window.innerWidth <= 1024)
@@ -328,6 +331,33 @@ function restoreGenIdToVersion() {
   if (!versionStore.genId) versionStore.genId = generationId
 }
 
+function restoreIntentToMaterial() {
+  try {
+    const raw = readHandoff('fuww_intent_parsed')
+    if (!raw) return
+    const intent = JSON.parse(raw)
+    const keywords = [intent.topic, intent.subject].filter(Boolean).join(' ')
+    if (keywords && materialWsRef.value?.setSearchQuery) {
+      materialWsRef.value.setSearchQuery(keywords)
+    }
+  } catch (e) {
+    console.warn('[WorkspacePage] 恢复 intent 数据失败', e)
+  }
+}
+
+function restoreEvidenceToScript() {
+  try {
+    const raw = readHandoff('fuww_s2_evidence_packet')
+    if (!raw) return
+    const packet = JSON.parse(raw)
+    if (scriptPanelRef.value?.setEvidencePacket) {
+      scriptPanelRef.value.setEvidencePacket(packet)
+    }
+  } catch (e) {
+    console.warn('[WorkspacePage] 恢复证据包失败', e)
+  }
+}
+
 watch(
   () => [intentStore.intentSummary, intentStore.sessionStatus, intentStore.intentId],
   ([summary, status, intentId]) => persistWorkspaceIntent(summary, status, intentId),
@@ -351,6 +381,8 @@ watch(
 
 watch(activeTab, async (tab) => {
   await nextTick()
+  if (tab === 'material') restoreIntentToMaterial()
+  if (tab === 'script') restoreEvidenceToScript()
   if (tab === 'version') restoreGenIdToVersion()
 })
 
@@ -572,6 +604,14 @@ onMounted(async () => {
   await workspaceStore.loadCoursewareList()
   if (workspaceStore.currentCourseId) {
     await loadCourseContext(workspaceStore.currentCourseId)
+  }
+  // 如果当前 Tab 是 material，恢复 intent 搜索关键词
+  if (activeTab.value === 'material') {
+    restoreIntentToMaterial()
+  }
+  // 如果当前 Tab 是 script，恢复证据包
+  if (activeTab.value === 'script') {
+    restoreEvidenceToScript()
   }
 })
 </script>
