@@ -729,6 +729,15 @@ function estimateDuration(text) {
   const size = Math.ceil(String(text || '').trim().length / 14)
   return Math.max(20, Math.min(90, size || 20))
 }
+
+// ---- 跨 Store 编排：供 WorkspacePage 调用 ----
+const incomingEvidence = ref(null)
+
+function setEvidencePacket(packet) {
+  incomingEvidence.value = packet || null
+}
+
+defineExpose({ setEvidencePacket })
 </script>
 
 <style scoped>
