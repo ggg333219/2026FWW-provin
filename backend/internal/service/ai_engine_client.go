@@ -879,7 +879,10 @@ func (c *aiEngineClient) VersionHistory(ctx context.Context, genID string) (*Ver
 
 func (c *aiEngineClient) VersionLoad(ctx context.Context, genID string, versionNumber int) (*VersionSnapshot, error) {
 	var result VersionSnapshot
-	path := "/api/v1/version/" + genID + "?v=" + strconv.Itoa(versionNumber)
+	path := "/api/v1/version/" + genID
+	if versionNumber > 0 {
+		path += "?v=" + strconv.Itoa(versionNumber)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("构造版本加载请求失败: %w", err)
