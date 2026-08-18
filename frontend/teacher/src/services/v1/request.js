@@ -112,6 +112,11 @@ export async function requestJson(path, options = {}) {
       if (!error.httpStatus) {
         setMockMode()
       }
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('fuww:mock-fallback', {
+          detail: { path, reason: error?.message || '网络不可达' }
+        }))
+      }
       return mockPayload
     }
     throw error

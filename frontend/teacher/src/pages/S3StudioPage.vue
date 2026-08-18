@@ -52,6 +52,7 @@
         <template v-else>
           <TeacherScriptPanel
             :preview-url="previewUrl"
+            :preview-html="generationStore.previewHtml"
             :current-course-name="courseName"
             :current-course-id="courseId"
             :current-edit-page="editPage"
@@ -116,6 +117,7 @@ function loadCourseContext() {
     return
   }
   loading.value = true
+  generationStore.clearPreview()
   courseId.value = id
   courseName.value = `课件 ${id}`
   editPage.value = 1
@@ -126,6 +128,7 @@ function loadCourseContext() {
 }
 
 function loadDemoMode() {
+  generationStore.clearPreview()
   courseId.value = DEMO_COURSE_ID
   courseName.value = '演示课件'
   editPage.value = 1
@@ -156,6 +159,7 @@ async function loadScriptAndNodes() {
 
 async function handleGenerateAIScript() {
   generationStore.setGenerating(true)
+  generationStore.clearPreview()
   generationStore.setGenerateProgress(8, '正在分析课件内容')
   try {
     // 尝试从 localStorage 读取证据包（S2 证据透传）
@@ -178,6 +182,7 @@ async function handleGenerateAIScript() {
     })
     if (!task.task_id) throw new Error('生成服务未返回 task_id')
     await generationStore.waitForCoursewareGeneration(task.task_id)
+    await generationStore.renderCoursewarePreview(courseName.value || '课件预览')
   } catch (err) {
     console.warn('生成讲稿失败', err)
   } finally {

@@ -20,6 +20,17 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.style import WD_STYLE_TYPE
 
 
+def _as_mapping(node: Any) -> dict[str, Any]:
+    """Normalize dict and Pydantic TeachingNode inputs for export rendering."""
+    if isinstance(node, dict):
+        return node
+    if hasattr(node, "model_dump"):
+        return node.model_dump()
+    if hasattr(node, "dict"):
+        return node.dict()
+    return vars(node)
+
+
 @dataclass
 class ExportDocConfig:
     """DOCX 导出配置"""
@@ -78,6 +89,7 @@ class DOCExporter:
         return doc
 
     def _add_node_section(self, doc: Document, node: dict[str, Any], index: int) -> None:
+        node = _as_mapping(node)
         node_type = node.get("type") or "content"
         title = node.get("title") or f"第{index}节"
         content = node.get("content") or node.get("script") or node.get("summary") or ""

@@ -23,6 +23,17 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 
 
+def _as_mapping(node: Any) -> dict[str, Any]:
+    """Normalize dict and Pydantic TeachingNode inputs for export rendering."""
+    if isinstance(node, dict):
+        return node
+    if hasattr(node, "model_dump"):
+        return node.model_dump()
+    if hasattr(node, "dict"):
+        return node.dict()
+    return vars(node)
+
+
 @dataclass
 class ExportPPTConfig:
     """PPTX 导出配置"""
@@ -60,6 +71,7 @@ class PPTExporter:
 
         # 节点页
         for node in nodes:
+            node = _as_mapping(node)
             node_type = node.get("type") or "content"
             handler = self._get_slide_handler(node_type)
             handler(prs, node)
@@ -84,6 +96,7 @@ class PPTExporter:
 
         self._add_title_slide(prs, course_name)
         for node in nodes:
+            node = _as_mapping(node)
             handler = self._get_slide_handler(node.get("type") or "content")
             handler(prs, node)
 
@@ -125,6 +138,7 @@ class PPTExporter:
 
     def _add_content_slide(self, prs: Presentation, node: dict[str, Any]) -> None:
         """标准内容页：标题 + 正文"""
+        node = _as_mapping(node)
         slide = prs.slides.add_slide(prs.slide_layouts[1])  # 内容布局
         if slide.shapes.title:
             slide.shapes.title.text = node.get("title", "")
@@ -141,6 +155,7 @@ class PPTExporter:
 
     def _add_title_content_slide(self, prs: Presentation, node: dict[str, Any]) -> None:
         """标题型内容页"""
+        node = _as_mapping(node)
         slide = prs.slides.add_slide(prs.slide_layouts[0])
         if slide.shapes.title:
             slide.shapes.title.text = node.get("title", "")
@@ -149,6 +164,7 @@ class PPTExporter:
 
     def _add_section_slide(self, prs: Presentation, node: dict[str, Any]) -> None:
         """章节分隔页"""
+        node = _as_mapping(node)
         slide = prs.slides.add_slide(prs.slide_layouts[2])  # 空白布局
         title = node.get("title", "新章节")
         txBox = slide.shapes.add_textbox(Inches(1), Inches(2.5), Inches(8), Inches(2))
@@ -159,6 +175,7 @@ class PPTExporter:
 
     def _add_two_column_slide(self, prs: Presentation, node: dict[str, Any]) -> None:
         """双栏内容页"""
+        node = _as_mapping(node)
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         if slide.shapes.title:
             slide.shapes.title.text = node.get("title", "")
@@ -170,6 +187,7 @@ class PPTExporter:
 
     def _add_quiz_slide(self, prs: Presentation, node: dict[str, Any]) -> None:
         """互动问答页"""
+        node = _as_mapping(node)
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         if slide.shapes.title:
             slide.shapes.title.text = f"💡 互动: {node.get('title', '随堂测验')}"
@@ -180,6 +198,7 @@ class PPTExporter:
 
     def _add_summary_slide(self, prs: Presentation, node: dict[str, Any]) -> None:
         """总结页"""
+        node = _as_mapping(node)
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         if slide.shapes.title:
             slide.shapes.title.text = "📌 本节小结"

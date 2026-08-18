@@ -517,6 +517,16 @@ type GenerationStatusResponse struct {
 	Error       string             `json:"error,omitempty"`
 }
 
+type GenerationPreviewRequest struct {
+	Nodes      []TeachingNodeItem `json:"nodes"`
+	CourseName string             `json:"course_name,omitempty"`
+}
+
+type GenerationPreviewResponse struct {
+	HTML      string `json:"html"`
+	NodeCount int    `json:"node_count"`
+}
+
 // =============================================================================
 // S4: 个性化 & 版本 & 导出 — 请求/响应类型
 // =============================================================================
@@ -829,6 +839,14 @@ func (c *aiEngineClient) GenerationStatus(ctx context.Context, taskID string) (*
 	return &result, nil
 }
 
+func (c *aiEngineClient) GenerationPreview(ctx context.Context, req GenerationPreviewRequest) (*GenerationPreviewResponse, error) {
+	var result GenerationPreviewResponse
+	if err := c.postJSON(ctx, "/api/v1/gen/preview", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // ---- S4: 个性化 & 版本 & 导出 ----
 
 func (c *aiEngineClient) GenerationModify(ctx context.Context, genID string, req GenerationModifyRequest) (*GenerationModifyResponse, error) {
@@ -922,6 +940,12 @@ func (c *aiEngineClient) ExportStatus(ctx context.Context, jobID string) (*Expor
 		return nil, fmt.Errorf("解析导出状态响应失败: %w", err)
 	}
 	return &result, nil
+}
+
+// ExportDownloadURL returns the AI Engine's local download URL for a completed job.
+// The teacher gateway wraps this URL so browsers do not need to know the AI Engine address.
+func (c *aiEngineClient) ExportDownloadURL(jobID, extension string) string {
+	return c.baseURL + "/download/" + jobID + "." + extension
 }
 
 func (c *aiEngineClient) postJSON(ctx context.Context, path string, reqBody any, out any) error {
