@@ -61,8 +61,15 @@
               ‹
             </button>
             <div class="slide-canvas">
+              <iframe
+                v-if="previewHtml"
+                :srcdoc="previewHtml"
+                title="生成课件预览"
+                class="preview-html-frame"
+                sandbox="allow-same-origin"
+              />
               <img
-                v-if="previewUrl && !previewImageFailed"
+                v-else-if="previewUrl && !previewImageFailed"
                 :src="previewUrl"
                 alt="课件预览"
                 class="preview-image"
@@ -306,6 +313,10 @@ const props = defineProps({
     type: String,
     default: ''
   },
+  previewHtml: {
+    type: String,
+    default: ''
+  },
   currentCourseName: {
     type: String,
     default: ''
@@ -415,6 +426,7 @@ const mockLineWidths = computed(() => {
 })
 
 const previewHintText = computed(() => {
+  if (props.previewHtml) return '已加载 S3 生成结果预览。'
   if (props.previewUrl && previewImageFailed.value) {
     return '预览图加载失败，已使用版式占位。可稍后刷新或检查课件预览服务。'
   }
@@ -1200,6 +1212,13 @@ function estimateDuration(text) {
   justify-content: center;
   overflow: hidden;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+.preview-html-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 10px;
+  background: #fff;
 }
 
 .preview-image {

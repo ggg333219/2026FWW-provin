@@ -1,6 +1,7 @@
 from datetime import datetime
 import sys
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -1149,6 +1150,7 @@ async def _run_export(job_id: str, nodes: list[dict], fmt: ExportFormat):
             ppt_path.write_bytes(buf.getvalue())
             job.metadata = job.metadata or {}
             job.metadata["ppt_path"] = str(ppt_path)
+            job.file_size = ppt_path.stat().st_size
 
         if fmt in (ExportFormat.BOTH, ExportFormat.DOCX):
             exporter = DOCExporter()
@@ -1157,6 +1159,7 @@ async def _run_export(job_id: str, nodes: list[dict], fmt: ExportFormat):
             doc_path.write_bytes(buf.getvalue())
             job.metadata = job.metadata or {}
             job.metadata["doc_path"] = str(doc_path)
+            job.file_size = doc_path.stat().st_size
 
         job.status = ExportStatus.DONE
         job.minio_path = str(export_dir / job_id)
@@ -1198,6 +1201,27 @@ async def export_status(job_id: str):
         download_url=download_url,
         error=job.error,
     )
+
+
+@app.get("/download/{job_id}.{extension}")
+async def export_download(job_id: str, extension: str):
+    """下载已完成的 PPTX/DOCX 导出文件。"""
+    async with _export_lock:
+        job = _export_tasks.get(job_id)
+
+    if not job or job.status != ExportStatus.DONE:
+        raise HTTPException(status_code=404, detail="导出文件不存在或任务尚未完成")
+
+    key = {"pptx": "ppt_path", "docx": "doc_path"}.get(extension.lower())
+    path = Path(job.metadata.get(key, "")) if key else None
+    if not path or not path.is_file():
+        raise HTTPException(status_code=404, detail="请求的导出格式不存在")
+
+    media_types = {
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    return FileResponse(path, media_type=media_types[extension.lower()], filename=path.name)
 
 
 # =============================================================================

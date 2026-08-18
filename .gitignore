@@ -6,6 +6,7 @@ logs/
 # Node & Frontend
 node_modules/
 dist/
+coverage/
 .vite/
 .playwright-mcp/
 .playwright-*/
@@ -74,3 +75,4 @@ projects/data/versions/
 ai_engine/data/
 
 data/versions/
+data/exports/

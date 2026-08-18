@@ -430,6 +430,8 @@ def main():
         nodes = stage1_outline()
         merged = stage2_scripts(nodes)
         gen_id = "integration_test_course"
+        # 集成测试使用专用 generation_id；清理上次运行的快照，保证每次从 v1 开始。
+        shutil.rmtree(PROJECT_ROOT / "data" / "versions" / gen_id, ignore_errors=True)
         vm = stage3_version(gen_id, merged)
         stage4_export_pptx(merged)
         stage5_export_docx(merged)

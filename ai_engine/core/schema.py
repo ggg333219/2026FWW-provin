@@ -432,6 +432,7 @@ class ExportJob(BaseModel):
     minio_path: Optional[str] = None
     download_url: Optional[str] = None
     file_size: Optional[int] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None

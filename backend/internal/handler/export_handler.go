@@ -2,6 +2,8 @@ package handler
 
 import (
 	"net/http"
+	"path"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -49,5 +51,34 @@ func (h *ExportHandler) Status(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "查询导出状态失败: " + err.Error()})
 		return
 	}
+	if resp.DownloadURL != "" {
+		extension := strings.TrimPrefix(path.Ext(resp.DownloadURL), ".")
+		if extension == "" {
+			extension = "pptx"
+		}
+		if _, ok := h.aiClient.(interface {
+			ExportDownloadURL(string, string) string
+		}); ok {
+			resp.DownloadURL = "/api/v1/export/download/" + jobID + "/" + extension
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
+}
+
+// Download  GET /api/v1/export/download/:job_id/:extension — 网关下载代理
+func (h *ExportHandler) Download(c *gin.Context) {
+	jobID := c.Param("job_id")
+	extension := strings.ToLower(c.Param("extension"))
+	if jobID == "" || (extension != "pptx" && extension != "docx") {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "导出文件参数错误"})
+		return
+	}
+	provider, ok := h.aiClient.(interface {
+		ExportDownloadURL(string, string) string
+	})
+	if !ok {
+		c.JSON(http.StatusNotImplemented, gin.H{"code": 501, "message": "当前 AI 客户端不支持导出下载"})
+		return
+	}
+	c.Redirect(http.StatusTemporaryRedirect, provider.ExportDownloadURL(jobID, extension))
 }

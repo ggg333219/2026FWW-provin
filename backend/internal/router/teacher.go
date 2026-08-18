@@ -158,6 +158,7 @@ func RegisterNewSkillRoutes(
 	{
 		gen.POST("/create", genHandler.Create)
 		gen.GET("/status/:task_id", genHandler.Status)
+		gen.POST("/preview", genHandler.PreviewHTML)
 		gen.GET("/preview/:gen_id", genHandler.Preview)
 		gen.POST("/modify/:gen_id", genHandler.Create) // 简化：后续拆为单独 modify handler
 	}
@@ -176,5 +177,6 @@ func RegisterNewSkillRoutes(
 	{
 		exp.POST("/:gen_id", exportHandler.Create)
 		exp.GET("/status/:job_id", exportHandler.Status)
+		exp.GET("/download/:job_id/:extension", exportHandler.Download)
 	}
 }

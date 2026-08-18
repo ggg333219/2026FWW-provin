@@ -46,13 +46,13 @@ export const teacherGenerationApi = {
     }),
 
   /** 获取预览 (gen/preview) */
-  preview: ({ nodes, generation_id } = {}) =>
+  preview: ({ nodes, course_name } = {}) =>
     requestJson('/api/v1/gen/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         nodes: nodes || [],
-        generation_id: generation_id || ''
+        course_name: course_name || '课件预览'
       })
     }),
 

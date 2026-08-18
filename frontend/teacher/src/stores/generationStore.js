@@ -44,6 +44,9 @@ export const useGenerationStore = defineStore('generation', {
     generateProgress: 0,
     generateStageText: '',
 
+    /** S3 生成结果的 HTML 预览，避免依赖旧的课件图片接口。 */
+    previewHtml: '',
+
     /** 迭代同步通知（S2 兼容） */
     iterationSyncNotice: ''
   }),
@@ -130,6 +133,25 @@ export const useGenerationStore = defineStore('generation', {
         await new Promise((resolve) => setTimeout(resolve, intervalMs))
       }
       throw new Error('课件生成超时，请稍后在版本管理中查看任务结果')
+    },
+
+    async renderCoursewarePreview(courseName = '课件预览') {
+      if (!this.currentScriptNodes.length) {
+        this.previewHtml = ''
+        return ''
+      }
+      const response = await teacherV1Api.generation.preview({
+        nodes: this.currentScriptNodes,
+        course_name: courseName
+      })
+      const payload = response?.data || response || {}
+      this.previewHtml = String(payload.html || '')
+      if (!this.previewHtml) throw new Error('预览服务未返回 HTML')
+      return this.previewHtml
+    },
+
+    clearPreview() {
+      this.previewHtml = ''
     },
 
     updateNode(index, patch) {
