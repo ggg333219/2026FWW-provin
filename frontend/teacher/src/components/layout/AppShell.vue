@@ -38,11 +38,14 @@ const toastMessage = ref('')
 let toastTimer = null
 
 const backendStatusClass = computed(() => {
-  return authStore.backendStatus === 'online' ? 'online' : authStore.backendStatus === 'offline' ? 'offline' : 'checking'
+  return ['online', 'offline', 'demo'].includes(authStore.backendStatus) ? authStore.backendStatus : 'checking'
 })
 
 const backendStatusText = computed(() => {
-  return authStore.backendStatus === 'online' ? '在线' : authStore.backendStatus === 'offline' ? '离线' : '检测中'
+  if (authStore.backendStatus === 'online') return '后端已连接'
+  if (authStore.backendStatus === 'offline') return '后端未连接'
+  if (authStore.backendStatus === 'demo') return '本地演示模式'
+  return '正在检测后端'
 })
 
 const platformConnectionClass = computed(() => {
@@ -69,17 +72,25 @@ const showToast = (message) => {
   }, 3200)
 }
 
+const handleMockFallback = () => {
+  authStore.backendStatus = 'demo'
+}
+
 defineExpose({ showToast })
 
 onMounted(async () => {
   if (typeof window !== 'undefined') {
     window.localStorage.setItem('fuww_teacher_origin', window.location.origin)
+    window.addEventListener('fuww:mock-fallback', handleMockFallback)
   }
-  authStore.checkHealth()
+  await authStore.checkHealth()
 })
 
 onUnmounted(() => {
   if (toastTimer) window.clearTimeout(toastTimer)
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('fuww:mock-fallback', handleMockFallback)
+  }
 })
 </script>
 

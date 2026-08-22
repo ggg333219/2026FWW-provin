@@ -476,14 +476,24 @@ class LLMClient:
 
     def _mock_response(self, messages: list[dict[str, str]]) -> str:
         """Mock 模式下的结构化意图响应。"""
+        from ai_engine.intent.rules import (
+            detect_interactive,
+            extract_duration,
+            extract_knowledge_points,
+            extract_output_formats,
+            extract_style,
+            extract_target_student,
+            extract_topic,
+        )
+
         text = "\n".join(m["content"] for m in messages if m["role"] == "teacher")
-        duration = self._mock_extract_duration(text)
-        topic = self._mock_extract_topic(text)
-        target_student = self._mock_extract_target_student(text)
-        style = self._mock_extract_style(text)
-        knowledge_points = self._mock_extract_knowledge_points(text)
-        output_format = self._mock_extract_output_format(text)
-        with_interactive = bool(re.search(r"互动|练习|测验|小测|讨论|问答", text))
+        duration = extract_duration(text)
+        topic = extract_topic(text)
+        target_student = extract_target_student(text)
+        style = extract_style(text)
+        knowledge_points = extract_knowledge_points(text)
+        output_format = extract_output_formats(text)
+        with_interactive = detect_interactive(text)
         key_difficulties = self._mock_extract_list(r"难点[:：]?\s*([\u4e00-\u9fa5\w\s,，]+)", text)
         expected_outcomes = self._mock_extract_list(r"目标[:：]?\s*([\u4e00-\u9fa5\w\s,，]+)", text)
         missing_fields = [

@@ -8,7 +8,7 @@ export const useAuthStore = defineStore('auth', {
     userId: '',
     role: '',
     token: '',
-    backendStatus: 'checking' // 'online' | 'offline' | 'checking'
+    backendStatus: 'checking' // 'online' | 'offline' | 'demo' | 'checking'
   }),
 
   getters: {
@@ -50,8 +50,12 @@ export const useAuthStore = defineStore('auth', {
       try {
         const res = await teacherV1Api.health()
         this.backendStatus = res.ok ? 'online' : 'offline'
+        if (res.ok && typeof window !== 'undefined') {
+          window.localStorage.removeItem('fuww_mock_mode')
+        }
       } catch {
-        this.backendStatus = 'online' // 演示模式下保持在线
+        const inDemoMode = typeof window !== 'undefined' && window.localStorage.getItem('fuww_mock_mode') === 'true'
+        this.backendStatus = inDemoMode ? 'demo' : 'offline'
       }
     },
 

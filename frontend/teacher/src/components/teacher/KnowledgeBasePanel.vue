@@ -79,11 +79,16 @@
         </div>
         <button
           class="primary-btn"
-          :disabled="!query.trim() || materialStore.searching"
+          :disabled="!query.trim() || materialStore.searching || hasConfirmedEmptySearch"
           @click="handleFuseEvidence"
         >
-          生成证据包
+          {{ hasConfirmedEmptySearch ? '暂无证据可融合' : '生成证据包' }}
         </button>
+      </div>
+
+      <div v-if="hasConfirmedEmptySearch" class="evidence-warning" role="status">
+        <strong>本次检索没有命中资料</strong>
+        <span>系统不会生成空证据包。请调整关键词、上传资料或先完成知识库索引。</span>
       </div>
 
       <div v-if="materialStore.searching" class="state-block">
@@ -174,8 +179,13 @@ const totalChunks = computed(() => {
   return list.reduce((sum, m) => sum + ((m.chunks || []).length), 0)
 })
 
-const latestPacket = computed(() => materialStore.latestEvidencePacket)
+const latestPacket = computed(() => {
+  const latest = materialStore.latestEvidencePacket
+  if (!latest) return null
+  return String(latest.query || '').trim() === query.value.trim() ? latest : null
+})
 const citations = computed(() => latestPacket.value?.packet?.citations || [])
+const hasConfirmedEmptySearch = computed(() => searched.value && !materialStore.searching && results.value.length === 0)
 
 const fmtTime = (iso) => {
   if (!iso) return ''
@@ -230,7 +240,7 @@ const handleFuseEvidence = async () => {
   if (packet) {
     emit('toast', '证据包已生成，可绑定到当前内容')
   } else {
-    emit('toast', '证据融合失败，请先索引知识库')
+    emit('toast', materialStore.error || '证据融合失败，请先索引知识库')
   }
 }
 
@@ -356,6 +366,23 @@ const handleBind = () => {
   color: #b91c1c;
   font-size: 13px;
 }
+
+.evidence-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: -2px 0 14px;
+  padding: 11px 13px;
+  border: 1px solid #f0d8a8;
+  border-radius: 11px;
+  color: #805d1e;
+  background: #fffbeb;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.evidence-warning strong { flex: 0 0 auto; }
+.evidence-warning span { color: #92713b; }
 
 /* ---------- 结果 ---------- */
 .result-list {

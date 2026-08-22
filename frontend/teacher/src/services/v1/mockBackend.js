@@ -2013,15 +2013,26 @@ function handleRagSearchRequest(store, options) {
     return true
   })
 
+  const normalizedQuery = query.toLowerCase()
+  const keywordLexicon = [
+    '快速排序', '冒泡排序', '复杂度', '定义域', '值域', '三角函数',
+    '函数', '导数', '排序', '算法', '图像', '概念'
+  ]
+  const queryKeywords = keywordLexicon.filter((keyword) => normalizedQuery.includes(keyword))
+  const asciiTokens = normalizedQuery.match(/[a-z0-9]{2,}/g) || []
+  const queryTokens = [...new Set([...queryKeywords, ...asciiTokens])]
+
   const scored = uniqueCandidates
     .map((c) => {
       const content = String(c.content || '')
-      let score = 0.5 + ((content.length % 5) * 0.03)
-      if (content.includes(query)) score = 0.95
-      const keywords = ['函数', '导数', '排序', '算法', '图像', '概念']
-      keywords.forEach((kw, idx) => {
-        if (content.includes(kw)) score = Math.max(score, 0.8 - idx * 0.04)
-      })
+      const normalizedContent = content.toLowerCase()
+      let score = normalizedContent.includes(normalizedQuery) ? 0.95 : 0
+      if (score === 0 && queryTokens.length > 0) {
+        const matched = queryTokens.filter((token) => normalizedContent.includes(token)).length
+        if (matched > 0) {
+          score = 0.62 + Math.min(0.28, matched * 0.09)
+        }
+      }
       return {
         chunk_id: c.chunkId,
         content,

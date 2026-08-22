@@ -1,6 +1,6 @@
 // S2 前端全链路仿真（mock 模式）：真实 store + api + mockBackend 协同
 // 通过 stub window.localStorage + 抛错的 fetch 强制走 mock 回退路径
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useMaterialStore } from '../stores/materialStore'
 import { teacherV1Api } from '../services/v1'
@@ -21,6 +21,7 @@ function createStorage() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   const storage = createStorage()
   globalThis.window = { localStorage: storage, setTimeout, clearTimeout }
   globalThis.localStorage = storage
@@ -43,6 +44,16 @@ describe('S2 前端链路（mock）', () => {
     await store.searchRag({ query: '函数', topK: 5, minScore: 0.6 })
     expect(store.ragResults.length).toBeGreaterThan(0)
     expect(store.ragResults[0].source?.file_name).toBeTruthy()
+  })
+
+  it('Mock RAG 对无关关键词返回 0 命中，不伪造高相关结果', async () => {
+    const store = useMaterialStore()
+    await store.loadMaterials()
+
+    const results = await store.searchRag({ query: '不存在的量子海绵课程资料XYZ', topK: 5, minScore: 0.6 })
+
+    expect(results).toHaveLength(0)
+    expect(store.ragResults).toHaveLength(0)
   })
 
   it('KB 文档来源显示真实文件名而非“素材”', async () => {
@@ -79,6 +90,40 @@ describe('S2 前端链路（mock）', () => {
     expect(packet).toBeTruthy()
     expect(packet.relevant_chunks).toBeTruthy()
     expect(store.evidencePackets.length).toBe(1)
+  })
+
+  it('空证据包不会被当作成功结果持久化', async () => {
+    vi.spyOn(teacherV1Api.rag, 'evidence').mockResolvedValueOnce({
+      data: {
+        evidence_packet: {
+          relevant_chunks: [],
+          synthesized_context: '',
+          citations: []
+        }
+      }
+    })
+    const store = useMaterialStore()
+    const packet = await store.generateEvidence({ query: '完全不存在的内容' })
+
+    expect(packet).toBe(null)
+    expect(store.evidencePackets).toHaveLength(0)
+    expect(window.localStorage.getItem('fuww_s2_evidence_packet')).toBe(null)
+    expect(store.error).toContain('未检索到可用证据')
+  })
+
+  it('清空证据历史时同时移除 S3 交接缓存', () => {
+    const store = useMaterialStore()
+    store.addEvidencePacket('快速排序', {
+      relevant_chunks: [{ chunk_id: 'chunk_1', content: '分治思想' }],
+      synthesized_context: '快速排序使用分治思想。',
+      citations: []
+    })
+    expect(window.localStorage.getItem('fuww_s2_evidence_packet')).toBeTruthy()
+
+    store.clearEvidencePackets()
+
+    expect(store.evidencePackets).toHaveLength(0)
+    expect(window.localStorage.getItem('fuww_s2_evidence_packet')).toBe(null)
   })
 
   it('parseProcess → 轮询到 done 且 chunks 含 materialId', async () => {
