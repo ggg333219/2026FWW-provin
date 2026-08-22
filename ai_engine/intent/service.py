@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
@@ -78,6 +79,7 @@ class IntentUnderstandingService:
             raise ValueError("至少需要一条教师消息")
 
         summary, engine_name, used_fallback = self._extract_summary(messages, raw_messages)
+        summary = self._merge_rule_evidence(summary, raw_messages)
         summary.missing_fields = self._infer_missing_fields(summary)
 
         teacher_turns = sum(1 for item in raw_messages if item["role"].lower() == "teacher")
@@ -190,7 +192,10 @@ class IntentUnderstandingService:
                     "你是教学设计智能体。根据教师与助手的完整多轮对话合并信息，严格返回 JSON。"
                     "字段为 topic、duration_minutes、style、target_student、knowledge_points、"
                     "output_format、with_interactive、key_difficulties、expected_outcomes、missing_fields。"
-                    "不要把助手的追问误当成教师需求；output_format 仅使用 ppt、doc。"
+                    "不要把助手的追问误当成教师需求；教师最后一次明确修订优先。"
+                    "讲课时间45、时长45或单独回答45均表示45分钟；style 接受任意自然语言描述。"
+                    "只有教师明确说到知识点、包括、涉及或重点讲解时才提取 knowledge_points，"
+                    "不要把教学风格、授课对象或互动要求误当知识点；output_format 仅使用 ppt、doc。"
                 ),
                 user=prompt,
             )
@@ -204,6 +209,28 @@ class IntentUnderstandingService:
     @staticmethod
     def _build_extract_prompt(messages: list[DialogueTurn]) -> str:
         return "\n".join(f"{item.role}: {item.content}" for item in messages) or "用户尚未提供明确内容。"
+
+    @staticmethod
+    def _merge_rule_evidence(summary: IntentSummary, raw_messages: list[dict[str, str]]) -> IntentSummary:
+        """用可确定的教师原话校正模型结果，模型仍负责规则无法覆盖的开放字段。"""
+        rule_summary = IntentEngine.extract_intent(raw_messages)
+        for field in ("topic", "duration_minutes", "style", "target_student"):
+            value = getattr(rule_summary, field, None)
+            if value not in (None, ""):
+                setattr(summary, field, value)
+        # Knowledge points are accepted only when the teacher explicitly labels
+        # them. This prevents ordinary request fragments (for example a style
+        # preference) from being promoted to course content by the model.
+        summary.knowledge_points = rule_summary.knowledge_points
+
+        teacher_text = "。".join(item["content"] for item in raw_messages if item["role"].lower() == "teacher")
+        if "互动设计" in teacher_text:
+            summary.with_interactive = rule_summary.with_interactive
+        elif rule_summary.with_interactive:
+            summary.with_interactive = True
+        if re.search(r"PPT|ppt|幻灯|课件|Word|word|DOCX|docx|教案|讲义|讲稿", teacher_text):
+            summary.output_format = rule_summary.output_format
+        return summary
 
     def _infer_missing_fields(self, summary: IntentSummary) -> list[str]:
         return [

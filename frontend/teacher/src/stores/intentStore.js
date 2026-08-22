@@ -13,6 +13,28 @@ const welcomeMessage = () => ({
 
 const createSessionId = () => `sess_s1_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
+const cleanRevisionValue = (value) => String(value ?? '').trim().replace(/[；;。]+$/g, '')
+
+export const buildIntentRevisionMessage = (revision = {}) => {
+  const segments = []
+  const topic = cleanRevisionValue(revision.topic)
+  const duration = Number.parseInt(revision.duration_minutes, 10)
+  const targetStudent = cleanRevisionValue(revision.target_student)
+  const style = cleanRevisionValue(revision.style)
+  const points = Array.isArray(revision.knowledge_points)
+    ? revision.knowledge_points
+    : String(revision.knowledge_points || '').split(/[、，,；;\n]/)
+  const knowledgePoints = points.map(cleanRevisionValue).filter(Boolean)
+
+  if (topic) segments.push(`课程主题：${topic}`)
+  if (Number.isFinite(duration) && duration > 0) segments.push(`授课时长：${duration}分钟`)
+  if (targetStudent) segments.push(`授课对象：${targetStudent}`)
+  if (style) segments.push(`教学风格：${style}`)
+  if (knowledgePoints.length) segments.push(`知识点：${knowledgePoints.join('、')}`)
+  segments.push(`互动设计：${revision.with_interactive ? '需要' : '不需要'}`)
+  return `请更新教学意图：${segments.join('；')}。`
+}
+
 const readStorage = (key, fallback = null) => {
   if (typeof window === 'undefined') return fallback
   try {
@@ -109,6 +131,10 @@ export const useIntentStore = defineStore('intent', {
       } finally {
         this.isAnalyzing = false
       }
+    },
+
+    async correctIntent(revision) {
+      return this.sendMessage(buildIntentRevisionMessage(revision))
     },
 
     async confirmIntent() {

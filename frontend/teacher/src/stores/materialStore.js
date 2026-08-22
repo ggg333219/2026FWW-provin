@@ -1,6 +1,26 @@
 import { defineStore } from 'pinia'
 import { teacherV1Api } from '../services/v1'
 
+const EVIDENCE_HANDOFF_KEY = 'fuww_s2_evidence_packet'
+
+export const isEvidencePacketUsable = (packet) => {
+  if (!packet || typeof packet !== 'object' || Array.isArray(packet)) return false
+  const chunks = Array.isArray(packet.relevant_chunks) ? packet.relevant_chunks : []
+  const citations = Array.isArray(packet.citations) ? packet.citations : []
+  // Evidence must be traceable. A synthesized sentence without any source
+  // chunk/citation is only a fallback message, not a usable evidence packet.
+  return chunks.length > 0 || citations.length > 0
+}
+
+const removeEvidenceHandoff = () => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(EVIDENCE_HANDOFF_KEY)
+  } catch {
+    // 浏览器禁用存储时仍允许清理内存状态。
+  }
+}
+
 /**
  * S2 多模态资料中心 + KB 知识库 Store
  *
@@ -257,10 +277,12 @@ export const useMaterialStore = defineStore('material', {
           context: params.context || {}
         })
         const packet = resp?.data?.evidence_packet || null
-        if (packet) {
+        if (isEvidencePacketUsable(packet)) {
           this.addEvidencePacket(params.query, packet)
+          return packet
         }
-        return packet
+        this.error = 'RAG 未检索到可用证据，请调整关键词或先索引资料'
+        return null
       } catch (err) {
         console.warn('证据融合失败', err)
         this.error = String(err?.message || err)
@@ -380,7 +402,7 @@ export const useMaterialStore = defineStore('material', {
       // 持久化最新证据包到 localStorage，供 S3 生成环节读取（成员B：S2→S3 证据透传）
       if (packet) {
         try {
-          window.localStorage.setItem('fuww_s2_evidence_packet', JSON.stringify(packet))
+          window.localStorage.setItem(EVIDENCE_HANDOFF_KEY, JSON.stringify(packet))
         } catch (e) {
           console.warn('[materialStore] 持久化证据包失败', e)
         }
@@ -393,6 +415,7 @@ export const useMaterialStore = defineStore('material', {
 
     clearEvidencePackets() {
       this.evidencePackets = []
+      removeEvidenceHandoff()
     },
 
     /** 清除选中素材的持久化（用于刷新后重建） */
@@ -409,6 +432,7 @@ export const useMaterialStore = defineStore('material', {
       this.parseTasks = []
       this.ragResults = []
       this.evidencePackets = []
+      removeEvidenceHandoff()
       this.uploading = false
       this.loading = false
       this.searching = false

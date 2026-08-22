@@ -46,25 +46,28 @@ async function isBackendReachable() {
   if (typeof fetch === 'undefined') return false
   const now = Date.now()
   if (lastProbeFailedAt && now - lastProbeFailedAt < PROBE_TTL_MS) return false
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 1500)
-    const resp = await fetch(`${API_BASE}/api/health`, {
-      method: 'GET',
-      signal: controller.signal,
-      cache: 'no-store'
-    })
-    clearTimeout(timer)
-    if (resp.ok) {
-      lastProbeFailedAt = 0
-      return true
+  for (const path of ['/health', '/api/health']) {
+    let timer = 0
+    try {
+      const controller = new AbortController()
+      timer = setTimeout(() => controller.abort(), 1500)
+      const resp = await fetch(`${API_BASE}${path}`, {
+        method: 'GET',
+        signal: controller.signal,
+        cache: 'no-store'
+      })
+      if (resp.ok) {
+        lastProbeFailedAt = 0
+        return true
+      }
+    } catch {
+      // 继续尝试兼容路径。
+    } finally {
+      if (timer) clearTimeout(timer)
     }
-    lastProbeFailedAt = now
-    return false
-  } catch {
-    lastProbeFailedAt = now
-    return false
   }
+  lastProbeFailedAt = now
+  return false
 }
 
 export async function requestJson(path, options = {}) {

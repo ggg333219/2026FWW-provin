@@ -99,7 +99,19 @@
           <span class="panel-kicker">LIVE INTENT MAP</span>
           <h2>教学意图画像</h2>
         </div>
-        <span class="status-pill" :class="statusClass"><i></i>{{ statusText }}</span>
+        <div class="intent-header-actions">
+          <button
+            v-if="store.intentSummary && !store.isConfirmed"
+            class="adjust-button"
+            type="button"
+            :aria-expanded="isEditing"
+            @click="toggleEditor"
+          >
+            <svg viewBox="0 0 24 24"><path d="M4 20h4l11-11-4-4L4 16v4zM13.5 6.5l4 4"/></svg>
+            {{ isEditing ? '收起调整' : '调整画像' }}
+          </button>
+          <span class="status-pill" :class="statusClass"><i></i>{{ statusText }}</span>
+        </div>
       </header>
 
       <div class="readiness-card">
@@ -112,6 +124,53 @@
           <p>{{ readinessDescription }}</p>
         </div>
       </div>
+
+      <form v-if="isEditing" class="intent-editor" @submit.prevent="saveRevision">
+        <div class="editor-heading">
+          <div>
+            <strong>确认前校正</strong>
+            <span>调整后会重新交给智能体理解，并同步后端意图档案</span>
+          </div>
+          <span class="editor-badge">可撤回</span>
+        </div>
+        <div class="editor-grid">
+          <label>
+            <span>课程主题 <i>必填</i></span>
+            <input v-model.trim="editForm.topic" aria-label="编辑课程主题" placeholder="例如：快速排序" />
+          </label>
+          <label>
+            <span>授课时长 <i>必填</i></span>
+            <div class="duration-input">
+              <input v-model="editForm.duration_minutes" aria-label="编辑授课时长" type="number" min="5" max="300" />
+              <b>分钟</b>
+            </div>
+          </label>
+          <label>
+            <span>授课对象</span>
+            <input v-model.trim="editForm.target_student" aria-label="编辑授课对象" placeholder="例如：大一计算机专业学生" />
+          </label>
+          <label>
+            <span>教学风格</span>
+            <input v-model.trim="editForm.style" aria-label="编辑教学风格" placeholder="可自由填写，如：活泼、有故事感" />
+          </label>
+          <label class="editor-wide">
+            <span>核心知识点</span>
+            <input v-model.trim="editForm.knowledge_points" aria-label="编辑核心知识点" placeholder="用顿号或逗号分隔，例如：分治思想、枢轴选择、分区过程" />
+          </label>
+        </div>
+        <label class="interaction-toggle">
+          <input v-model="editForm.with_interactive" type="checkbox" />
+          <span class="toggle-track"><i></i></span>
+          <span><b>加入互动设计</b><small>课堂游戏、投票、讨论或随堂测验</small></span>
+        </label>
+        <p v-if="editError" class="editor-error">{{ editError }}</p>
+        <div class="editor-actions">
+          <button type="button" class="editor-cancel" @click="closeEditor">取消</button>
+          <button type="submit" class="editor-save" :disabled="store.isAnalyzing">
+            {{ store.isAnalyzing ? '正在更新画像…' : '保存并重新分析' }}
+          </button>
+        </div>
+      </form>
 
       <div class="field-grid">
         <article v-for="field in coreFields" :key="field.key" class="intent-field" :class="{ filled: field.filled }">
@@ -152,7 +211,7 @@
 
       <footer class="intent-footer">
         <template v-if="!store.isConfirmed">
-          <button class="confirm-button" :disabled="!store.canConfirm || store.isConfirming" @click="confirm">
+          <button class="confirm-button" :disabled="!store.canConfirm || store.isConfirming || isEditing" @click="confirm">
             <svg viewBox="0 0 24 24"><path d="M5 12.5l4 4L19 7"/></svg>
             <span>{{ store.isConfirming ? '正在建立意图档案…' : '确认教学意图' }}</span>
           </button>
@@ -184,6 +243,16 @@ const router = useRouter()
 const draft = ref('')
 const messageList = ref(null)
 const composerInput = ref(null)
+const isEditing = ref(false)
+const editError = ref('')
+const editForm = ref({
+  topic: '',
+  duration_minutes: '',
+  target_student: '',
+  style: '',
+  knowledge_points: '',
+  with_interactive: false
+})
 
 const svg = (path) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${path}"/></svg>`
 const starters = [
@@ -245,6 +314,46 @@ const outputLabel = computed(() => {
   return 'PPT 课件'
 })
 
+const fillEditor = () => {
+  const summary = store.intentSummary || {}
+  editForm.value = {
+    topic: summary.topic || '',
+    duration_minutes: summary.duration_minutes || '',
+    target_student: summary.target_student || '',
+    style: summary.style || '',
+    knowledge_points: (summary.knowledge_points || []).join('、'),
+    with_interactive: Boolean(summary.with_interactive)
+  }
+  editError.value = ''
+}
+
+const toggleEditor = () => {
+  if (isEditing.value) closeEditor()
+  else {
+    fillEditor()
+    isEditing.value = true
+  }
+}
+const closeEditor = () => {
+  isEditing.value = false
+  editError.value = ''
+}
+const saveRevision = async () => {
+  const duration = Number.parseInt(editForm.value.duration_minutes, 10)
+  if (!editForm.value.topic.trim()) {
+    editError.value = '请填写课程主题。'
+    return
+  }
+  if (!Number.isFinite(duration) || duration < 5 || duration > 300) {
+    editError.value = '授课时长请填写 5–300 分钟。'
+    return
+  }
+  editError.value = ''
+  const updated = await store.correctIntent({ ...editForm.value, duration_minutes: duration })
+  if (updated) closeEditor()
+  await scrollToLatest()
+}
+
 const scrollToLatest = async () => {
   await nextTick()
   if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
@@ -280,6 +389,7 @@ const confirm = async () => {
 const handleReset = () => {
   if (store.hasStarted && !window.confirm('重新开始会清空当前 S1 对话与意图摘要，是否继续？')) return
   store.reset()
+  closeEditor()
   draft.value = ''
   nextTick(() => composerInput.value?.focus())
 }
@@ -463,6 +573,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .intent-header { padding: 20px 20px 17px; }
 .panel-kicker { display: block; margin-bottom: 5px; color: #739487; font-size: 8px; font-weight: 800; letter-spacing: .17em; }
 .intent-header h2 { margin: 0; color: #1e2d27; font-size: 17px; letter-spacing: -.02em; }
+.intent-header-actions { display: flex; align-items: center; gap: 7px; }
+.adjust-button { display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border: 1px solid #d9e7e0; border-radius: 999px; color: #436d5f; background: #f8fbf9; font-size: 9px; font-weight: 750; cursor: pointer; transition: .18s ease; }
+.adjust-button:hover { border-color: #a9c9bb; background: #eef7f2; transform: translateY(-1px); }
+.adjust-button svg { width: 11px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .status-pill { display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border-radius: 999px; color: #6f7e77; background: #f0f4f2; font-size: 9px; font-weight: 700; }
 .status-pill i { width: 5px; height: 5px; border-radius: 50%; background: #9eaaa4; }
 .status-pill.confirming { color: #8a681c; background: #fff7df; }
@@ -479,6 +593,38 @@ button { -webkit-tap-highlight-color: transparent; }
 .readiness-copy > span { color: #8b9892; font-size: 8px; font-weight: 700; letter-spacing: .08em; }
 .readiness-copy strong { display: block; margin-top: 3px; color: #25362f; font-size: 12px; }
 .readiness-copy p { margin: 4px 0 0; color: #89958f; font-size: 9px; line-height: 1.45; }
+
+.intent-editor { margin: 0 18px 14px; padding: 14px; border: 1px solid #cfe2d9; border-radius: 17px; background: linear-gradient(145deg, #f8fcfa, #f1f8f4); box-shadow: inset 0 1px 0 #fff, 0 10px 25px rgba(42, 86, 70, .06); }
+.editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.editor-heading strong, .editor-heading span { display: block; }
+.editor-heading strong { color: #25483d; font-size: 11px; }
+.editor-heading div > span { margin-top: 3px; color: #819189; font-size: 8px; line-height: 1.5; }
+.editor-heading .editor-badge { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; color: #4e806e; background: #e4f2eb; font-size: 7px; font-weight: 750; }
+.editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.editor-grid label { min-width: 0; }
+.editor-grid label > span { display: block; margin-bottom: 5px; color: #60756b; font-size: 8px; font-weight: 700; }
+.editor-grid label > span i { color: #a66d4f; font-style: normal; font-size: 7px; }
+.editor-grid input { width: 100%; height: 34px; padding: 0 10px; border: 1px solid #d8e4de; border-radius: 9px; outline: 0; color: #263c33; background: rgba(255,255,255,.9); font-size: 9px; transition: .18s ease; }
+.editor-grid input:focus { border-color: #73a691; box-shadow: 0 0 0 3px rgba(92, 159, 132, .1); }
+.editor-wide { grid-column: 1 / -1; }
+.duration-input { position: relative; }
+.duration-input input { padding-right: 39px; }
+.duration-input b { position: absolute; top: 50%; right: 10px; color: #899890; font-size: 8px; transform: translateY(-50%); }
+.interaction-toggle { display: flex; align-items: center; gap: 8px; margin-top: 11px; padding: 9px 10px; border-radius: 11px; background: rgba(255,255,255,.72); cursor: pointer; }
+.interaction-toggle > input { position: absolute; opacity: 0; pointer-events: none; }
+.toggle-track { position: relative; flex: 0 0 auto; width: 28px; height: 17px; border-radius: 999px; background: #cdd9d3; transition: .2s ease; }
+.toggle-track i { position: absolute; top: 3px; left: 3px; width: 11px; height: 11px; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgba(36, 68, 56, .18); transition: .2s ease; }
+.interaction-toggle > input:checked + .toggle-track { background: #4f947b; }
+.interaction-toggle > input:checked + .toggle-track i { transform: translateX(11px); }
+.interaction-toggle b, .interaction-toggle small { display: block; }
+.interaction-toggle b { color: #38574b; font-size: 9px; }
+.interaction-toggle small { margin-top: 2px; color: #8c9993; font-size: 7px; }
+.editor-error { margin: 8px 0 0; color: #a0443f; font-size: 8px; }
+.editor-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
+.editor-actions button { padding: 7px 10px; border-radius: 9px; font-size: 8px; font-weight: 750; cursor: pointer; }
+.editor-cancel { border: 1px solid #dbe5e0; color: #718078; background: #fff; }
+.editor-save { border: 1px solid #315f56; color: #fff; background: #315f56; box-shadow: 0 5px 12px rgba(49, 95, 86, .16); }
+.editor-save:disabled { opacity: .45; cursor: not-allowed; }
 
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 18px; }
 .intent-field { position: relative; display: flex; align-items: center; gap: 9px; min-width: 0; padding: 11px; border: 1px solid #e8eeeb; border-radius: 14px; background: #fff; }
@@ -536,6 +682,10 @@ button { -webkit-tap-highlight-color: transparent; }
   .starter-prompts { grid-template-columns: 1fr; }
   .starter-prompts button:nth-child(2) { display: none; }
   .field-grid { grid-template-columns: 1fr; }
+  .intent-header { align-items: flex-start; gap: 10px; }
+  .intent-header-actions { align-items: flex-end; flex-direction: column-reverse; }
+  .editor-grid { grid-template-columns: 1fr; }
+  .editor-wide { grid-column: auto; }
   .message-block { max-width: 86%; }
   .input-hints span:nth-child(2) { display: none; }
 }

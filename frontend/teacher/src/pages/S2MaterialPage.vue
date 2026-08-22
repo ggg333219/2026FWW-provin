@@ -22,9 +22,9 @@
       <!-- 独立路由入口：复用 S2 资料中心工作台（与 Workspace 内嵌 tab 同一组件，路由/内嵌统一） -->
       <S2MaterialWorkspace />
 
-      <!-- 下一步：S2 → S3（跳转到 Workspace 的 S3 讲稿工作台，真正的透传验收路径） -->
+      <!-- 下一步：S2 → S3，和顶部步骤导航保持同一正式创建路径。 -->
       <div class="next-step-bar">
-        <router-link :to="{ name: 'Workspace' }" class="next-step-btn">
+        <router-link :to="{ name: 'S3Studio' }" class="next-step-btn">
           下一步：进入 S3 生成 →
         </router-link>
       </div>

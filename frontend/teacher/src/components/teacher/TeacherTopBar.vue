@@ -187,6 +187,15 @@ defineEmits(['logout'])
   background: #ef4444;
 }
 
+.backend-status.demo {
+  color: #9a6700;
+  background: #fffbeb;
+}
+
+.backend-status.demo .status-dot {
+  background: #f59e0b;
+}
+
 .backend-status.checking {
   color: #2f6052;
 }
