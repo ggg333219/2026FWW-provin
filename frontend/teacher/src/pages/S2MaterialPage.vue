@@ -13,7 +13,7 @@
           <div class="step-pills">
             <router-link :to="{ name: 'S1Intent' }" class="pill">S1 意图</router-link>
             <span class="pill active">S2 资料</span>
-            <router-link :to="{ name: 'S3Studio' }" class="pill">S3 生成</router-link>
+            <button class="pill pill-button" @click="requestContinue">S3 生成</button>
             <router-link :to="{ name: 'S4Version' }" class="pill">S4 版本</router-link>
           </div>
         </div>
@@ -24,9 +24,19 @@
 
       <!-- 下一步：S2 → S3，和顶部步骤导航保持同一正式创建路径。 -->
       <div class="next-step-bar">
-        <router-link :to="{ name: 'S3Studio' }" class="next-step-btn">
+        <button class="next-step-btn" @click="requestContinue">
           下一步：进入 S3 生成 →
-        </router-link>
+        </button>
+        <div v-if="showNoEvidenceConfirm" class="continue-confirm" role="alert">
+          <div>
+            <strong>当前还没有绑定可用证据</strong>
+            <p>可以返回上方上传并检索资料，也可以明确选择无资料生成。后者将仅依据 S1 教学意图生成，内容依据和引用会更少。</p>
+          </div>
+          <div class="continue-actions">
+            <button class="secondary-btn" @click="showNoEvidenceConfirm = false">继续补充资料</button>
+            <button class="danger-outline-btn" @click="confirmWithoutEvidence">确认无资料生成</button>
+          </div>
+        </div>
       </div>
     </div>
   </AppShell>
@@ -34,8 +44,48 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import AppShell from '../components/layout/AppShell.vue'
 import S2MaterialWorkspace from '../components/teacher/S2MaterialWorkspace.vue'
+import { useMaterialStore, isEvidencePacketUsable } from '../stores/materialStore'
+import { useIntentStore } from '../stores/intentStore'
+
+const router = useRouter()
+const materialStore = useMaterialStore()
+const intentStore = useIntentStore()
+intentStore.initialize()
+
+const showNoEvidenceConfirm = ref(false)
+
+const readEvidence = () => {
+  if (isEvidencePacketUsable(materialStore.s3EvidencePayload)) return materialStore.s3EvidencePayload
+  if (typeof window === 'undefined') return null
+  try {
+    return JSON.parse(window.localStorage.getItem('fuww_s2_evidence_packet') || 'null')
+  } catch {
+    return null
+  }
+}
+
+const writeGenerationMode = (mode) => {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(`fuww_s2_generation_mode:${intentStore.sessionId}`, mode)
+}
+
+const requestContinue = () => {
+  if (isEvidencePacketUsable(readEvidence())) {
+    writeGenerationMode('with_evidence')
+    router.push({ name: 'S3Studio' })
+    return
+  }
+  showNoEvidenceConfirm.value = true
+}
+
+const confirmWithoutEvidence = () => {
+  materialStore.clearEvidencePackets()
+  writeGenerationMode('without_evidence')
+  router.push({ name: 'S3Studio' })
+}
 
 /** Mock 模式检测与退出 */
 const isMockModeActive = ref(false)
@@ -134,6 +184,11 @@ const exitMockMode = () => {
   border-color: #2f605a;
 }
 
+.pill-button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
 .next-step-bar {
   margin-top: 24px;
   padding-top: 16px;
@@ -151,14 +206,74 @@ const exitMockMode = () => {
   font-weight: 600;
   text-decoration: none;
   transition: background 0.15s;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
 }
 
 .next-step-btn:hover {
   background: #1e4a44;
 }
 
+.continue-confirm {
+  margin-top: 14px;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  text-align: left;
+  border: 1px solid #f1d5a8;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fffaf0, #fffdf8);
+  color: #7c4a15;
+}
+
+.continue-confirm strong {
+  font-size: 14px;
+}
+
+.continue-confirm p {
+  margin: 5px 0 0;
+  max-width: 720px;
+  color: #8a6337;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.continue-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.secondary-btn,
+.danger-outline-btn {
+  padding: 8px 14px;
+  border-radius: 9px;
+  font: 600 12px/1.2 inherit;
+  cursor: pointer;
+}
+
+.secondary-btn {
+  border: 1px solid #d8e3de;
+  background: #fff;
+  color: #46645a;
+}
+
+.danger-outline-btn {
+  border: 1px solid #d49a55;
+  background: transparent;
+  color: #9a5713;
+}
+
 @media (max-width: 760px) {
   .page-header {
+    flex-direction: column;
+  }
+
+  .continue-confirm {
+    align-items: flex-start;
     flex-direction: column;
   }
 }

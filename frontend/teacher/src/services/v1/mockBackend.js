@@ -1741,7 +1741,11 @@ function handleS2MaterialRequest(store, pathname, searchParams, method, options)
   // 搜索（/api/v1/teacher/materials/search?keyword=...）
   if (segments.length === 5 && segments[4] === 'search' && method === 'GET') {
     const keyword = cleanText(searchParams.get('keyword'))
+    const sessionId = cleanText(searchParams.get('session_id'))
     let list = deepClone(store.materials)
+    if (sessionId) {
+      list = list.filter((m) => cleanText(m.sessionId || m.session_id) === sessionId)
+    }
     if (keyword) {
       const kw = keyword.toLowerCase()
       list = list.filter((m) => String(m.title || '').toLowerCase().includes(kw))
@@ -1819,6 +1823,7 @@ function handleParseRequest(store, pathname, method, options) {
             : seedChunksForFileRich(asset.file_name, materialId)
           store.materials.unshift({
             id: materialId,
+            sessionId: current.session_id,
             title: asset.file_name,
             type: MATERIAL_TYPE_BY_EXT[fileExt(asset.file_name)] || 'document',
             fileType: String(asset.file_name).split('.').pop() || 'file',
@@ -1885,6 +1890,7 @@ function handleParseRequest(store, pathname, method, options) {
         const materialId = uid('mat')
         store.materials.unshift({
           id: materialId,
+          sessionId: current.session_id,
           title: fileName,
           type: 'video',
           fileType: 'mp4',

@@ -42,6 +42,9 @@ const removeEvidenceHandoff = () => {
  */
 export const useMaterialStore = defineStore('material', {
   state: () => ({
+    /** 当前教师工作流会话；用于阻止 Pinia 内存态跨草稿复用 */
+    activeSessionId: '',
+
     /** 素材列表 */
     materials: [],
     // materials[i] 结构参考：
@@ -182,13 +185,34 @@ export const useMaterialStore = defineStore('material', {
      * 加载素材列表
      * 优先使用后端 /api/v1/teacher/materials，失败时回退到 Mock。
      */
-    async loadMaterials() {
+    async loadMaterials(params = {}) {
+      const requestedSessionId = String(params.sessionId || '').trim()
+      if (requestedSessionId && this.activeSessionId !== requestedSessionId) {
+        this.materials = []
+        this.selectedMaterials = []
+        this.chunks = []
+        this.parseTasks = []
+        this.ragResults = []
+        this.evidencePackets = []
+        removeEvidenceHandoff()
+      }
+      this.activeSessionId = requestedSessionId
       this.loading = true
+      this.error = ''
       try {
-        const resp = await teacherV1Api.material.search()
+        const resp = await teacherV1Api.material.search({
+          sessionId: requestedSessionId
+        })
         const list = resp?.data
         if (Array.isArray(list)) {
-          this.setMaterials(list)
+          const preserved = params.preserveSessionMaterials
+            ? this.materials.filter((item) => String(item.sessionId || '') === requestedSessionId)
+            : []
+          const remoteIds = new Set(list.map((item) => item.id))
+          this.setMaterials([
+            ...list,
+            ...preserved.filter((item) => !remoteIds.has(item.id))
+          ])
         }
       } catch (err) {
         console.warn('加载素材列表失败', err)
@@ -426,6 +450,7 @@ export const useMaterialStore = defineStore('material', {
     },
 
     reset() {
+      this.activeSessionId = ''
       this.materials = []
       this.selectedMaterials = []
       this.chunks = []

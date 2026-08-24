@@ -15,6 +15,13 @@
           </div>
         </div>
       </div>
+      <div v-if="generationMode === 'without_evidence'" class="evidence-warning" role="status">
+        <div>
+          <strong>当前为无参考资料生成模式</strong>
+          <span>本次内容仅依据 S1 教学意图生成，不会伪造资料引用；需要更准确的内容时可返回补充教材或课件。</span>
+        </div>
+        <router-link :to="{ name: 'S2Material' }">返回补充资料</router-link>
+      </div>
       <div class="page-body">
         <!-- 课件上下文工具栏 -->
         <div class="s3-toolbar">
@@ -87,14 +94,24 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import AppShell from '../components/layout/AppShell.vue'
 import TeacherScriptPanel from '../components/teacher/TeacherScriptPanel.vue'
 import { useGenerationStore } from '../stores/generationStore'
 import { teacherV1Api } from '../services/v1'
 import { API_BASE } from '../config/api'
+import { useIntentStore } from '../stores/intentStore'
 
 const generationStore = useGenerationStore()
+const intentStore = useIntentStore()
+intentStore.initialize()
+const generationMode = ref('')
+
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    generationMode.value = window.localStorage.getItem(`fuww_s2_generation_mode:${intentStore.sessionId}`) || ''
+  }
+})
 
 const DEMO_COURSE_ID = 'demo_course_s3'
 const DEMO_TOTAL_PAGES = 3
@@ -327,6 +344,40 @@ function buildDemoNodes(page) {
 .page-body {
   flex: 1;
 }
+.evidence-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 0 16px;
+  padding: 13px 16px;
+  border: 1px solid #f0d5a8;
+  border-radius: 12px;
+  background: #fffaf0;
+  color: #7c4a15;
+}
+.evidence-warning div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.evidence-warning strong {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+.evidence-warning span {
+  font-size: 12px;
+  line-height: 1.55;
+  color: #8a6337;
+}
+.evidence-warning a {
+  flex-shrink: 0;
+  color: #2f605a;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
 .step-pills {
   display: flex;
   gap: 6px;
@@ -513,6 +564,11 @@ function buildDemoNodes(page) {
 
 @media (max-width: 760px) {
   .page-header {
+    flex-direction: column;
+  }
+  .evidence-warning,
+  .evidence-warning div {
+    align-items: flex-start;
     flex-direction: column;
   }
 }

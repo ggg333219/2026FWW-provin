@@ -27,6 +27,7 @@
       <div class="s2-col">
         <S2MaterialHub
           :session-id="sessionId"
+          :auto-load="false"
           @toast="handleToast"
           @task-finished="handleTaskFinished"
         />
@@ -77,25 +78,31 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMaterialStore } from '../../stores/materialStore'
+import { useIntentStore } from '../../stores/intentStore'
 import S2MaterialHub from './S2MaterialHub.vue'
 import KnowledgeBasePanel from './KnowledgeBasePanel.vue'
 
 const materialStore = useMaterialStore()
+const intentStore = useIntentStore()
 const route = useRoute()
 const router = useRouter()
 
 const EVIDENCE_KEY = 'fuww_s2_bound_evidence'
 const SELECTION_KEY = 'fuww_s2_selected_materials'
-const SESSION_KEY = 'fuww_s2_session_id'
 const NODE_REF_KEY = 'fuww_s2_current_node_ref'
+const WORKFLOW_SESSION_KEY = 'fuww_workflow_session_id'
+
+intentStore.initialize()
+
+const scopedKey = (base) => `${base}:${sessionId.value}`
 
 /** 会话ID：同一浏览器会话内保持稳定，供 S2 → KB → S3 串联 */
 const sessionId = computed(() => {
   if (typeof window === 'undefined') return 's2_demo'
-  let id = window.localStorage.getItem(SESSION_KEY)
+  let id = intentStore.sessionId || window.localStorage.getItem(WORKFLOW_SESSION_KEY)
   if (!id) {
-    id = `sess_s2_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
-    window.localStorage.setItem(SESSION_KEY, id)
+    id = `sess_s1_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    window.localStorage.setItem(WORKFLOW_SESSION_KEY, id)
   }
   return id
 })
@@ -119,7 +126,7 @@ const boundEvidenceList = ref([])
 
 const persistEvidence = () => {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(EVIDENCE_KEY, JSON.stringify(boundEvidenceList.value))
+  window.localStorage.setItem(scopedKey(EVIDENCE_KEY), JSON.stringify(boundEvidenceList.value))
 }
 
 const handleBindEvidence = (payload) => {
@@ -142,11 +149,13 @@ const handleBindEvidence = (payload) => {
 
 const unbindEvidence = (id) => {
   boundEvidenceList.value = boundEvidenceList.value.filter((ev) => ev.id !== id)
+  if (boundEvidenceList.value.length === 0) materialStore.clearEvidencePackets()
   persistEvidence()
 }
 
 const clearEvidence = () => {
   boundEvidenceList.value = []
+  materialStore.clearEvidencePackets()
   persistEvidence()
 }
 
@@ -177,9 +186,9 @@ const cancelEditNodeRef = () => {
 const persistNodeRef = () => {
   if (typeof window === 'undefined') return
   if (currentNodeRef.value) {
-    window.localStorage.setItem(NODE_REF_KEY, currentNodeRef.value)
+    window.localStorage.setItem(scopedKey(NODE_REF_KEY), currentNodeRef.value)
   } else {
-    window.localStorage.removeItem(NODE_REF_KEY)
+    window.localStorage.removeItem(scopedKey(NODE_REF_KEY))
   }
 }
 
@@ -208,11 +217,11 @@ const handleTaskFinished = (payload) => {
 
 const persistSelection = () => {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(SELECTION_KEY, JSON.stringify(materialStore.selectedMaterials))
+  window.localStorage.setItem(scopedKey(SELECTION_KEY), JSON.stringify(materialStore.selectedMaterials))
 }
 
 onMounted(async () => {
-  await materialStore.loadMaterials()
+  await materialStore.loadMaterials({ sessionId: sessionId.value })
 
   // 恢复当前节点引用（优先级：路由 query > localStorage）
   if (typeof window !== 'undefined') {
@@ -224,22 +233,26 @@ onMounted(async () => {
       router.replace({ query: { ...route.query, nodeRef: undefined } })
     } else {
       // 从 localStorage 恢复
-      const saved = window.localStorage.getItem(NODE_REF_KEY)
+      const saved = window.localStorage.getItem(scopedKey(NODE_REF_KEY))
       if (saved) currentNodeRef.value = saved
     }
     persistNodeRef()
 
     // 恢复选中状态（刷新不丢失）
     try {
-      const raw = window.localStorage.getItem(SELECTION_KEY)
+      const raw = window.localStorage.getItem(scopedKey(SELECTION_KEY))
       if (raw) {
         const ids = JSON.parse(raw)
         if (Array.isArray(ids)) materialStore.restoreSelection(ids)
       }
-      const evRaw = window.localStorage.getItem(EVIDENCE_KEY)
+      const evRaw = window.localStorage.getItem(scopedKey(EVIDENCE_KEY))
       if (evRaw) {
         const parsed = JSON.parse(evRaw)
-        if (Array.isArray(parsed)) boundEvidenceList.value = parsed
+        if (Array.isArray(parsed)) {
+          boundEvidenceList.value = parsed
+          const latest = parsed[parsed.length - 1]?.packet
+          if (latest) window.localStorage.setItem('fuww_s2_evidence_packet', JSON.stringify(latest))
+        }
       }
     } catch {
       // noop
