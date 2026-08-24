@@ -18,6 +18,7 @@ export const teacherMaterialApi = {
    * @param {string} params.type - 素材类型
    * @param {number} params.page - 页码
    * @param {number} params.pageSize - 每页数量
+   * @param {string} params.sessionId - 当前教学工作流会话；传入后仅返回本会话资料
    * @returns {Promise<Object>}
    */
   search: (params = {}) => {
@@ -26,6 +27,7 @@ export const teacherMaterialApi = {
     if (params.type) query.set('type', params.type)
     if (params.page) query.set('page', params.page)
     if (params.pageSize) query.set('pageSize', params.pageSize)
+    if (params.sessionId) query.set('session_id', params.sessionId)
     return requestJson(`/api/v1/teacher/materials/search?${query.toString()}`)
   },
 

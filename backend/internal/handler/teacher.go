@@ -144,16 +144,16 @@ func parseChunkItem(c service.ChunkItem, materialID string) gin.H {
 		meta["source_type"] = c.SourceType
 	}
 	chunk := gin.H{
-		"chunkId":       c.ChunkID,
-		"materialId":    materialID,
-		"content":       c.Content,
-		"pageStart":     c.PageRef,
-		"pageEnd":       c.PageRef,
-		"seqIndex":      c.SeqIndex,
-		"timeStart":     nil,
-		"timeEnd":       nil,
+		"chunkId":        c.ChunkID,
+		"materialId":     materialID,
+		"content":        c.Content,
+		"pageStart":      c.PageRef,
+		"pageEnd":        c.PageRef,
+		"seqIndex":       c.SeqIndex,
+		"timeStart":      nil,
+		"timeEnd":        nil,
 		"relevanceScore": 0.9,
-		"metadata":      meta,
+		"metadata":       meta,
 	}
 	return chunk
 }
@@ -162,7 +162,17 @@ func parseChunkItem(c service.ChunkItem, materialID string) gin.H {
 // 兼容前端 materialStore.loadMaterials() 与 /search?keyword= 过滤。
 func (h *TeacherHandler) ListMaterials(c *gin.Context) {
 	keyword := strings.TrimSpace(c.Query("keyword"))
+	sessionID := strings.TrimSpace(c.Query("session_id"))
 	page, pageSize := parsePagination(c.Query("page"), c.Query("pageSize"))
+
+	// 教师创建流程必须按工作流隔离。旧 Course 表尚无 session/owner 字段，
+	// 因此不能把全库课件伪装成本次草稿资料；带 session_id 时仅返回已明确
+	// 归属当前会话的资料。目前解析产物由 /parse/status 返回并在前端登记，
+	// 后续 material_assets 表落地后可在这里改为真实会话查询。
+	if sessionID != "" {
+		c.JSON(http.StatusOK, gin.H{"code": 200, "message": "请求成功", "data": []any{}})
+		return
+	}
 
 	var courses []model.Course
 	q := h.db.Order("created_at desc")
@@ -275,14 +285,14 @@ func (h *TeacherHandler) chunksForMaterial(materialID string) []any {
 			content = fmt.Sprintf("第 %d 页（课件预览页，SourceText 待 AI 解析填充）", pages[i].PageIndex)
 		}
 		chunks = append(chunks, gin.H{
-			"chunkId":       "page_" + pages[i].ID,
-			"materialId":    materialID,
-			"content":       content,
-			"pageStart":     pages[i].PageIndex,
-			"pageEnd":       pages[i].PageIndex,
-			"seqIndex":      pages[i].PageIndex - 1,
-			"timeStart":     nil,
-			"timeEnd":       nil,
+			"chunkId":        "page_" + pages[i].ID,
+			"materialId":     materialID,
+			"content":        content,
+			"pageStart":      pages[i].PageIndex,
+			"pageEnd":        pages[i].PageIndex,
+			"seqIndex":       pages[i].PageIndex - 1,
+			"timeStart":      nil,
+			"timeEnd":        nil,
 			"relevanceScore": 0.9,
 			"metadata": map[string]any{
 				"source_type": sourceTypePreview(pages[i].ImageURL),

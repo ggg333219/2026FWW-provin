@@ -154,6 +154,47 @@ describe('S2 前端链路（mock）', () => {
     expect(chunks[0].materialId).toBeTruthy()
   })
 
+  it('带 sessionId 加载时只返回当前教学任务上传的素材', async () => {
+    const store = useMaterialStore()
+    await store.loadMaterials({ sessionId: 'sess_isolated_a' })
+    expect(store.materials).toHaveLength(0)
+
+    const resp = await teacherV1Api.material.parseProcess({
+      sessionId: 'sess_isolated_a',
+      filePaths: ['会话A讲义.txt'],
+      fileContents: { '会话A讲义.txt': '会话 A 的函数教学资料。' }
+    })
+
+    for (let i = 0; i < 15; i += 1) {
+      await sleep(400)
+      const status = await teacherV1Api.material.parseStatus(resp.data.task_id)
+      if (status.data.status === 'done') break
+    }
+
+    await store.loadMaterials({ sessionId: 'sess_isolated_a' })
+    expect(store.materials.map((item) => item.title)).toContain('会话A讲义.txt')
+
+    await store.loadMaterials({ sessionId: 'sess_isolated_b' })
+    expect(store.materials).toHaveLength(0)
+  })
+
+  it('真实后端暂未持久化会话素材时，刷新解析状态不会清掉同会话本地结果', async () => {
+    vi.spyOn(teacherV1Api.material, 'search').mockResolvedValue({ data: [] })
+    const store = useMaterialStore()
+    store.activeSessionId = 'sess_preserve'
+    store.addMaterial({
+      id: 'mat_local_a',
+      sessionId: 'sess_preserve',
+      title: '本地解析结果.txt',
+      chunks: [{ chunkId: 'chunk_local_a', content: '本次会话内容' }]
+    })
+
+    await store.loadMaterials({ sessionId: 'sess_preserve', preserveSessionMaterials: true })
+
+    expect(store.materials.map((item) => item.id)).toEqual(['mat_local_a'])
+    expect(store.chunks).toHaveLength(1)
+  })
+
   it('PDF/二进制文件不产生乱码切片（%PDF 应回退为种子内容）', async () => {
     const store = useMaterialStore()
     await store.loadMaterials()

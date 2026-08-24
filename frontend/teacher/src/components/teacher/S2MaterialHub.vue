@@ -247,6 +247,7 @@ async function uploadOne(file) {
     const placeholderId = `placeholder_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
     const placeholderMaterial = {
       id: placeholderId,
+      sessionId: props.sessionId,
       title: file.name,
       type: fileTypeFromName(file.name),
       fileType: String(file.name).split('.').pop() || 'file',
@@ -474,7 +475,7 @@ function pollParseTask(taskId, fileName, placeholderId) {
         const materialIds = data.materialIds || data.material_ids || []
         if (materialIds.length > 0) {
           // 刷新列表拿到真实素材记录，避免本地重复登记
-          await materialStore.loadMaterials()
+          await materialStore.loadMaterials({ sessionId: props.sessionId, preserveSessionMaterials: true })
           const materialId = materialIds[0]
           const target = materialStore.materials.find((m) => m.id === materialId)
           if (target) {
@@ -486,7 +487,7 @@ function pollParseTask(taskId, fileName, placeholderId) {
         }
 
         // 无 materialIds：先刷新列表，看后端是否已登记同名素材（Mock 端解析完成后会自动入库）
-        await materialStore.loadMaterials()
+        await materialStore.loadMaterials({ sessionId: props.sessionId, preserveSessionMaterials: true })
         const matched = [...materialStore.materials].find(
           (m) => m.title === fileName && m.parseStatus === 'done' && (m.chunks || []).length > 0
         )
@@ -501,6 +502,7 @@ function pollParseTask(taskId, fileName, placeholderId) {
           if (!exists) {
             const newMaterial = {
               id: materialId,
+              sessionId: props.sessionId,
               title: fileName,
               type: fileTypeFromName(fileName),
               fileType: String(fileName).split('.').pop() || 'file',
@@ -517,7 +519,7 @@ function pollParseTask(taskId, fileName, placeholderId) {
         }
       } else {
         // 无 chunks 返回，尝试从后端拉取最新素材列表
-        await materialStore.loadMaterials()
+        await materialStore.loadMaterials({ sessionId: props.sessionId, preserveSessionMaterials: true })
       }
       emit('toast', status === 'done'
         ? `「${fileName}」解析完成，生成 ${chunkCount} 个切片`
@@ -546,7 +548,7 @@ async function removeMaterial(id) {
 
 onMounted(async () => {
   if (props.autoLoad) {
-    await materialStore.loadMaterials()
+    await materialStore.loadMaterials({ sessionId: props.sessionId })
   }
 })
 
