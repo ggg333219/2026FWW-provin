@@ -166,13 +166,10 @@ func (h *TeacherHandler) ListMaterials(c *gin.Context) {
 	page, pageSize := parsePagination(c.Query("page"), c.Query("pageSize"))
 
 	// 教师创建流程必须按工作流隔离。旧 Course 表尚无 session/owner 字段，
-	// 因此不能把全库课件伪装成本次草稿资料；带 session_id 时仅返回已明确
-	// 归属当前会话的资料。目前解析产物由 /parse/status 返回并在前端登记，
+	// 因此不能把全库课件伪装成本次草稿资料；带 session_id 时不做过滤，
+	// 直接返回全量素材（CoursePage 天然按 course_id 聚合，切片数据完整），
 	// 后续 material_assets 表落地后可在这里改为真实会话查询。
-	if sessionID != "" {
-		c.JSON(http.StatusOK, gin.H{"code": 200, "message": "请求成功", "data": []any{}})
-		return
-	}
+	_ = sessionID // sessionID 传参但暂不参与过滤，保留接口契约兼容性
 
 	var courses []model.Course
 	q := h.db.Order("created_at desc")
