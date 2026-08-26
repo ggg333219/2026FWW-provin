@@ -160,7 +160,7 @@ func RegisterNewSkillRoutes(
 		gen.GET("/status/:task_id", genHandler.Status)
 		gen.POST("/preview", genHandler.PreviewHTML)
 		gen.GET("/preview/:gen_id", genHandler.Preview)
-		gen.POST("/modify/:gen_id", genHandler.Create) // 简化：后续拆为单独 modify handler
+		gen.POST("/modify", genHandler.Modify)
 	}
 
 	// ---- S4: 版本管理 ----

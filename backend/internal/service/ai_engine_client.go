@@ -45,7 +45,7 @@ type AIEngine interface {
 	GenerationStatus(ctx context.Context, taskID string) (*GenerationStatusResponse, error)
 
 	// ---- S4: 个性化 & 版本 & 导出 ----
-	GenerationModify(ctx context.Context, genID string, req GenerationModifyRequest) (*GenerationModifyResponse, error)
+	GenerationModify(ctx context.Context, req GenerationModifyRequest) (*GenerationModifyResponse, error)
 	VersionHistory(ctx context.Context, genID string) (*VersionHistoryResponse, error)
 	VersionLoad(ctx context.Context, genID string, versionNumber int) (*VersionSnapshot, error)
 	VersionRollback(ctx context.Context, genID string, req VersionRollbackRequest) (*VersionRollbackResponse, error)
@@ -543,13 +543,19 @@ type ModifyCommandItem struct {
 }
 
 type GenerationModifyRequest struct {
-	Commands []ModifyCommandItem `json:"commands"`
+	GenerationID string              `json:"generation_id"`
+	Commands    []ModifyCommandItem `json:"commands"`
+	Nodes       []interface{}       `json:"nodes,omitempty"`
+	CourseName  string              `json:"course_name,omitempty"`
+	Regenerate  bool                `json:"regenerate"`
 }
 
 type GenerationModifyResponse struct {
-	TaskID     string `json:"task_id"`
-	NewVersion int    `json:"new_version"`
-	Status     string `json:"status"`
+	Status       string        `json:"status"`
+	Nodes        []interface{} `json:"nodes,omitempty"`
+	VersionNumber int         `json:"version_number,omitempty"`
+	CommandsApplied []string  `json:"commands_applied,omitempty"`
+	Errors       []string     `json:"errors,omitempty"`
 }
 
 type VersionSnapshot struct {
@@ -859,9 +865,9 @@ func (c *aiEngineClient) GenerationPreview(ctx context.Context, req GenerationPr
 
 // ---- S4: 个性化 & 版本 & 导出 ----
 
-func (c *aiEngineClient) GenerationModify(ctx context.Context, genID string, req GenerationModifyRequest) (*GenerationModifyResponse, error) {
+func (c *aiEngineClient) GenerationModify(ctx context.Context, req GenerationModifyRequest) (*GenerationModifyResponse, error) {
 	var result GenerationModifyResponse
-	if err := c.postJSON(ctx, "/api/v1/gen/modify/"+genID, req, &result); err != nil {
+	if err := c.postJSON(ctx, "/api/v1/gen/modify", req, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

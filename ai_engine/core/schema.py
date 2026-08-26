@@ -353,6 +353,7 @@ class TeachingNode(BaseModel):
     page_ref: Optional[int] = None
     source_chunk_ids: list[str] = Field(default_factory=list)
     core_points: list[str] = Field(default_factory=list)
+    """核心要点（与 key_points 等效，兼容旧数据）"""
     examples: list[str] = Field(default_factory=list)
     key_difficulties: list[str] = Field(default_factory=list)
     expected_outcomes: list[str] = Field(default_factory=list)
@@ -363,6 +364,56 @@ class TeachingNode(BaseModel):
     next_node_id: Optional[str] = None
     prev_node_id: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    # -------------------------------------------------------------------------
+    # 业务扩展字段（对齐主流开源 AI-PPT 标准化规范）
+    # -------------------------------------------------------------------------
+    type: str = ""
+    """
+    渲染类型字段，对应前端渲染层的 type 识别。
+    与 node_type 等效：node_type 是枚举值，type 是字符串形式。
+    新增节点时自动写入，与 node_type 保持一致。
+    兼容旧数据：空字符串表示未设置，前端预览/导出时应优先读取 node_type。
+    """
+    key_points: list[str] = Field(default_factory=list)
+    """
+    要点列表，与 core_points 等效，兼容主流 AI-PPT 规范命名。
+    新增节点时自动从 core_points 复制，确保字段统一。
+    """
+    segments: list[dict[str, Any]] = Field(default_factory=list)
+    """
+    内容分段列表，每段为 {title, content, duration_minutes} 结构。
+    用于精细化渲染控制。
+    """
+    questions: list[dict[str, Any]] = Field(default_factory=list)
+    """
+    节点内嵌问答题目列表，每题为 {question, answer, type} 结构。
+    用于互动环节渲染。
+    """
+
+    # -------------------------------------------------------------------------
+    # 排版元数字段（对齐主流开源 AI-PPT 标准化规范）
+    # -------------------------------------------------------------------------
+    layout_hint: Optional[str] = None
+    """
+    布局提示，可选值：title_only / text_only / text_with_media / media_only /
+    two_column / quiz / interactive 等。
+    告知渲染层优先使用的布局类型。
+    """
+    font_size_hint: Optional[str] = None
+    """
+    字号提示，可选值：large（标题页） / medium（正文） / small（注释）。
+    与 layout_hint 配合使用。
+    """
+    text_alignment: Optional[str] = None
+    """
+    文本对齐方式，可选值：left / center / right / justify。
+    """
+    slide_background: Optional[str] = None
+    """
+    幻灯片背景色/渐变/图片，CSS 值或预设名称。
+    如："#ffffff" / "linear-gradient(...)" / "preset_blue"。
+    """
 
 
 class GenerationTask(BaseModel):

@@ -74,6 +74,21 @@ func (h *GenerationHandler) PreviewHTML(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
 
+// Modify  POST /api/v1/gen/modify — 应用编辑命令，生成新版本快照
+func (h *GenerationHandler) Modify(c *gin.Context) {
+	var req service.GenerationModifyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
+		return
+	}
+	resp, err := h.aiClient.GenerationModify(c.Request.Context(), req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "修改命令执行失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
+}
+
 // Preview  GET /api/v1/gen/preview/:gen_id — 预览（当前简化：走 status 返回）
 func (h *GenerationHandler) Preview(c *gin.Context) {
 	genID := c.Param("gen_id")
