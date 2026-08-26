@@ -39,7 +39,7 @@ class ExportPPTConfig:
     """PPTX 导出配置"""
     template_dir: str = ""
     default_template: str = "default"
-    output_dir: str = "uploads/exports"
+    output_dir: str = "data/exports"
 
 
 class PPTExporter:
