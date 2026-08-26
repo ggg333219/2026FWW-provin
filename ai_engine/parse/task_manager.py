@@ -617,8 +617,12 @@ class TaskManager:
 
                 raw_result = self._parse_by_type(ft)
 
+                # _parse_by_type 对 PDF/PPTX/DOCX 返回 document dict（含 parsed_pages），
+                # 对 TEXT/IMAGE/AUDIO 返回 list[dict]；normalize 需要 list，取出 pages 列表。
+                raw_pages = raw_result.get("parsed_pages", []) if isinstance(raw_result, dict) else raw_result
+
                 ft.chunks = self._chunk_normalizer.normalize(
-                    raw_chunks=raw_result,
+                    raw_chunks=raw_pages,
                     source_ref=ft.file_path,
                     source_type=ft.source_type,
                 )
