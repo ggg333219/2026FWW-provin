@@ -29,6 +29,16 @@
         {{ exportIsActive ? '导出中...' : '开始导出' }}
       </button>
 
+      <!-- HTML 课件预览 -->
+      <button
+        class="btn btn-secondary"
+        :disabled="!genId || skillPreviewLoading"
+        @click="handleSkillPreview"
+      >
+        {{ skillPreviewLoading ? '生成中...' : 'HTML 课件预览' }}
+      </button>
+      <p v-if="!genId" class="preview-hint">请先加载版本后再使用 HTML 预览</p>
+
       <!-- 状态与进度 -->
       <div v-if="exportStatus !== 'idle'" class="export-status">
         <div class="status-row">
@@ -67,7 +77,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 
 const props = defineProps({
   genId: { type: String, default: '' },
@@ -75,12 +85,51 @@ const props = defineProps({
   exportFormat: { type: String, default: 'pptx' },
   exportDownloadUrl: { type: String, default: '' },
   exportError: { type: String, default: '' },
-  loading: { type: Boolean, default: false }
+  loading: { type: Boolean, default: false },
+  /** 教学意图对象（传给 deck-skill 生成 HTML 课件） */
+  intent: { type: Object, default: () => ({}) },
+  /** 当前版本节点树，直接渲染为幻灯片（跳过 LLM） */
+  nodes: { type: Array, default: () => [] }
 })
 
-defineEmits(['start-export', 'reset-export'])
+defineEmits(['start-export', 'reset-export', 'skill-preview'])
 
 const selectedFormat = ref(props.exportFormat || 'pptx')
+const skillPreviewLoading = ref(false)
+
+async function handleSkillPreview() {
+  if (!props.genId) return
+  // intent 为空时用最小结构
+  const intent = props.intent?.title
+    ? props.intent
+    : { title: '课件预览', description: 'AI 智课课件', key_points: [] }
+  skillPreviewLoading.value = true
+  try {
+    const { teacherGenerationApi: api } = await import('../../services/v1/generationApi')
+    // 有节点树时直接渲染真实内容，无节点时走 LLM 生成
+    const data = await api.skillDeckPreview({
+      intent,
+      nodes: props.nodes?.length ? props.nodes : null
+    })
+    // html_url 可能是相对路径 /previews/xxx 或绝对 URL
+    let url = data?.html_url || ''
+    if (url.startsWith('/')) {
+      url = 'http://localhost:8000' + url
+    } else if (data?.html_path && !url) {
+      const filename = data.html_path.replace(/^.*[\\/]/, '')
+      url = `http://localhost:8000/previews/${filename}`
+    }
+    if (url) {
+      window.open(url, '_blank', 'noopener')
+    } else {
+      console.warn('[S4VersionExportCenter] 预览无返回', data)
+    }
+  } catch (err) {
+    console.error('[S4VersionExportCenter] HTML 预览失败', err)
+  } finally {
+    skillPreviewLoading.value = false
+  }
+}
 
 const exportIsActive = computed(() => ['pending', 'exporting'].includes(props.exportStatus))
 
@@ -98,7 +147,6 @@ const statusText = computed(() => {
 const progressPct = ref(0)
 // Simulated progress bar animation
 let progressTimer = null
-import { watch } from 'vue'
 watch(() => props.exportStatus, (val) => {
   if (val === 'pending' || val === 'exporting') {
     progressPct.value = 0
@@ -145,6 +193,10 @@ function handleDownload() {
 .btn-primary { background: #5ca68f; color: #fff; }
 .btn-primary:hover { background: #4a8d78; }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary { background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
+.btn-secondary:hover { background: #bae6fd; }
+.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+.preview-hint { font-size: 12px; color: #94a3b8; margin: 0; }
 .btn-sm { padding: 6px 14px; font-size: 13px; background: #edf5f2; color: #2d5f58; border: 1px solid #c6ded6; border-radius: 8px; margin-right: 6px; }
 .btn-sm:hover { background: #d6ece3; }
 

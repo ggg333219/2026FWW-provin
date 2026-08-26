@@ -56,6 +56,10 @@ app.include_router(parse_router)
 from ai_engine.rag.router import router as rag_router
 app.include_router(rag_router)
 
+# ---- Phase 4: S3 Skill 路由（新增）----
+from ai_engine.gen.skill_router import router as skill_router
+app.include_router(skill_router)
+
 # 启用跨域支持，让前端 Vue/React 能访问
 app.add_middleware(
     CORSMiddleware,
@@ -70,6 +74,11 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 AUDIO_DIR = UPLOAD_DIR / "generated_audio"
 AUDIO_DIR.mkdir(exist_ok=True)
 app.mount("/generated-audio", StaticFiles(directory=str(AUDIO_DIR)), name="generated-audio")
+
+# deck-skill HTML 预览目录
+PREVIEW_DIR = UPLOAD_DIR / "previews"
+PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/previews", StaticFiles(directory=str(PREVIEW_DIR)), name="previews")
 
 # 内存中的简单“状态机”：真实环境下这里会接数据库
 # 存储 key: doc_id, value: { "parsed": ..., "generated": ... }
@@ -756,6 +765,24 @@ async def modify_nodes(req: ModifyRequest):
             summary="编辑修改",
         )
         version_number = version.version_number
+
+        # ── 内存数据同步：磁盘快照更新后，刷新进程内 _gen_tasks 中的任务数据 ──
+        # 解决前端轮询返回旧数据、数据状态不一致的核心阻断 BUG
+        if req.generation_id:
+            vm = get_version_manager()
+            latest = vm.load_version(req.generation_id)
+            if latest and latest.nodes_snapshot:
+                refreshed_nodes = [
+                    n.model_dump() if hasattr(n, "model_dump") else n
+                    for n in latest.nodes_snapshot
+                ]
+                # 遍历内存任务，找到对应的 generation_id 并同步更新
+                for tid, task in _gen_tasks.items():
+                    if task.generation_id == req.generation_id:
+                        task.nodes = refreshed_nodes
+                        task.status = GenerationStatus.DONE
+                        task.stage = GenerationStage.DONE
+                        task.progress_pct = 100.0
 
     return {
         "status": "ok" if not result.errors else "partial_error",

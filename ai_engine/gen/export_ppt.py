@@ -72,7 +72,8 @@ class PPTExporter:
         # 节点页
         for node in nodes:
             node = _as_mapping(node)
-            node_type = node.get("type") or "content"
+            node_type_raw = node.get("type") or node.get("node_type") or "content"
+            node_type = str(node_type_raw).lower()
             handler = self._get_slide_handler(node_type)
             handler(prs, node)
             slide_count += 1
@@ -97,7 +98,8 @@ class PPTExporter:
         self._add_title_slide(prs, course_name)
         for node in nodes:
             node = _as_mapping(node)
-            handler = self._get_slide_handler(node.get("type") or "content")
+            node_type_raw = node.get("type") or node.get("node_type") or "content"
+            handler = self._get_slide_handler(str(node_type_raw).lower())
             handler(prs, node)
 
         buf = io.BytesIO()
@@ -143,7 +145,7 @@ class PPTExporter:
         if slide.shapes.title:
             slide.shapes.title.text = node.get("title", "")
         body = ""
-        for key in ("content", "script", "summary", "core_points"):
+        for key in ("content", "script", "summary", "core_points", "key_points"):
             val = node.get(key)
             if isinstance(val, list):
                 body += "\n".join(f"• {item}" for item in val) + "\n"
@@ -202,7 +204,7 @@ class PPTExporter:
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         if slide.shapes.title:
             slide.shapes.title.text = "📌 本节小结"
-        points = node.get("key_points") or node.get("summary", "").split("\n") or ["本节要点"]
+        points = node.get("key_points") or node.get("core_points") or node.get("summary", "").split("\n") or ["本节要点"]
         if slide.placeholders and len(slide.placeholders) > 1:
             tf = slide.placeholders[1].text_frame
             tf.text = "\n".join(f"✅ {p}" for p in points[:6])
