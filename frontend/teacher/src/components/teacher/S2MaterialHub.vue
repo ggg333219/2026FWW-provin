@@ -281,7 +281,7 @@ async function uploadOne(file) {
         file,
         sessionId: props.sessionId
       })
-      parseLocalPath = uploadResp?.data?.file_path || ''
+      parseLocalPath = uploadResp?.file_path || ''
     } catch (err) {
       console.warn('[S2Hub] parse/upload fallback:', err)
     }
@@ -293,7 +293,7 @@ async function uploadOne(file) {
           file,
           title: file.name.replace(/\.[^.]+$/, '')
         })
-        const courseId = uploadResp?.data?.courseId || ''
+        const courseId = uploadResp?.courseId || ''
         uploadFallbackPath = courseId ? `minio://courses/${courseId}/${file.name}` : file.name
       } catch (err) {
         // 上传接口不可用时不阻塞后续解析（前端契约已对齐）
@@ -319,7 +319,7 @@ async function uploadOne(file) {
       filePaths: [pathHint],
       fileContents: fileText ? { [pathHint]: fileText } : undefined
     })
-    const realTaskId = parseResp?.data?.task_id || taskId
+    const realTaskId = parseResp?.task_id || taskId
     materialStore.updateParseTask(taskId, { taskId: realTaskId })
 
     // 步骤3：轮询解析状态
@@ -452,7 +452,7 @@ function pollParseTask(taskId, fileName, placeholderId) {
       pollTimers[taskId] = window.setTimeout(tick, 1800)
       return
     }
-    const data = response?.data || {}
+    const data = response || {}
     const status = data.status || 'done'
 
     if (status === 'done' || status === 'failed') {

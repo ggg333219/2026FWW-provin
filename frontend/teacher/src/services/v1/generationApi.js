@@ -64,6 +64,16 @@ export const teacherGenerationApi = {
       })
     }),
 
+  /** 生成 HTML 课件预览（deck-skill，直连 AI Engine） */
+  skillDeckPreview: (params = {}) => {
+    const { intent = {}, evidence_packet = null, nodes = null, template_id = 'deck-swiss-edu', palette = 'klein-blue' } = params || {}
+    return fetch(`${AI_API_BASE}/api/v1/skill/deck`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intent, evidence_packet, nodes, template_id, palette })
+    }).then(r => r.json())
+  },
+
   /** 获取增强讲稿（AI API 模式，已废弃，保留兼容） */
   getEnhancedScript: (params = {}) => {
     return fetch(`${AI_API_BASE}/generate-enhanced`, {

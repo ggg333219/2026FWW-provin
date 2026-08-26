@@ -187,12 +187,45 @@ func newBaseEngine(mode string) *gin.Engine {
 func runS1Standalone(mode string, aiClient service.AIEngine) {
 	r := newBaseEngine(mode)
 	convHandler := handler.NewConversationHandler(aiClient)
+	genHandler := handler.NewGenerationHandler(aiClient)
+	versionHandler := handler.NewVersionHandler(aiClient)
+	exportHandler := handler.NewExportHandler(aiClient)
+
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "UP", "mode": "s1-standalone"})
 	})
+
+	// S1: 意图理解
 	intent := r.Group("/api/v1/intent")
-	intent.POST("/extract", convHandler.ExtractIntent)
-	intent.POST("/confirm", convHandler.ConfirmIntent)
+	{
+		intent.POST("/extract", convHandler.ExtractIntent)
+		intent.POST("/confirm", convHandler.ConfirmIntent)
+	}
+
+	// S3: 课件生成
+	gen := r.Group("/api/v1/gen")
+	{
+		gen.POST("/create", genHandler.Create)
+		gen.GET("/status/:task_id", genHandler.Status)
+		gen.POST("/preview", genHandler.PreviewHTML)
+	}
+
+	// S4: 版本管理
+	ver := r.Group("/api/v1/version")
+	{
+		ver.GET("/:gen_id", versionHandler.Load)
+		ver.GET("/:gen_id/history", versionHandler.History)
+		ver.POST("/:gen_id/rollback", versionHandler.Rollback)
+		ver.POST("/:gen_id/lock", versionHandler.Lock)
+	}
+
+	// S4: 导出
+	exp := r.Group("/api/v1/export")
+	{
+		exp.POST("/:gen_id", exportHandler.Create)
+		exp.GET("/status/:job_id", exportHandler.Status)
+		exp.GET("/download/:job_id/:extension", exportHandler.Download)
+	}
 
 	applogger.Info("S1 轻量服务运行中（无需 PostgreSQL/MinIO）", zap.Int("port", 8082))
 	if err := r.Run(":8082"); err != nil {

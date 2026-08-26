@@ -350,14 +350,14 @@ func (c *DifyClient) GenerationPreview(ctx context.Context, req GenerationPrevie
 	return &out, nil
 }
 
-func (c *DifyClient) GenerationModify(ctx context.Context, genID string, req GenerationModifyRequest) (*GenerationModifyResponse, error) {
+func (c *DifyClient) GenerationModify(ctx context.Context, req GenerationModifyRequest) (*GenerationModifyResponse, error) {
 	var out GenerationModifyResponse
-	inputs := map[string]any{"generation_id": genID, "request": req}
+	inputs := map[string]any{"generation_id": req.GenerationID, "request": req}
 	engine, hasFallback := c.fallbackEngine()
 	var fallback func() error
 	if hasFallback {
 		fallback = func() error {
-			result, err := engine.GenerationModify(ctx, genID, req)
+			result, err := engine.GenerationModify(ctx, req)
 			if err == nil {
 				out = *result
 			}
