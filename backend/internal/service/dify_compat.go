@@ -312,7 +312,7 @@ func (c *DifyClient) GenerationStatus(ctx context.Context, taskID string) (*Gene
 	if out.Nodes != nil {
 		validNodes := make([]TeachingNodeItem, 0, len(out.Nodes))
 		for _, n := range out.Nodes {
-			if n.ID != "" {
+			if n.NodeID != "" {
 				validNodes = append(validNodes, n)
 			}
 		}

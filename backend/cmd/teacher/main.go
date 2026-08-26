@@ -133,6 +133,12 @@ func main() {
 
 	r := newBaseEngine(cfg.Server.Mode)
 
+	// 前端 health 探测走根路径 /health（见 teacherApi.js / services/v1/index.js），
+	// 而完整路由只注册了 /api/health。这里补一个根路径别名，避免被误判为后端离线。
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "UP"})
+	})
+
 	api := r.Group("/api")
 	router.RegisterTeacherRoutes(api, teacherHandler, courseHandler, compatHandler, weakPointHandler, authHandler)
 

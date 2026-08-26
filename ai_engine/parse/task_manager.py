@@ -570,8 +570,9 @@ class TaskManager:
                         }
 
             # 3) 标准化为 Chunk（落库）
+            raw_pages = raw_result.get("parsed_pages", []) if isinstance(raw_result, dict) else raw_result
             ft.chunks = self._chunk_normalizer.normalize(
-                raw_chunks=raw_result,
+                raw_chunks=raw_pages,
                 source_ref=ft.file_path,
                 source_type=ft.source_type,
             )

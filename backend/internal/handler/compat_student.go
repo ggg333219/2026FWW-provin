@@ -1106,7 +1106,7 @@ func (h *CompatibilityHandler) StreamStudentQAV1(c *gin.Context) {
 }
 
 func (h *CompatibilityHandler) ParseKnowledgeV1(c *gin.Context) {
-	NewWeakPointHandler(h.db, h.aiClient).ParseKnowledge(c)
+	NewWeakPointHandler(h.db, h.aiClient, service.NewKnowledgeMapService(h.db)).ParseKnowledge(c)
 }
 
 func countStudentNotes(db *gorm.DB, studentID, courseID string) int64 {

@@ -846,7 +846,7 @@ func (c *aiEngineClient) GenerationStatus(ctx context.Context, taskID string) (*
 	if result.Nodes != nil {
 		validNodes := make([]TeachingNodeItem, 0, len(result.Nodes))
 		for _, n := range result.Nodes {
-			if n.ID != "" {
+			if n.NodeID != "" {
 				validNodes = append(validNodes, n)
 			}
 		}
