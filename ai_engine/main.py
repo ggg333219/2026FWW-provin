@@ -33,6 +33,8 @@ from ai_engine.gen.commands import CommandParser, EditCommand, CommandType
 from ai_engine.gen.patch import NodePatcher
 from ai_engine.gen.interactive import InteractiveBuilder
 from ai_engine.intent.router import router as intent_router
+# RAG 内联调用支持（S2→KB 证据自动注入 S3 管线）
+from ai_engine.rag.router import _get_retriever, _reranker, _synthesizer
 from ai_engine.core.schema import (
     GenerationCreateRequest, GenerationCreateResponse,
     GenerationStatusResponse, GenerationStatus, GenerationStage,
@@ -976,20 +978,48 @@ async def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         task.progress_pct = 10.0
 
         # Stage 2: 收集证据（如有）
+        # ★ P1修复：如果前端未传 evidence_packet，但有 session_id，
+        #   自动从 RAG 知识库获取证据，实现 S2→KB→S3 自动链路。
         task.stage = GenerationStage.EVIDENCE_GATHERING
         task.progress_pct = 20.0
+        evidence_dict = None
+        if req.evidence_packet:
+            evidence_dict = req.evidence_packet.model_dump() if hasattr(req.evidence_packet, "model_dump") else req.evidence_packet
+        elif req.session_id:
+            # 自动从 RAG 获取证据：检索 session 对应的已解析 chunks
+            try:
+                retriever = _get_retriever()
+                candidates = retriever.search(
+                    query=req.intent.topic or "",
+                    top_k=20,
+                    min_score=0.3,
+                    knowledge_base_ids=None,
+                )
+                if candidates:
+                    reranked = _reranker.rerank(
+                        query=req.intent.topic or "",
+                        candidates=candidates,
+                        top_k=5,
+                    )
+                    synthesized = _synthesizer.synthesize_to_response(
+                        search_results=reranked,
+                        query=req.intent.topic or "",
+                        context={},
+                    )
+                    evidence_dict = synthesized.model_dump() if hasattr(synthesized, "model_dump") else dict(synthesized)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "[S3 Evidence] 自动证据获取失败，改为无证据生成: session_id=%s, error=%s",
+                    req.session_id, str(e)
+                )
 
         # Stage 3: 构建大纲
         task.stage = GenerationStage.STRUCTURING
         task.progress_pct = 30.0
         builder = OutlineBuilder()
-        if req.evidence_packet:
-            intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
-            evidence_dict = req.evidence_packet.model_dump() if hasattr(req.evidence_packet, "model_dump") else req.evidence_packet
-            outline = builder.build(intent_dict, evidence_dict)
-        else:
-            intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
-            outline = builder.build(intent_dict, None)
+        intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
+        outline = builder.build(intent_dict, evidence_dict)
         nodes = outline.get("nodes", [])
         task.nodes = nodes
         task.progress_pct = 50.0

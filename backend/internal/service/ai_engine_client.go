@@ -836,6 +836,16 @@ func (c *aiEngineClient) GenerationStatus(ctx context.Context, taskID string) (*
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("解析生成状态响应失败: %w", err)
 	}
+	// P3: 防御性验证 nodes 数组，防止畸形 LLM 输出进入版本化/导出流程
+	if result.Nodes != nil {
+		validNodes := make([]TeachingNodeItem, 0, len(result.Nodes))
+		for _, n := range result.Nodes {
+			if n.ID != "" {
+				validNodes = append(validNodes, n)
+			}
+		}
+		result.Nodes = validNodes
+	}
 	return &result, nil
 }
 

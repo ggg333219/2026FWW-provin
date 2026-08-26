@@ -63,10 +63,12 @@ func main() {
 
 	aiClient := service.NewAIEngineClient(cfg.AI.BaseURL, cfg.AI.Timeout)
 	courseService := service.NewCourseService(db, minioClient, aiClient)
+	knowledgeMapService := service.NewKnowledgeMapService(db)
+	knowledgeMapHandler := handler.NewKnowledgeMapHandler(knowledgeMapService)
 
 	courseHandler := handler.NewCourseHandler(courseService, db)
 	studentHandler := handler.NewStudentHandler(db, aiClient)
-	weakPointHandler := handler.NewWeakPointHandler(db, aiClient)
+	weakPointHandler := handler.NewWeakPointHandler(db, aiClient, knowledgeMapService)
 	compatHandler := handler.NewCompatibilityHandler(db, aiClient, courseService)
 
 	if cfg.Server.Mode == "release" {
@@ -101,7 +103,7 @@ func main() {
 	})
 
 	api := r.Group("/api")
-	router.RegisterStudentRoutes(api, studentHandler, compatHandler, weakPointHandler, courseHandler)
+	router.RegisterStudentRoutes(api, studentHandler, compatHandler, weakPointHandler, courseHandler, knowledgeMapHandler)
 
 	applogger.Info("学生端服务运行中", zap.Int("port", 8081))
 	if err := r.Run(":8081"); err != nil {

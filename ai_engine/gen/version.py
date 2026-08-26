@@ -53,6 +53,8 @@ def _version_file_path(gen_id: str, version_no: int) -> Path:
 # 锁（进程内线程安全）
 # =============================================================================
 
+# WARNING: _version_locks 是进程内字典，多 worker 部署下各进程独立维护。
+# 多 worker 场景下需要替换为 Redis SETNX 实现的分布式锁，参见 P3 任务项。
 _version_locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 

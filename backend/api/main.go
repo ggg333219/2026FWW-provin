@@ -153,7 +153,7 @@ func main() {
 	courseHandler := handler.NewCourseHandler(courseService, db)
 	teacherHandler := handler.NewTeacherHandler(db, aiClient)
 	studentHandler := handler.NewStudentHandler(db, aiClient)
-	weakPointHandler := handler.NewWeakPointHandler(db, aiClient)
+	weakPointHandler := handler.NewWeakPointHandler(db, aiClient, knowledgeMapService)
 	compatHandler := handler.NewCompatibilityHandler(db, aiClient, courseService)
 	authHandler := handler.NewAuthHandler(db)
 

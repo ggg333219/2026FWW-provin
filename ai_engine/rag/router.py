@@ -278,23 +278,26 @@ async def knowledge_upload(req: KnowledgeUploadRequest):
 
 # 进程内共享的 session→chunks 映射（S2 产出可供 KB 直接消费）
 # 实际生产环境应通过 Redis/DB 共享
-_session_parsed_chunks: dict[str, list[Chunk]] = {}
+# 格式: {session_id: {"chunks": [...], "intent_id": "..."}}
+_session_parsed_chunks: dict[str, dict] = {}
 
 
-def register_session_chunks(session_id: str, chunks: list[Chunk]) -> None:
+def register_session_chunks(session_id: str, chunks: list[Chunk], intent_id: Optional[str] = None) -> None:
     """
     供 S2 parse router 调用：注册解析完成的 chunks。
 
     S2 解析完成后调用此函数，KB 上传时可直接消费。
     """
-    if session_id not in _session_parsed_chunks:
-        _session_parsed_chunks[session_id] = []
-    _session_parsed_chunks[session_id].extend(chunks)
+    entry = _session_parsed_chunks.get(session_id, {"chunks": [], "intent_id": None})
+    entry["chunks"].extend(chunks)
+    if intent_id:
+        entry["intent_id"] = intent_id
+    _session_parsed_chunks[session_id] = entry
 
 
 def _find_session_chunks(session_id: str) -> list[Chunk]:
     """查找某 session 的已解析 chunks。"""
-    return _session_parsed_chunks.get(session_id, [])
+    return _session_parsed_chunks.get(session_id, {}).get("chunks", [])
 
 
 def _process_file(file_url: str) -> list[Chunk]:

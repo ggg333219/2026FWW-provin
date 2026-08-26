@@ -34,7 +34,7 @@ def _as_mapping(node: Any) -> dict[str, Any]:
 @dataclass
 class ExportDocConfig:
     """DOCX 导出配置"""
-    output_dir: str = "uploads/exports"
+    output_dir: str = "data/exports"
 
 
 class DOCExporter:

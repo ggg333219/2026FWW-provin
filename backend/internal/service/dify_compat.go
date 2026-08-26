@@ -308,6 +308,16 @@ func (c *DifyClient) GenerationStatus(ctx context.Context, taskID string) (*Gene
 	if err := c.runDifyScene(ctx, difySceneGenerationStatus, map[string]string{"task_id": taskID}, &out, fallback); err != nil {
 		return nil, err
 	}
+	// P3: 防御性验证 nodes 数组，防止畸形 LLM 输出进入版本化/导出流程
+	if out.Nodes != nil {
+		validNodes := make([]TeachingNodeItem, 0, len(out.Nodes))
+		for _, n := range out.Nodes {
+			if n.ID != "" {
+				validNodes = append(validNodes, n)
+			}
+		}
+		out.Nodes = validNodes
+	}
 	return &out, nil
 }
 

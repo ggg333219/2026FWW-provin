@@ -16,6 +16,8 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	"smart-teaching-backend/internal/handler"
+	"smart-teaching-backend/internal/model"
+	"smart-teaching-backend/internal/database/sqlmigrate"
 	"smart-teaching-backend/internal/router"
 	"smart-teaching-backend/internal/service"
 	"smart-teaching-backend/pkg/config"
@@ -69,9 +71,55 @@ func main() {
 
 	courseService := service.NewCourseService(db, minioClient, aiClient)
 
+	// ---- 数据库迁移 ----
+	migrationsDir := filepath.Join(projectRoot, "internal", "database", "migrations")
+	if err := sqlmigrate.Run(db, migrationsDir); err != nil {
+		applogger.Warn("SQL 迁移失败，尝试 AutoMigrate", zap.Error(err))
+	}
+	if err := db.AutoMigrate(
+		&model.User{},
+		&model.Course{},
+		&model.CoursePage{},
+		&model.TeachingNode{},
+		&model.TeachingNodeRelation{},
+		&model.UserProgress{},
+		&model.DialogueSession{},
+		&model.AudioAsset{},
+		&model.PlatformUser{},
+		&model.TeachingCourse{},
+		&model.CourseClass{},
+		&model.CourseEnrollment{},
+		&model.DialogueTurn{},
+		&model.QuestionLog{},
+		&model.TeacherEdit{},
+		&model.MindMapNode{},
+		&model.StudentNote{},
+		&model.StudentFavorite{},
+		&model.PracticeTask{},
+		&model.PracticeAttempt{},
+		&model.WeakPoint{},
+		&model.KnowledgePoint{},
+		&model.Question{},
+		&model.AnswerRecord{},
+		&model.ReviewPlan{},
+		&model.ReviewPlanItem{},
+		&model.StudentKnowledgeMap{},
+		&model.StudentKnowledgeMastery{},
+		&model.ScheduledTask{},
+		&model.Notification{},
+		&model.TaskStatus{},
+		&model.NodeFavorite{},
+	); err != nil {
+		applogger.Warn("AutoMigrate 失败", zap.Error(err))
+	}
+	if err := model.RunPostMigrateBackfill(db); err != nil {
+		applogger.Warn("数据库回填失败", zap.Error(err))
+	}
+
 	courseHandler := handler.NewCourseHandler(courseService, db)
 	teacherHandler := handler.NewTeacherHandler(db, aiClient)
-	weakPointHandler := handler.NewWeakPointHandler(db, aiClient)
+	knowledgeMapService := service.NewKnowledgeMapService(db)
+	weakPointHandler := handler.NewWeakPointHandler(db, aiClient, knowledgeMapService)
 	compatHandler := handler.NewCompatibilityHandler(db, aiClient, courseService)
 	authHandler := handler.NewAuthHandler(db)
 
