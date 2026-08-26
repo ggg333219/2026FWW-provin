@@ -15,7 +15,7 @@ export const teacherGenerationApi = {
   // ================================================================
 
   /** 创建生成任务 (gen/create) */
-  createGeneration: ({ session_id, course_id, title, markdown, evidence_packet, template_id } = {}) =>
+  createGeneration: ({ session_id, course_id, title, markdown, intent, evidence_packet, template_id } = {}) =>
     requestJson('/api/v1/gen/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -24,6 +24,8 @@ export const teacherGenerationApi = {
         course_id,
         title: title || '',
         markdown: markdown || '',
+        // S1 确认后的结构化意图直接透传（未确认时省略，后端以 title 构建默认意图）
+        intent: intent || undefined,
         evidence_packet: evidence_packet || null,
         template_id: template_id || 'default'
       })
@@ -45,14 +47,20 @@ export const teacherGenerationApi = {
       })
     }),
 
-  /** 获取预览 (gen/preview) */
-  preview: ({ nodes, course_name } = {}) =>
+  /** 获取预览 (gen/preview)
+   *  支持两种调用：
+   *    - inline nodes：直接渲染当前节点树
+   *    - 版本快照：传 gen_id（可选 version），后端按版本恢复节点渲染
+   */
+  preview: ({ nodes, course_name, gen_id, version } = {}) =>
     requestJson('/api/v1/gen/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         nodes: nodes || [],
-        course_name: course_name || '课件预览'
+        course_name: course_name || '课件预览',
+        gen_id: gen_id || '',
+        version: version || null
       })
     }),
 

@@ -60,7 +60,7 @@
             >
               ‹
             </button>
-            <div class="slide-canvas">
+            <div class="slide-canvas" :class="{ 'slide-canvas--html': !!previewHtml }">
               <iframe
                 v-if="previewHtml"
                 :srcdoc="previewHtml"
@@ -1288,9 +1288,17 @@ defineExpose({ setEvidencePacket })
   overflow: hidden;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
 }
+/* 渲染 HTML 预览时切换为更高的可滚动画布，完整展示多页幻灯片，杜绝裁切/重叠 */
+.slide-canvas--html {
+  aspect-ratio: auto;
+  height: min(68vh, 640px);
+  overflow: auto;
+  background: #e9edf3;
+}
 .preview-html-frame {
   width: 100%;
   height: 100%;
+  min-height: 100%;
   border: 0;
   border-radius: 10px;
   background: #fff;

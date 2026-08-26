@@ -59,6 +59,7 @@
         <template v-else>
           <TeacherScriptPanel
             :preview-url="previewUrl"
+            :preview-html="generationStore.previewHtml"
             :current-course-name="courseName"
             :current-course-id="courseId"
             :current-edit-page="editPage"
@@ -94,7 +95,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import AppShell from '../components/layout/AppShell.vue'
 import TeacherScriptPanel from '../components/teacher/TeacherScriptPanel.vue'
 import { useGenerationStore } from '../stores/generationStore'
@@ -107,9 +108,14 @@ const intentStore = useIntentStore()
 intentStore.initialize()
 const generationMode = ref('')
 
-onMounted(() => {
+onMounted(async () => {
   if (typeof window !== 'undefined') {
     generationMode.value = window.localStorage.getItem(`fuww_s2_generation_mode:${intentStore.sessionId}`) || ''
+  }
+  // 刷新/重试后按最近 gen_id 从版本快照恢复预览，保证预览内容不丢失
+  const lastGenId = generationStore.restoreLastGenId()
+  if (lastGenId) {
+    generationStore.restorePreview(lastGenId).catch(() => {})
   }
 })
 
@@ -191,12 +197,37 @@ async function loadScriptAndNodes() {
   }
 }
 
+/**
+ * 按当前页结构化节点渲染预览，保证「预览内容与结构化数据完全同步一致」。
+ * 失败不阻塞页面（后端/Mock 均支持该接口）。
+ */
+function renderCurrentPagePreview() {
+  try {
+    generationStore.renderCoursewarePreview(courseName.value || '课件预览').catch(() => {})
+  } catch (error) {
+    console.warn('[S3StudioPage] 预览渲染失败', error)
+  }
+}
+
+// 节点变化即重新渲染预览（防抖），保证预览与结构化数据同步一致
+let previewRenderTimer = null
+watch(
+  () => generationStore.currentScriptNodes,
+  () => {
+    clearTimeout(previewRenderTimer)
+    previewRenderTimer = setTimeout(() => {
+      renderCurrentPagePreview()
+    }, 400)
+  },
+  { deep: true }
+)
+
 async function handleGenerateAIScript() {
   if (!courseId.value) return
   generationStore.setGenerating(true)
   generationStore.setGenerateProgress(8, '正在分析课件内容')
   try {
-    // 尝试从 localStorage 读取证据包（S2 证据透传）
+    // 尝试从 localStorage 读取证据包（S2 证据透传，成员B）
     let evidence = null
     try {
       const raw = window.localStorage.getItem('fuww_s2_evidence_packet')
@@ -209,23 +240,34 @@ async function handleGenerateAIScript() {
     }
 
     generationStore.setGenerateProgress(30, '正在调用 AI 生成讲稿')
-    const resp = await teacherV1Api.coursewares.generateScript({
-      courseId: courseId.value,
-      pageNum: editPage.value,
-      evidence
+    // 新链路：gen/create 全流程生成整棵节点树并写入版本快照，
+    // 使 S1→S4 统一走版本快照体系（刷新/重试/回看预览不丢失）。
+    const task = await generationStore.createCoursewareGeneration({
+      session_id: intentStore.sessionId,
+      course_id: courseId.value,
+      title: courseName.value || '课件预览',
+      intent: intentStore.intentSummary || undefined,
+      evidence_packet: evidence
     })
-    generationStore.setGenerateProgress(80, '正在加载讲稿')
+    if (!task.task_id) throw new Error('未返回生成任务 ID')
 
-    // 重新从后端拉取刚生成的讲稿与节点
-    const payload = resp?.data || resp || {}
-    if (payload.content) {
-      generationStore.setScript(payload.content)
-    }
-    await loadScriptAndNodes()
+    generationStore.setGenerateProgress(40, '正在生成课件节点')
+    const status = await generationStore.waitForCoursewareGeneration(task.task_id, {
+      intervalMs: 800,
+      maxAttempts: 240
+    })
+    // waitForCoursewareGeneration 已回填 currentScriptNodes / currentScript
+
+    generationStore.setGenerateProgress(90, '正在加载预览')
+    // 按 gen_id 从版本快照恢复预览（后端已保存初稿快照）
+    await generationStore.renderCoursewarePreview(courseName.value || '课件预览', {
+      genId: generationStore.lastGenId || status.generation_id || task.generation_id
+    }).catch(() => {})
 
     generationStore.setGenerateProgress(100, '生成完成')
   } catch (err) {
     console.warn('生成讲稿失败', err)
+    generationStore.setGenerateProgress(0, '生成失败，请重试')
   } finally {
     setTimeout(() => {
       generationStore.setGenerating(false)

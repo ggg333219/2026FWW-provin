@@ -1,5 +1,14 @@
 import { defineStore } from 'pinia'
 import { teacherV1Api } from '../services/v1'
+import { API_BASE } from '../config/api'
+
+/** 后端/Mock 返回相对下载路径时补齐 API_BASE，保证跨端口可下载；blob/data 保持原样 */
+function normalizeDownloadUrl(url) {
+  if (!url) return ''
+  if (/^https?:\/\//.test(url) || url.startsWith('blob:') || url.startsWith('data:')) return url
+  if (url.startsWith('/')) return `${API_BASE}${url}`
+  return url
+}
 
 /**
  * S4 版本管理 + 导出 Store
@@ -211,10 +220,12 @@ export const useVersionStore = defineStore('version', {
       this.exportFormat = format
       this.exportError = ''
       try {
-        const result = await teacherV1Api.version.exportCreate(genId, format)
-        this.exportJobId = result.job_id || ''
-        this.exportStatus = result.status === 'done' ? 'done' : 'pending'
-        this.exportDownloadUrl = result.download_url || ''
+        // 统一兼容 {code,message,data} 信封（Mock）与裸响应（FastAPI 网关）
+        const response = await teacherV1Api.version.exportCreate(genId, format)
+        const job = response?.data || response || {}
+        this.exportJobId = job.job_id || ''
+        this.exportStatus = job.status === 'done' ? 'done' : 'pending'
+        this.exportDownloadUrl = normalizeDownloadUrl(job.download_url)
         // 如果不是立即完成，启动轮询
         if (this.exportStatus !== 'done' && this.exportJobId) {
           this._pollExport()
@@ -238,10 +249,11 @@ export const useVersionStore = defineStore('version', {
         }
         polls++
         try {
-          const result = await teacherV1Api.version.exportStatus(this.exportJobId)
-          this.exportStatus = result.status || 'pending'
-          this.exportDownloadUrl = result.download_url || ''
-          this.exportError = result.error || ''
+          const response = await teacherV1Api.version.exportStatus(this.exportJobId)
+          const job = response?.data || response || {}
+          this.exportStatus = job.status || 'pending'
+          this.exportDownloadUrl = normalizeDownloadUrl(job.download_url)
+          this.exportError = job.error || ''
           if (this.exportStatus === 'done' || this.exportStatus === 'failed') {
             return
           }

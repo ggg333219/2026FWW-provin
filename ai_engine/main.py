@@ -582,9 +582,16 @@ class ExportPPTRequest(BaseModel):
 
 
 class PreviewRequest(BaseModel):
-    """预览渲染请求"""
-    nodes: list[dict[str, Any]]
+    """预览渲染请求
+
+    支持两种调用方式：
+      1. inline nodes：直接传结构化节点数组渲染
+      2. 版本快照：传 gen_id（可选 version）从版本快照体系恢复节点并渲染
+    """
+    nodes: list[dict[str, Any]] = []
     course_name: str = "课件预览"
+    gen_id: str = ""            # 版本快照预览：提供 gen_id 时按版本恢复节点
+    version: int | None = None  # 指定版本号，缺省加载最新版
 
 
 class ModifyRequest(BaseModel):
@@ -703,11 +710,41 @@ async def generate_interactive(req: InteractiveRequest):
 
 @app.post("/api/v1/gen/preview")
 async def render_preview(req: PreviewRequest):
-    """[S4] 预览渲染：节点树 → HTML"""
+    """[S4] 预览渲染：节点树 / 版本快照 → HTML
+
+    inline nodes 直接渲染；提供 gen_id 时从版本快照恢复节点再渲染，
+    返回 version_number 与恢复的节点，供前端持久化与数据同步。
+    """
     renderer = PreviewRenderer()
+    nodes = req.nodes or []
+    generation_id = (req.gen_id or "").strip()
+    version_number: int | None = None
+    course_name = req.course_name or "课件预览"
+
     try:
-        html_content = renderer.render(req.nodes, req.course_name)
-        return {"html": html_content, "node_count": len(req.nodes)}
+        if generation_id and not nodes:
+            snapshot = get_version_manager().load_version(generation_id, req.version)
+            if not snapshot:
+                raise HTTPException(status_code=404, detail="版本不存在，请先完成 S3 生成")
+            nodes = [
+                node.model_dump() if hasattr(node, "model_dump") else node
+                for node in snapshot.nodes_snapshot
+            ]
+            version_number = snapshot.version_number
+            # 快照 summary 为空时保留默认课程名，否则以快照摘要为准
+            if snapshot.summary and snapshot.summary not in ("", "课件预览", "初始版本", f"版本 {version_number}"):
+                course_name = snapshot.summary
+
+        html_content = renderer.render(nodes, course_name)
+        return {
+            "html": html_content,
+            "node_count": len(nodes),
+            "generation_id": generation_id or None,
+            "version_number": version_number,
+            "nodes": nodes,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"预览渲染失败: {str(e)}")
 
