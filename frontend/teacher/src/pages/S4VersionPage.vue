@@ -156,6 +156,8 @@
               :export-download-url="versionStore.exportDownloadUrl"
               :export-error="versionStore.exportError"
               :loading="versionStore.loading"
+              :intent="intentStore.intentSummary || {}"
+              :nodes="versionStore.currentVersionDetail?.nodes || []"
               @start-export="handleStartExport"
               @reset-export="versionStore.resetExport()"
             />
@@ -184,16 +186,21 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useVersionStore } from '../stores/versionStore'
 import { useGenerationStore } from '../stores/generationStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
+import { useIntentStore } from '../stores/intentStore'
 import AppShell from '../components/layout/AppShell.vue'
 import S4VersionExportCenter from '../components/teacher/S4VersionExportCenter.vue'
 
 const versionStore = useVersionStore()
 const generationStore = useGenerationStore()
 const workspaceStore = useWorkspaceStore()
+const intentStore = useIntentStore()
+
+const route = useRoute()
 
 const genIdInput = ref(
   generationStore.lastGenId ||
@@ -201,6 +208,14 @@ const genIdInput = ref(
   workspaceStore.currentCourseId ||
   ''
 )
+
+// 路由参数变化时自动加载版本（S3 一键生成后带 genId 跳转过来）
+watch(() => route.query.genId, (id) => {
+  if (id && typeof id === 'string') {
+    genIdInput.value = id
+    loadData()
+  }
+}, { immediate: true })
 const rollbackTarget = ref(null)
 const changeType = ref('update_node')
 const changeTarget = ref('')

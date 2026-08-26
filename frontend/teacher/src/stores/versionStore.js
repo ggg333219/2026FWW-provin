@@ -54,8 +54,9 @@ export const useVersionStore = defineStore('version', {
       this.loading = true
       this.error = ''
       try {
-        const data = await teacherV1Api.version.history(genId)
-        this.versions = (data?.versions || []).map(v => ({
+        const raw = await teacherV1Api.version.history(genId)
+        const data = raw?.data || raw || {}
+        this.versions = (data.versions || []).map(v => ({
           id: v.id,
           version: v.version_number,
           title: v.summary || `版本 ${v.version_number}`,
@@ -76,7 +77,8 @@ export const useVersionStore = defineStore('version', {
       if (!genId) return
       this.loading = true
       try {
-        const data = await teacherV1Api.version.load(genId, versionNumber)
+        const raw = await teacherV1Api.version.load(genId, versionNumber)
+        const data = raw?.data || raw || {}
         this.currentVersionDetail = {
           version: data.version_number,
           id: data.id,
@@ -211,7 +213,8 @@ export const useVersionStore = defineStore('version', {
       this.exportFormat = format
       this.exportError = ''
       try {
-        const result = await teacherV1Api.version.exportCreate(genId, format)
+        const raw = await teacherV1Api.version.exportCreate(genId, format)
+        const result = raw?.data || raw || {}
         this.exportJobId = result.job_id || ''
         this.exportStatus = result.status === 'done' ? 'done' : 'pending'
         this.exportDownloadUrl = result.download_url || ''

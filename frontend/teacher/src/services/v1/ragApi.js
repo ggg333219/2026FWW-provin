@@ -1,9 +1,9 @@
-import { requestJson } from './request'
+import { RAG_API_BASE } from '../../config/api'
 
 /**
- * KB 知识库 RAG API
+ * KB 知识库 RAG API — 直连 AI Engine（绕过 Go Backend）
  *
- * 对齐后端 knowledge_handler.go + ai_engine/rag/router.py：
+ * 对齐后端 AI Engine /api/v1/rag/*：
  *   POST /api/v1/rag/search       → RAG 检索（向量 + BM25 混合）
  *   POST /api/v1/rag/evidence     → 证据融合（生成 EvidencePacket 供 S3 消费）
  *   POST /api/v1/knowledge/upload → 文档上传/索引（进入向量存储）
@@ -19,7 +19,7 @@ export const teacherRagApi = {
    * @returns {Promise<Object>} { results, total_chunks }
    */
   search: (params = {}) =>
-    requestJson('/api/v1/rag/search', {
+    fetch(`${RAG_API_BASE}/api/v1/rag/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -28,7 +28,7 @@ export const teacherRagApi = {
         top_k: params.topK || 10,
         min_score: params.minScore ?? 0.6
       })
-    }),
+    }).then(r => r.json()),
 
   /**
    * 证据融合（KB → S3 交接产物）
@@ -39,7 +39,7 @@ export const teacherRagApi = {
    * @returns {Promise<Object>} { evidence_packet: { relevant_chunks, synthesized_context, citations } }
    */
   evidence: (params = {}) =>
-    requestJson('/api/v1/rag/evidence', {
+    fetch(`${RAG_API_BASE}/api/v1/rag/evidence`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -47,7 +47,7 @@ export const teacherRagApi = {
         context: params.context || {},
         knowledge_base_ids: params.knowledgeBaseIds || []
       })
-    }),
+    }).then(r => r.json()),
 
   /**
    * 知识库上传/索引
@@ -59,7 +59,7 @@ export const teacherRagApi = {
    * @returns {Promise<Object>} { task_id, status, chunk_count, document_id }
    */
   knowledgeUpload: (params = {}) =>
-    requestJson('/api/v1/knowledge/upload', {
+    fetch(`${RAG_API_BASE}/api/v1/knowledge/upload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -68,5 +68,5 @@ export const teacherRagApi = {
         files: params.files || [],
         texts: params.texts || []
       })
-    })
+    }).then(r => r.json())
 }

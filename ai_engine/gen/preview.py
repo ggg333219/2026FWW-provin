@@ -50,7 +50,8 @@ class PreviewRenderer:
         return "\n".join(slides)
 
     def _render_slide(self, node: dict[str, Any], index: int) -> str:
-        node_type = node.get("type") or "content"
+        node_type_raw = node.get("type") or node.get("node_type") or "content"
+        node_type = str(node_type_raw).lower()
         title = html.escape(str(node.get("title") or f"第{index}页"))
         templates = {
             "title": self._slide_title,
