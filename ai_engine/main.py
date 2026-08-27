@@ -18,6 +18,8 @@ PROJECT_ROOT = CURRENT_DIR.parent  # 项目根目录
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from ai_engine.parse.minio_client import MinioClient
+
 # 导入 AI 核心逻辑（使用绝对导入，依赖 PROJECT_ROOT 已在 sys.path 中）
 from ai_engine.parser import DocumentParser
 from ai_engine.generator import LessonGenerator, GenerationConfig
@@ -29,6 +31,7 @@ from ai_engine.gen.node import NodeGenerator, NodeGenConfig
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
 from ai_engine.gen.preview import PreviewRenderer
+from ai_engine.gen.validator import ContentValidator
 from ai_engine.gen.commands import CommandParser, EditCommand, CommandType
 from ai_engine.gen.patch import NodePatcher
 from ai_engine.gen.interactive import InteractiveBuilder
@@ -977,12 +980,38 @@ from ai_engine.core.schema import (
     ExportJob,
 )
 from ai_engine.gen.version import get_version_manager
+from ai_engine.core.redis_client import get_redis_task_store
 
-# 进程内生成任务存储（生产环境用 Redis/DB）
+# 进程内生成任务存储（内存层）+ Redis 持久化层
 _gen_tasks: dict[str, GenerationTask] = {}
-# 生成管道内是同步 LLM 调用（会阻塞事件循环），用线程锁 + daemon 线程执行，
-# 避免真实 LLM 生成期间 create/status/health 全部卡死。
-_gen_tasks_lock = threading.Lock()
+_gen_tasks_lock = asyncio.Lock()
+_task_store = get_redis_task_store()  # Redis 持久化（不可用时自动降级内存）
+
+
+async def _persist_generation_task(task: GenerationTask) -> None:
+    """Persist the latest task snapshot for cross-worker status queries."""
+    task_dict = task.model_dump(mode="json")
+    task_dict["status"] = task.status.value
+    task_dict["stage"] = task.stage.value
+    await _task_store.save_task(task.task_id, task_dict)
+
+
+def _restore_task_from_dict(data: dict) -> GenerationTask | None:
+    """从 Redis 加载的 dict 重建 GenerationTask Pydantic 对象。"""
+    try:
+        from ai_engine.core.schema import GenerationStatus, GenerationStage
+        # 恢复枚举值
+        status_str = data.get("status", "")
+        stage_str = data.get("stage", "")
+        data["status"] = GenerationStatus(status_str) if status_str else GenerationStatus.PENDING
+        data["stage"] = GenerationStage(stage_str) if stage_str else GenerationStage.INTENT_LOCKED
+        # nodes 从 JSON 字符串还原
+        if isinstance(data.get("nodes"), str):
+            import json
+            data["nodes"] = json.loads(data["nodes"])
+        return GenerationTask(**data)
+    except Exception:
+        return None
 
 
 @app.post("/api/v1/gen/create", response_model=GenerationCreateResponse)
@@ -1019,6 +1048,8 @@ async def gen_create(req: GenerationCreateRequest):
 
     with _gen_tasks_lock:
         _gen_tasks[task_id] = task
+    # 持久化到 Redis（跨 worker 可见；Redis 不可用时自动降级）
+    await _persist_generation_task(task)
 
     # 后台执行生成管道（同步管道放 daemon 线程，避免阻塞事件循环）
     threading.Thread(target=_run_generation_pipeline, args=(task_id, req), daemon=True).start()
@@ -1043,12 +1074,14 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         task.status = GenerationStatus.GENERATING
         task.stage = GenerationStage.INTENT_LOCKED
         task.progress_pct = 10.0
+        await _persist_generation_task(task)
 
         # Stage 2: 收集证据（如有）
         # ★ P1修复：如果前端未传 evidence_packet，但有 session_id，
         #   自动从 RAG 知识库获取证据，实现 S2→KB→S3 自动链路。
         task.stage = GenerationStage.EVIDENCE_GATHERING
         task.progress_pct = 20.0
+        await _persist_generation_task(task)
         evidence_dict = None
         if req.evidence_packet:
             evidence_dict = req.evidence_packet.model_dump() if hasattr(req.evidence_packet, "model_dump") else req.evidence_packet
@@ -1084,6 +1117,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         # Stage 3: 构建大纲
         task.stage = GenerationStage.STRUCTURING
         task.progress_pct = 30.0
+        await _persist_generation_task(task)
         builder = OutlineBuilder()
         intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
         outline = builder.build(intent_dict, evidence_dict)
@@ -1093,6 +1127,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
 
         # Stage 4: 逐节点生成
         task.stage = GenerationStage.GENERATING
+        await _persist_generation_task(task)
         generator = NodeGenerator()
         course_name = req.intent.topic or "课件"
         scripts = generator.generate_all(nodes, "", course_name)
@@ -1112,9 +1147,20 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             merged_nodes.append(merged)
         task.nodes = merged_nodes
 
-        # Stage 5: 保存版本快照
+        # Stage 5: 内容自适应校验（标注超长节点字号/分页提示）
+        validator = ContentValidator()
+        validated_nodes = []
+        for n in merged_nodes:
+            vr = validator.validate(n)
+            n = validator.compute_scaled_font(n, vr)
+            validated_nodes.append(n)
+        task.nodes = validated_nodes
+        merged_nodes = validated_nodes
+
+        # Stage 6: 保存版本快照
         task.stage = GenerationStage.PREVIEW
         task.progress_pct = 90.0
+        await _persist_generation_task(task)
         vm = get_version_manager()
         vm.save_snapshot(
             generation_id=task.generation_id,
@@ -1129,12 +1175,14 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
 
         with _gen_tasks_lock:
             _gen_tasks[task_id] = task
+        await _persist_generation_task(task)
 
     except Exception as e:
         task.status = GenerationStatus.FAILED
         task.error = str(e)
         with _gen_tasks_lock:
             _gen_tasks[task_id] = task
+        await _persist_generation_task(task)
 
 
 @app.get("/api/v1/gen/status/{task_id}", response_model=GenerationStatusResponse)
@@ -1143,9 +1191,19 @@ async def gen_status(task_id: str):
     GET /api/v1/gen/status/{task_id} — 查询生成任务状态。
 
     对应 Go 端：GenerationHandler.Status → AIEngine.GenerationStatus
+    读取顺序：内存 dict（快）→ Redis（进程重启后可恢复）→ 404
     """
     with _gen_tasks_lock:
         task = _gen_tasks.get(task_id)
+
+    # Redis 回退：进程重启后从 Redis 恢复任务状态
+    if not task:
+        redis_data = await _task_store.load_task(task_id)
+        if redis_data:
+            task = _restore_task_from_dict(redis_data)
+            if task:
+                async with _gen_tasks_lock:
+                    _gen_tasks[task_id] = task
 
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -1293,7 +1351,31 @@ async def _run_export(job_id: str, nodes: list[dict], fmt: ExportFormat):
             job.file_size = doc_path.stat().st_size
 
         job.status = ExportStatus.DONE
-        job.minio_path = str(export_dir / job_id)
+
+        # 真实上传 MinIO（记录 minio:// URL，download_url 由 Go 端通过预签名 URL 提供）
+        minio_client = MinioClient()
+        ppt_meta = job.metadata or {}
+        doc_meta = job.metadata or {}
+
+        uploaded_paths = []
+        if "ppt_path" in ppt_meta:
+            try:
+                minio_url = minio_client.upload_file(ppt_meta["ppt_path"])
+                job.minio_path = minio_url
+                uploaded_paths.append(minio_url)
+            except Exception as upload_err:
+                # 上传失败仍保留本地路径，确保下载链路不中断
+                job.minio_path = ppt_meta["ppt_path"]
+                job.error = f"MinIO上传警告: {upload_err}"
+
+        elif "doc_path" in doc_meta:
+            try:
+                minio_url = minio_client.upload_file(doc_meta["doc_path"])
+                job.minio_path = minio_url
+                uploaded_paths.append(minio_url)
+            except Exception as upload_err:
+                job.minio_path = doc_meta["doc_path"]
+                job.error = f"MinIO上传警告: {upload_err}"
 
         async with _export_lock:
             _export_tasks[job_id] = job
