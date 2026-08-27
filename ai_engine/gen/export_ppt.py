@@ -33,7 +33,7 @@ _TYPE_ALIASES = {
     "section": "section", "divider": "section", "chapter": "section",
     "summary": "summary", "conclusion": "summary", "recap": "summary",
     "quiz": "quiz", "interactive": "quiz", "question": "quiz",
-    "two_column": "content", "content": "content", "slide": "content",
+    "two_column": "two_column", "content": "content", "slide": "content",
     "opening": "content", "explain": "content", "explanation": "content",
     "transition": "content",
 }
@@ -163,7 +163,8 @@ class PPTExporter:
         return {
             "cover": self._add_cover_slide, "agenda": self._add_agenda_slide,
             "section": self._add_section_slide, "summary": self._add_summary_slide,
-            "quiz": self._add_quiz_slide, "content": self._add_content_slide,
+            "quiz": self._add_quiz_slide, "two_column": self._add_two_column_slide,
+            "content": self._add_content_slide,
         }.get(node_type, self._add_content_slide)
 
     def _blank_slide(self, prs: Presentation, page_number: int | None = None):
@@ -250,6 +251,39 @@ class PPTExporter:
                 self._add_panel(slide, "讲授分段", seg_chunk, 0.72, 1.42, 11.88, 5.35)
             else:
                 self._add_panel(slide, "教学内容", main_chunk, 0.72, 1.42, 11.88, 5.35)
+
+    def _add_two_column_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
+        """固定双栏页：左栏核心要点，右栏讲授分段或内容展开。"""
+        key_items = [("要点", point, True) for point in resolve_key_points(node)]
+        if not key_items:
+            summary = str(node.get("summary") or "暂无核心要点").strip()
+            key_items = [("摘要", summary, False)]
+
+        right_items = self._segment_items(node)
+        right_heading = "讲授分段"
+        if not right_items:
+            right_heading = "内容展开"
+            right_items = []
+            for label, field in (("正文", "content"), ("讲稿", "script")):
+                value = node.get(field)
+                if isinstance(value, str) and value.strip():
+                    right_items.append((label, value.strip(), False))
+            if not right_items:
+                right_items = [("正文", "暂无展开内容", False)]
+
+        left_chunks = self._chunk_weighted(key_items, 13, 34)
+        right_chunks = self._chunk_weighted(right_items, 13, 36)
+        page_count = max(len(left_chunks), len(right_chunks), 1)
+        title = str(node.get("title") or f"第 {index} 页")
+
+        for page_index in range(page_count):
+            slide = self._blank_slide(prs, index)
+            page_title = title + (f"（续 {page_index + 1}）" if page_index else "")
+            self._add_page_title(slide, page_title, "TWO COLUMN")
+            left_chunk = left_chunks[page_index] if page_index < len(left_chunks) else []
+            right_chunk = right_chunks[page_index] if page_index < len(right_chunks) else []
+            self._add_panel(slide, "核心要点", left_chunk, 0.72, 1.42, 5.58, 5.35)
+            self._add_panel(slide, right_heading, right_chunk, 6.72, 1.42, 5.88, 5.35)
 
     def _add_quiz_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
         questions = node.get("questions") or node.get("interactive_questions") or []

@@ -15,7 +15,7 @@ from io import BytesIO
 
 from pptx import Presentation
 
-from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
+from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig, resolve_node_type
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
 
 # =============================================================================
@@ -199,6 +199,36 @@ class TestPPTExporter(unittest.TestCase):
         self.assertIn("起始标记", text)
         self.assertIn("结束标记", text)
         self.assertIn("正文（续）", text)
+
+    def test_two_column_uses_independent_left_and_right_panels(self):
+        """two_column 不再收敛为普通内容页，左右栏保持固定位置。"""
+        node = {
+            "node_id": "n-two", "node_type": "two_column", "title": "双栏教学",
+            "key_points": ["左栏要点A", "左栏要点B"],
+            "content": "右栏正文回退",
+            "segments": [{
+                "segment_type": "explanation", "text": "右栏讲授内容", "estimated_seconds": 60,
+            }],
+        }
+        self.assertEqual(resolve_node_type(node), "two_column")
+        prs = Presentation(self.ppt.export_to_bytes([node], "双栏验证"))
+        self.assertEqual(len(prs.slides), 1)
+
+        left_shapes = [
+            shape for shape in prs.slides[0].shapes
+            if hasattr(shape, "text") and "左栏要点A" in shape.text
+        ]
+        right_shapes = [
+            shape for shape in prs.slides[0].shapes
+            if hasattr(shape, "text") and "右栏讲授内容" in shape.text
+        ]
+        self.assertEqual(len(left_shapes), 1)
+        self.assertEqual(len(right_shapes), 1)
+        self.assertLess(left_shapes[0].left.inches, 6.0)
+        self.assertGreater(right_shapes[0].left.inches, 6.0)
+        all_text = "\n".join(shape.text for shape in prs.slides[0].shapes if hasattr(shape, "text"))
+        self.assertIn("TWO COLUMN", all_text)
+        self.assertIn("讲解 · 1分钟", all_text)
 
     # ── 模板 ──
 
