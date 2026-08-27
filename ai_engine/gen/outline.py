@@ -47,9 +47,11 @@ class OutlineBuilder:
         Returns:
             {"nodes": [...], "used_fallback": bool}
         """
-        title = str(intent.get("title") or "未命名课件")
-        description = str(intent.get("description") or "")
-        key_points = intent.get("key_points") or []
+        # S1 意图使用 topic/knowledge_points 字段，而大纲生成器使用 title/description/key_points。
+        # 这里做一次字段归一，避免 S1→S3 断链导致大纲退化为"未命名课件"空提示。
+        title = str(intent.get("title") or intent.get("topic") or "未命名课件")
+        description = str(intent.get("description") or intent.get("subtitle") or "")
+        key_points = intent.get("key_points") or intent.get("knowledge_points") or []
         evidence_text = self._format_evidence(evidence_packet)
 
         markdown = self._build_markdown_context(title, description, key_points, evidence_text)

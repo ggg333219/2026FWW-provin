@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -55,8 +56,8 @@ func (h *GenerationHandler) PreviewHTML(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
 		return
 	}
-	if len(req.Nodes) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "nodes 不能为空"})
+	if len(req.Nodes) == 0 && req.GenID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "nodes 或 gen_id 至少提供一个"})
 		return
 	}
 	previewClient, ok := h.aiClient.(interface {
@@ -89,17 +90,33 @@ func (h *GenerationHandler) Modify(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
 
-// Preview  GET /api/v1/gen/preview/:gen_id — 预览（当前简化：走 status 返回）
+// Preview  GET /api/v1/gen/preview/:gen_id — 读取版本快照并渲染预览 HTML（前端刷新后恢复预览）。
 func (h *GenerationHandler) Preview(c *gin.Context) {
 	genID := c.Param("gen_id")
 	if genID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 gen_id"})
 		return
 	}
-	// 预览本质上是一个已完成生成的 status 查询
-	resp, err := h.aiClient.GenerationStatus(c.Request.Context(), genID)
+	var version *int
+	if v := c.Query("version"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			version = &n
+		}
+	}
+	previewClient, ok := h.aiClient.(interface {
+		GetPreview(context.Context, string, *int) (*service.GenerationPreviewResponse, error)
+	})
+	if !ok {
+		c.JSON(http.StatusNotImplemented, gin.H{"code": 501, "message": "当前 AI 客户端不支持预览持久化"})
+		return
+	}
+	resp, err := previewClient.GetPreview(c.Request.Context(), genID, version)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取预览失败: " + err.Error()})
+		if httpErr, isHTTP := err.(*service.AIEngineHTTPError); isHTTP && httpErr.StatusCode == http.StatusNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "版本不存在，请先完成 S3 生成"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "获取预览失败: " + err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})

@@ -214,6 +214,7 @@ func runS1Standalone(mode string, aiClient service.AIEngine) {
 		gen.POST("/create", genHandler.Create)
 		gen.GET("/status/:task_id", genHandler.Status)
 		gen.POST("/preview", genHandler.PreviewHTML)
+		gen.GET("/preview/:gen_id", genHandler.Preview)
 	}
 
 	// S4: 版本管理
