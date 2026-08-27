@@ -13,6 +13,8 @@ import wave
 from pathlib import Path
 from typing import List, Optional, Any
 
+from parse.minio_client import MinioClient
+
 CURRENT_DIR = Path(__file__).resolve().parent  # ai_engine/
 PROJECT_ROOT = CURRENT_DIR.parent  # 项目根目录
 if str(PROJECT_ROOT) not in sys.path:
@@ -29,6 +31,7 @@ from ai_engine.gen.node import NodeGenerator, NodeGenConfig
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
 from ai_engine.gen.preview import PreviewRenderer
+from ai_engine.gen.validator import ContentValidator
 from ai_engine.gen.commands import CommandParser, EditCommand, CommandType
 from ai_engine.gen.patch import NodePatcher
 from ai_engine.gen.interactive import InteractiveBuilder
@@ -912,10 +915,30 @@ from ai_engine.core.schema import (
     ExportJob,
 )
 from ai_engine.gen.version import get_version_manager
+from ai_engine.core.redis_client import get_redis_task_store
 
-# 进程内生成任务存储（生产环境用 Redis/DB）
+# 进程内生成任务存储（内存层）+ Redis 持久化层
 _gen_tasks: dict[str, GenerationTask] = {}
 _gen_tasks_lock = asyncio.Lock()
+_task_store = get_redis_task_store()  # Redis 持久化（不可用时自动降级内存）
+
+
+def _restore_task_from_dict(data: dict) -> GenerationTask | None:
+    """从 Redis 加载的 dict 重建 GenerationTask Pydantic 对象。"""
+    try:
+        from ai_engine.core.schema import GenerationStatus, GenerationStage
+        # 恢复枚举值
+        status_str = data.get("status", "")
+        stage_str = data.get("stage", "")
+        data["status"] = GenerationStatus(status_str) if status_str else GenerationStatus.PENDING
+        data["stage"] = GenerationStage(stage_str) if stage_str else GenerationStage.INTENT_LOCKED
+        # nodes 从 JSON 字符串还原
+        if isinstance(data.get("nodes"), str):
+            import json
+            data["nodes"] = json.loads(data["nodes"])
+        return GenerationTask(**data)
+    except Exception:
+        return None
 
 
 @app.post("/api/v1/gen/create", response_model=GenerationCreateResponse)
@@ -952,6 +975,11 @@ async def gen_create(req: GenerationCreateRequest):
 
     async with _gen_tasks_lock:
         _gen_tasks[task_id] = task
+    # 持久化到 Redis（跨 worker 可见；Redis 不可用时自动降级）
+    task_dict = task.model_dump(mode="json")
+    task_dict["status"] = task.status.value
+    task_dict["stage"] = task.stage.value
+    await _task_store.save_task(task_id, task_dict)
 
     # 后台执行生成管道
     asyncio.create_task(_run_generation_pipeline(task_id, req))
@@ -1045,7 +1073,17 @@ async def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             merged_nodes.append(merged)
         task.nodes = merged_nodes
 
-        # Stage 5: 保存版本快照
+        # Stage 5: 内容自适应校验（标注超长节点字号/分页提示）
+        validator = ContentValidator()
+        validated_nodes = []
+        for n in merged_nodes:
+            vr = validator.validate(n)
+            n = validator.compute_scaled_font(n, vr)
+            validated_nodes.append(n)
+        task.nodes = validated_nodes
+        merged_nodes = validated_nodes
+
+        # Stage 6: 保存版本快照
         task.stage = GenerationStage.PREVIEW
         task.progress_pct = 90.0
         vm = get_version_manager()
@@ -1076,9 +1114,19 @@ async def gen_status(task_id: str):
     GET /api/v1/gen/status/{task_id} — 查询生成任务状态。
 
     对应 Go 端：GenerationHandler.Status → AIEngine.GenerationStatus
+    读取顺序：内存 dict（快）→ Redis（进程重启后可恢复）→ 404
     """
     async with _gen_tasks_lock:
         task = _gen_tasks.get(task_id)
+
+    # Redis 回退：进程重启后从 Redis 恢复任务状态
+    if not task:
+        redis_data = await _task_store.load_task(task_id)
+        if redis_data:
+            task = _restore_task_from_dict(redis_data)
+            if task:
+                async with _gen_tasks_lock:
+                    _gen_tasks[task_id] = task
 
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -1192,7 +1240,31 @@ async def _run_export(job_id: str, nodes: list[dict], fmt: ExportFormat):
             job.file_size = doc_path.stat().st_size
 
         job.status = ExportStatus.DONE
-        job.minio_path = str(export_dir / job_id)
+
+        # 真实上传 MinIO（记录 minio:// URL，download_url 由 Go 端通过预签名 URL 提供）
+        minio_client = MinioClient()
+        ppt_meta = job.metadata or {}
+        doc_meta = job.metadata or {}
+
+        uploaded_paths = []
+        if "ppt_path" in ppt_meta:
+            try:
+                minio_url = minio_client.upload_file(ppt_meta["ppt_path"])
+                job.minio_path = minio_url
+                uploaded_paths.append(minio_url)
+            except Exception as upload_err:
+                # 上传失败仍保留本地路径，确保下载链路不中断
+                job.minio_path = ppt_meta["ppt_path"]
+                job.error = f"MinIO上传警告: {upload_err}"
+
+        elif "doc_path" in doc_meta:
+            try:
+                minio_url = minio_client.upload_file(doc_meta["doc_path"])
+                job.minio_path = minio_url
+                uploaded_paths.append(minio_url)
+            except Exception as upload_err:
+                job.minio_path = doc_meta["doc_path"]
+                job.error = f"MinIO上传警告: {upload_err}"
 
         async with _export_lock:
             _export_tasks[job_id] = job

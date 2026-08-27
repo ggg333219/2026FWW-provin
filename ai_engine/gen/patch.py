@@ -133,8 +133,9 @@ class NodePatcher:
             "prerequisites": [],
             "content": content,
         }
-        if "type" in cmd.params:
-            new_node["type"] = cmd.params["type"]
+        raw_type = cmd.params.get("type") or cmd.params.get("node_type") or "content"
+        new_node["type"] = raw_type
+        new_node["node_type"] = raw_type
         if after_id:
             idx = next((i for i, n in enumerate(nodes) if n["node_id"] == after_id), -1)
             if idx == -1:

@@ -50,7 +50,7 @@ class PreviewRenderer:
         return "\n".join(slides)
 
     def _render_slide(self, node: dict[str, Any], index: int) -> str:
-        node_type = node.get("type") or "content"
+        node_type = node.get("type") or node.get("node_type") or "content"
         title = html.escape(str(node.get("title") or f"第{index}页"))
         templates = {
             "title": self._slide_title,
@@ -121,7 +121,7 @@ class PreviewRenderer:
 </div>"""
 
     def _slide_summary(self, node: dict, index: int, title: str) -> str:
-        points = node.get("key_points") or node.get("content", "").split("\n") or []
+        points = node.get("key_points") or node.get("core_points") or node.get("content", "").split("\n") or []
         items = "".join(f"<li>✅ {html.escape(str(p))}</li>" for p in points[:6] if p.strip())
         return f"""<div class="slide summary-slide">
   <div class="slide-num">{index}</div>
