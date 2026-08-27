@@ -385,10 +385,11 @@ class TeachingNode(BaseModel):
     内容分段列表，每段为 {title, content, duration_minutes} 结构。
     用于精细化渲染控制。
     """
-    questions: list[dict[str, Any]] = Field(default_factory=list)
+    questions: list[str] = Field(default_factory=list)
     """
-    节点内嵌问答题目列表，每题为 {question, answer, type} 结构。
-    用于互动环节渲染。
+    节点内嵌问答题目列表，每题为问题文本字符串。
+    与 interactive_questions 等效，用于互动环节渲染。
+    类型统一为 list[str]：所有 normalize 函数均写入字符串列表，前端 _slide_quiz 也期望字符串列表。
     """
 
     # -------------------------------------------------------------------------
