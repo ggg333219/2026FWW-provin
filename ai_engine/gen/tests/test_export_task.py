@@ -13,6 +13,8 @@ import unittest
 from pathlib import Path
 from io import BytesIO
 
+from pptx import Presentation
+
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
 
@@ -116,11 +118,87 @@ class TestPPTExporter(unittest.TestCase):
         self.assertGreater(buf.getbuffer().nbytes, 100)
 
     def test_export_to_bytes_segments(self):
-        """带 segments 的节点正常输出"""
-        buf = self.ppt.export_to_bytes(_node_with_segments(), "分段节点")
-        self.assertGreater(buf.getbuffer().nbytes, 0)
-        with zipfile.ZipFile(buf) as z:
-            self.assertIn("[Content_Types].xml", z.namelist())
+        """segments 的类型、文本与时长均进入可编辑文本框"""
+        nodes = _node_with_segments()
+        nodes[0]["segments"][0]["estimated_seconds"] = 45
+        buf = self.ppt.export_to_bytes(nodes, "分段节点")
+        text = "\n".join(
+            shape.text
+            for slide in Presentation(buf).slides
+            for shape in slide.shapes
+            if hasattr(shape, "text")
+        )
+        self.assertIn("导入 · 45秒", text)
+        self.assertIn("欢迎来到AI课堂", text)
+        self.assertIn("讲解", text)
+        self.assertIn("这是主要内容", text)
+
+    def test_node_type_precedes_legacy_type(self):
+        """标准 node_type 优先于冲突的旧 type 字段。"""
+        nodes = [{
+            "node_id": "n1", "title": "标准封面", "node_type": "cover",
+            "type": "quiz", "content": "标准字段优先",
+        }]
+        buf = self.ppt.export_to_bytes(nodes, "双字段")
+        prs = Presentation(buf)
+        self.assertEqual(len(prs.slides), 1)
+        slide_text = "\n".join(shape.text for shape in prs.slides[0].shapes if hasattr(shape, "text"))
+        self.assertIn("标准封面", slide_text)
+        self.assertNotIn("INTERACTION", slide_text)
+
+    def test_key_points_and_core_points_are_both_exported(self):
+        """新旧要点字段同时存在时合并导出，不再产生空白要点页。"""
+        nodes = [{
+            "node_id": "n1", "title": "总结", "node_type": "summary",
+            "key_points": ["关键点A"], "core_points": ["核心点B", "关键点A"],
+        }]
+        buf = self.ppt.export_to_bytes(nodes, "要点兼容")
+        text = "\n".join(
+            shape.text
+            for slide in Presentation(buf).slides
+            for shape in slide.shapes
+            if hasattr(shape, "text")
+        )
+        self.assertEqual(text.count("关键点A"), 1)
+        self.assertIn("核心点B", text)
+
+    def test_three_teaching_templates_keep_native_editable_text(self):
+        """三套模板均生成 16:9、无整页图片伪导出的原生文本。"""
+        for template_id in ("default", "academic", "minimal"):
+            with self.subTest(template_id=template_id):
+                buf = self.ppt.export_to_bytes(_content_nodes(), "模板测试", template_id)
+                prs = Presentation(buf)
+                self.assertAlmostEqual(prs.slide_width / prs.slide_height, 16 / 9, places=2)
+                texts = [
+                    shape.text for slide in prs.slides for shape in slide.shapes
+                    if hasattr(shape, "text") and shape.text.strip()
+                ]
+                self.assertTrue(any("什么是AI" in text for text in texts))
+                self.assertFalse(any(shape.shape_type == 13 for slide in prs.slides for shape in slide.shapes))
+
+    def test_template_file_samples_are_not_leaked_into_export(self):
+        """从模板目录加载时会清除样例页，不污染节点同源页数。"""
+        template_dir = Path(__file__).resolve().parents[1] / "templates"
+        exporter = PPTExporter(ExportPPTConfig(template_dir=str(template_dir), output_dir="/tmp"))
+        prs = Presentation(exporter.export_to_bytes(
+            [{"node_id": "n1", "node_type": "slide", "title": "唯一节点", "content": "唯一正文"}],
+            "母版加载", "academic",
+        ))
+        self.assertEqual(len(prs.slides), 1)
+        text = "\n".join(shape.text for shape in prs.slides[0].shapes if hasattr(shape, "text"))
+        self.assertIn("唯一节点", text)
+        self.assertNotIn("课程目录", text)
+
+    def test_long_content_uses_continuation_slides_without_truncation(self):
+        """超长正文自动续页，首尾内容均保留。"""
+        long_text = "起始标记。" + "这是用于验证自适应分页的完整讲授正文。" * 80 + "结束标记。"
+        nodes = [{"node_id": "n1", "node_type": "slide", "title": "长内容", "content": long_text}]
+        prs = Presentation(self.ppt.export_to_bytes(nodes, "长内容测试"))
+        self.assertGreater(len(prs.slides), 1)
+        text = "\n".join(shape.text for slide in prs.slides for shape in slide.shapes if hasattr(shape, "text"))
+        self.assertIn("起始标记", text)
+        self.assertIn("结束标记", text)
+        self.assertIn("正文（续）", text)
 
     # ── 模板 ──
 
