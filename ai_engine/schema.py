@@ -38,15 +38,62 @@ def build_stage2_node_tree_schema() -> dict[str, Any]:
                         "additionalProperties": False,
                         "properties": {
                             "node_id": {"type": "string"},
-                            "title": {"type": "string"},
-                            "summary": {"type": "string"},
+                            "title": {"type": "string", "maxLength": 60},
+                            "summary": {"type": "string", "maxLength": 200},
                             "source_span": {"type": "string"},
+                            "node_type": {
+                                "type": "string",
+                                "enum": ["content", "section", "quiz", "summary", "cover", "divider"],
+                            },
+                            # 兼容字段（部分 LLM 习惯输出 type 而非 node_type）
+                            "type": {
+                                "type": "string",
+                                "enum": ["content", "section", "quiz", "summary", "cover", "divider"],
+                            },
                             "prerequisites": {
                                 "type": "array",
                                 "items": {"type": "string"},
                             },
+                            # 核心要点（渲染器统一读 key_points）
+                            "key_points": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "maxItems": 6,
+                            },
+                            "core_points": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "maxItems": 6,
+                            },
+                            # 讲授分段
+                            "segments": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "properties": {
+                                        "segment_id": {"type": "string"},
+                                        "text": {"type": "string", "maxLength": 500},
+                                        "node_id": {"type": "string"},
+                                    },
+                                    "required": ["segment_id", "text", "node_id"],
+                                },
+                            },
+                            # 排版提示
+                            "layout_hint": {
+                                "type": "string",
+                                "enum": ["content", "two_column", "section", "quiz", "summary"],
+                            },
+                            "font_size_hint": {
+                                "type": "string",
+                                "enum": ["large", "medium", "small"],
+                            },
+                            "text_alignment": {
+                                "type": "string",
+                                "enum": ["left", "center", "right"],
+                            },
                         },
-                        "required": ["node_id", "title", "summary", "source_span", "prerequisites"],
+                        "required": ["node_id", "title", "node_type"],
                     },
                 }
             },
@@ -159,17 +206,36 @@ def normalize_stage2_nodes(nodes: list[dict[str, Any]] | None) -> list[dict[str,
         if not raw_id or raw_id in seen:
             continue
         seen.add(raw_id)
+
+        raw_type = str((item or {}).get("type") or (item or {}).get("node_type") or "content").strip()
+        core_pts = (item or {}).get("core_points") or []
+        key_pts = (item or {}).get("key_points") or []
+
         result.append(
             {
                 "node_id": raw_id,
                 "title": str((item or {}).get("title") or f"知识节点{idx}").strip() or f"知识节点{idx}",
                 "summary": str((item or {}).get("summary") or "").strip(),
                 "source_span": str((item or {}).get("source_span") or "").strip(),
+                "node_type": raw_type,
+                "type": raw_type,
                 "prerequisites": [
                     str(value).strip()
                     for value in ((item or {}).get("prerequisites") or [])
                     if str(value).strip()
                 ],
+                # 兼容字段：key_points 优先，否则 fallback 到 core_points
+                "key_points": key_pts if key_pts else (core_pts if isinstance(core_pts, list) else []),
+                "core_points": core_pts if isinstance(core_pts, list) else [],
+                # 兼容字段：questions 优先，否则 fallback 到 interactive_questions
+                "questions": (item or {}).get("questions") or (item or {}).get("interactive_questions") or [],
+                "interactive_questions": (item or {}).get("interactive_questions") or (item or {}).get("questions") or [],
+                # 空数组显式声明，避免 None
+                "segments": (item or {}).get("segments") or [],
+                "layout_hint": (item or {}).get("layout_hint"),
+                "font_size_hint": (item or {}).get("font_size_hint"),
+                "text_alignment": (item or {}).get("text_alignment"),
+                "slide_background": (item or {}).get("slide_background"),
             }
         )
     return result
@@ -196,12 +262,28 @@ def normalize_stage3_scripts(scripts: list[dict[str, Any]] | None, valid_node_id
         if not script_text and segments:
             script_text = "".join([seg["text"] for seg in segments])
 
+        # 提取兼容字段（允许 LLM 输出 title/script 作为备选）
+        raw_type = str((item or {}).get("type") or (item or {}).get("node_type") or "content").strip()
+        core_pts = (item or {}).get("core_points") or []
+        key_pts = (item or {}).get("key_points") or []
+
         normalized.append(
             {
                 "node_id": node_id,
                 "title": str((item or {}).get("title") or node_id).strip() or node_id,
                 "script": script_text,
+                "node_type": raw_type,
+                "type": raw_type,
+                # 兼容字段
+                "key_points": key_pts if key_pts else (core_pts if isinstance(core_pts, list) else []),
+                "core_points": core_pts if isinstance(core_pts, list) else [],
+                "questions": (item or {}).get("questions") or (item or {}).get("interactive_questions") or [],
+                "interactive_questions": (item or {}).get("interactive_questions") or (item or {}).get("questions") or [],
                 "segments": segments,
+                "layout_hint": (item or {}).get("layout_hint"),
+                "font_size_hint": (item or {}).get("font_size_hint"),
+                "text_alignment": (item or {}).get("text_alignment"),
+                "slide_background": (item or {}).get("slide_background"),
             }
         )
     return normalized
