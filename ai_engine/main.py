@@ -984,7 +984,10 @@ from ai_engine.core.redis_client import get_redis_task_store
 
 # 进程内生成任务存储（内存层）+ Redis 持久化层
 _gen_tasks: dict[str, GenerationTask] = {}
-_gen_tasks_lock = asyncio.Lock()
+# 注意：_gen_tasks 会被两个线程访问 —— 事件循环线程（async 端点）与
+# daemon 生成线程（_run_generation_pipeline）。因此必须用 threading.Lock，
+# 不能用 asyncio.Lock（既非线程安全，也不能在同步线程里 with 使用）。
+_gen_tasks_lock = threading.Lock()
 _task_store = get_redis_task_store()  # Redis 持久化（不可用时自动降级内存）
 
 
@@ -1052,14 +1055,36 @@ async def gen_create(req: GenerationCreateRequest):
     await _persist_generation_task(task)
 
     # 后台执行生成管道（同步管道放 daemon 线程，避免阻塞事件循环）
-    threading.Thread(target=_run_generation_pipeline, args=(task_id, req), daemon=True).start()
 
+    threading.Thread(target=_run_generation_pipeline, args=(task_id, req), daemon=True).start()
     return GenerationCreateResponse(
         task_id=task_id,
         generation_id=gen_id,
         status=GenerationStatus.PENDING,
         generation_type="ppt" if not req.intent.output_format else (req.intent.output_format[0] if req.intent.output_format else "ppt"),
     )
+
+
+def _persist_task_sync(task: GenerationTask) -> None:
+    """在同步上下文（daemon 生成线程）中持久化任务快照。
+
+    RedisTaskStore 的 save_task 是 async 方法；在 daemon 线程里没有事件循环，
+    不能直接 await。这里优先复用 RedisTaskStore 的同步内存回退存储
+    （_InMemoryTaskStore，线程安全），Redis 可用时再在线程内以事件循环方式写。
+    """
+    task_dict = task.model_dump(mode="json")
+    task_dict["status"] = task.status.value
+    task_dict["stage"] = task.stage.value
+    # Redis 可用时，用临时事件循环在 daemon 线程内写 Redis（跨 worker 可见）
+    if getattr(_task_store, "is_redis_available", False):
+        try:
+            _task_store._serialize(task_dict)  # 预校验可序列化
+            asyncio.run(_task_store.save_task(task.task_id, task_dict))
+            return
+        except Exception:
+            pass  # 降级到内存回退存储
+    # 内存回退存储（_InMemoryTaskStore.save_task 是同步、线程安全）
+    _task_store._mem.save_task(task.task_id, task_dict)
 
 
 def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
@@ -1074,14 +1099,14 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         task.status = GenerationStatus.GENERATING
         task.stage = GenerationStage.INTENT_LOCKED
         task.progress_pct = 10.0
-        await _persist_generation_task(task)
+        _persist_task_sync(task)
 
         # Stage 2: 收集证据（如有）
         # ★ P1修复：如果前端未传 evidence_packet，但有 session_id，
         #   自动从 RAG 知识库获取证据，实现 S2→KB→S3 自动链路。
         task.stage = GenerationStage.EVIDENCE_GATHERING
         task.progress_pct = 20.0
-        await _persist_generation_task(task)
+        _persist_task_sync(task)
         evidence_dict = None
         if req.evidence_packet:
             evidence_dict = req.evidence_packet.model_dump() if hasattr(req.evidence_packet, "model_dump") else req.evidence_packet
@@ -1117,7 +1142,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         # Stage 3: 构建大纲
         task.stage = GenerationStage.STRUCTURING
         task.progress_pct = 30.0
-        await _persist_generation_task(task)
+        _persist_task_sync(task)
         builder = OutlineBuilder()
         intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
         outline = builder.build(intent_dict, evidence_dict)
@@ -1127,7 +1152,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
 
         # Stage 4: 逐节点生成
         task.stage = GenerationStage.GENERATING
-        await _persist_generation_task(task)
+        _persist_task_sync(task)
         generator = NodeGenerator()
         course_name = req.intent.topic or "课件"
         scripts = generator.generate_all(nodes, "", course_name)
@@ -1160,7 +1185,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         # Stage 6: 保存版本快照
         task.stage = GenerationStage.PREVIEW
         task.progress_pct = 90.0
-        await _persist_generation_task(task)
+        _persist_task_sync(task)
         vm = get_version_manager()
         vm.save_snapshot(
             generation_id=task.generation_id,
@@ -1175,14 +1200,14 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
 
         with _gen_tasks_lock:
             _gen_tasks[task_id] = task
-        await _persist_generation_task(task)
+        _persist_task_sync(task)
 
     except Exception as e:
         task.status = GenerationStatus.FAILED
         task.error = str(e)
         with _gen_tasks_lock:
             _gen_tasks[task_id] = task
-        await _persist_generation_task(task)
+        _persist_task_sync(task)
 
 
 @app.get("/api/v1/gen/status/{task_id}", response_model=GenerationStatusResponse)
@@ -1202,7 +1227,7 @@ async def gen_status(task_id: str):
         if redis_data:
             task = _restore_task_from_dict(redis_data)
             if task:
-                async with _gen_tasks_lock:
+                with _gen_tasks_lock:
                     _gen_tasks[task_id] = task
 
     if not task:
