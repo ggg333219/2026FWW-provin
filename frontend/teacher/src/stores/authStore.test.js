@@ -21,6 +21,17 @@ beforeEach(() => {
 })
 
 describe('authStore 后端状态', () => {
+  it('健康检查优先兼容教师后端的 /api/health', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+    globalThis.fetch = fetchMock
+
+    const response = await teacherV1Api.health()
+
+    expect(response.ok).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/api\/health$/)
+  })
+
   it('健康检查失败时如实显示未连接', async () => {
     vi.spyOn(teacherV1Api, 'health').mockRejectedValueOnce(new TypeError('Failed to fetch'))
     const store = useAuthStore()
