@@ -962,6 +962,7 @@ async def version_diff(gen_id: str, v1: int, v2: int):
 # =============================================================================
 
 import asyncio
+import threading
 import uuid
 from ai_engine.core.schema import (
     GenerationCreateRequest,
@@ -979,7 +980,9 @@ from ai_engine.gen.version import get_version_manager
 
 # 进程内生成任务存储（生产环境用 Redis/DB）
 _gen_tasks: dict[str, GenerationTask] = {}
-_gen_tasks_lock = asyncio.Lock()
+# 生成管道内是同步 LLM 调用（会阻塞事件循环），用线程锁 + daemon 线程执行，
+# 避免真实 LLM 生成期间 create/status/health 全部卡死。
+_gen_tasks_lock = threading.Lock()
 
 
 @app.post("/api/v1/gen/create", response_model=GenerationCreateResponse)
@@ -1014,11 +1017,11 @@ async def gen_create(req: GenerationCreateRequest):
         created_at=datetime.now(),
     )
 
-    async with _gen_tasks_lock:
+    with _gen_tasks_lock:
         _gen_tasks[task_id] = task
 
-    # 后台执行生成管道
-    asyncio.create_task(_run_generation_pipeline(task_id, req))
+    # 后台执行生成管道（同步管道放 daemon 线程，避免阻塞事件循环）
+    threading.Thread(target=_run_generation_pipeline, args=(task_id, req), daemon=True).start()
 
     return GenerationCreateResponse(
         task_id=task_id,
@@ -1028,9 +1031,9 @@ async def gen_create(req: GenerationCreateRequest):
     )
 
 
-async def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
-    """后台生成管道：outline → nodes → 保存版本快照"""
-    async with _gen_tasks_lock:
+def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
+    """后台生成管道：outline → nodes → 保存版本快照（同步，运行于 daemon 线程）"""
+    with _gen_tasks_lock:
         task = _gen_tasks.get(task_id)
         if not task:
             return
@@ -1124,13 +1127,13 @@ async def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         task.stage = GenerationStage.DONE
         task.progress_pct = 100.0
 
-        async with _gen_tasks_lock:
+        with _gen_tasks_lock:
             _gen_tasks[task_id] = task
 
     except Exception as e:
         task.status = GenerationStatus.FAILED
         task.error = str(e)
-        async with _gen_tasks_lock:
+        with _gen_tasks_lock:
             _gen_tasks[task_id] = task
 
 
@@ -1141,7 +1144,7 @@ async def gen_status(task_id: str):
 
     对应 Go 端：GenerationHandler.Status → AIEngine.GenerationStatus
     """
-    async with _gen_tasks_lock:
+    with _gen_tasks_lock:
         task = _gen_tasks.get(task_id)
 
     if not task:
@@ -1169,6 +1172,40 @@ async def gen_status(task_id: str):
         preview_url=None,
         error=task.error,
     )
+
+
+@app.get("/api/v1/gen/preview/{gen_id}")
+async def get_preview(gen_id: str, version: Optional[int] = None):
+    """
+    GET /api/v1/gen/preview/{gen_id} — 读取版本快照并渲染预览 HTML。
+
+    对应 Go 端：GenerationHandler.Preview → AIEngine.GetPreview
+    version: 留空加载最新版；指定版本号加载对应快照。
+    前端刷新页面时调用此接口恢复预览内容（磁盘快照，跨重启有效）。
+    """
+    # 生成管道在完成前必写磁盘快照，因此统一从版本快照读取，
+    # 与 POST /api/v1/gen/preview 的 gen_id 路径保持一致（version_number / course_name 一致）。
+    snapshot = get_version_manager().load_version(gen_id, version)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="版本不存在，请先完成 S3 生成")
+    nodes = [
+        node.model_dump() if hasattr(node, "model_dump") else node
+        for node in snapshot.nodes_snapshot
+    ]
+    if not nodes:
+        raise HTTPException(status_code=404, detail="该版本无节点数据")
+
+    renderer = PreviewRenderer()
+    version_number = snapshot.version_number
+    course_name = snapshot.summary or gen_id
+    html = renderer.render(nodes, course_name)
+    return {
+        "html": html,
+        "node_count": len(nodes),
+        "generation_id": gen_id,
+        "version_number": version_number,
+        "nodes": nodes,
+    }
 
 
 # =============================================================================

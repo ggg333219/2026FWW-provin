@@ -483,10 +483,14 @@ type TeachingNodeItem struct {
 	Summary      string   `json:"summary,omitempty"`
 	PageRef      int      `json:"page_ref,omitempty"`
 	CorePoints   []string `json:"core_points,omitempty"`
+	KeyPoints    []string `json:"key_points,omitempty"`
 	Examples     []string `json:"examples,omitempty"`
 	DurationMin  float64  `json:"estimated_duration_minutes,omitempty"`
 	CitationRefs []string `json:"citation_refs,omitempty"`
 	NextNodeID   string   `json:"next_node_id,omitempty"`
+	// 透传字段：版本快照 / 预览返回节点带有的讲授分段与互动问答等元数据。
+	Segments  []map[string]interface{} `json:"segments,omitempty"`
+	Questions []map[string]interface{} `json:"questions,omitempty"`
 }
 
 type GenerationCreateRequest struct {
@@ -520,11 +524,18 @@ type GenerationStatusResponse struct {
 type GenerationPreviewRequest struct {
 	Nodes      []TeachingNodeItem `json:"nodes"`
 	CourseName string             `json:"course_name,omitempty"`
+	// 版本快照预览：只传 gen_id（可带 version）时由 AI 引擎按版本恢复节点渲染，
+	// 供前端预览持久化（restorePreview）跳过节点树直接拉取历史版本预览。
+	GenID   string `json:"gen_id,omitempty"`
+	Version *int   `json:"version,omitempty"`
 }
 
 type GenerationPreviewResponse struct {
-	HTML      string `json:"html"`
-	NodeCount int    `json:"node_count"`
+	HTML          string             `json:"html"`
+	NodeCount     int                `json:"node_count"`
+	GenerationID  string             `json:"generation_id,omitempty"`
+	VersionNumber int                `json:"version_number,omitempty"`
+	Nodes         []TeachingNodeItem `json:"nodes,omitempty"`
 }
 
 // =============================================================================
@@ -863,6 +874,19 @@ func (c *aiEngineClient) GenerationPreview(ctx context.Context, req GenerationPr
 	return &result, nil
 }
 
+// GetPreview GET /api/v1/gen/preview/{gen_id} — 按版本快照恢复预览（前端刷新后恢复持久化预览）。
+func (c *aiEngineClient) GetPreview(ctx context.Context, genID string, version *int) (*GenerationPreviewResponse, error) {
+	path := "/api/v1/gen/preview/" + genID
+	if version != nil {
+		path += "?version=" + strconv.Itoa(*version)
+	}
+	var result GenerationPreviewResponse
+	if err := c.getJSON(ctx, path, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // ---- S4: 个性化 & 版本 & 导出 ----
 
 func (c *aiEngineClient) GenerationModify(ctx context.Context, req GenerationModifyRequest) (*GenerationModifyResponse, error) {
@@ -978,6 +1002,44 @@ func (c *aiEngineClient) postJSON(ctx context.Context, path string, reqBody any,
 		return fmt.Errorf("构造请求失败: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("调用AI引擎失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		detail := strings.TrimSpace(string(body))
+		var payload struct {
+			Detail any `json:"detail"`
+		}
+		if json.Unmarshal(body, &payload) == nil && payload.Detail != nil {
+			switch value := payload.Detail.(type) {
+			case string:
+				detail = value
+			default:
+				if encoded, marshalErr := json.Marshal(value); marshalErr == nil {
+					detail = string(encoded)
+				}
+			}
+		}
+		return &AIEngineHTTPError{StatusCode: resp.StatusCode, Detail: detail}
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("解析AI引擎响应失败: %w", err)
+	}
+	return nil
+}
+
+func (c *aiEngineClient) getJSON(ctx context.Context, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("构造请求失败: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.client.Do(req)
 	if err != nil {
