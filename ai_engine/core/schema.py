@@ -364,6 +364,24 @@ class TeachingNode(BaseModel):
     prev_node_id: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    # ── 兼容字段（向后兼容 + 渲染器统一读取）────────────
+    type: Optional[str] = None
+    """兼容渲染器习惯：部分 LLM 输出 type，部分输出 node_type"""
+    key_points: list[str] = Field(default_factory=list)
+    """兼容渲染器习惯：key_points vs core_points 字段名混用"""
+    questions: list[str] = Field(default_factory=list)
+    """兼容渲染器习惯：questions vs interactive_questions"""
+    segments: list[dict] = Field(default_factory=list)
+    """讲授分段：统一供给 HTML 预览 + PPT 导出"""
+    layout_hint: Optional[str] = None
+    """排版提示：content | two_column | section | quiz | summary"""
+    font_size_hint: Optional[str] = None
+    """字号提示：large | medium | small"""
+    text_alignment: Optional[str] = None
+    """文本对齐：left | center | right"""
+    slide_background: Optional[str] = None
+    """背景色 hex，如 #FFFFFF"""
+
 
 class GenerationTask(BaseModel):
     """S3 生成任务。"""

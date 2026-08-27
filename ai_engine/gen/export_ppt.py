@@ -72,7 +72,7 @@ class PPTExporter:
         # 节点页
         for node in nodes:
             node = _as_mapping(node)
-            node_type = node.get("type") or "content"
+            node_type = node.get("type") or node.get("node_type") or "content"
             handler = self._get_slide_handler(node_type)
             handler(prs, node)
             slide_count += 1
@@ -143,12 +143,19 @@ class PPTExporter:
         if slide.shapes.title:
             slide.shapes.title.text = node.get("title", "")
         body = ""
-        for key in ("content", "script", "summary", "core_points"):
+        for key in ("content", "script", "summary", "core_points", "key_points"):
             val = node.get(key)
             if isinstance(val, list):
                 body += "\n".join(f"• {item}" for item in val) + "\n"
             elif isinstance(val, str):
                 body += val + "\n"
+        # 追加 segments 分段内容（如果存在）
+        segments = node.get("segments") or []
+        if segments:
+            body += "\n── 讲授分段 ──\n"
+            for seg in segments:
+                seg_text = seg.get("text", "") if isinstance(seg, dict) else str(seg)
+                body += f"• {seg_text}\n"
         if slide.placeholders and len(slide.placeholders) > 1:
             tf = slide.placeholders[1].text_frame
             tf.text = body.strip()
@@ -202,7 +209,7 @@ class PPTExporter:
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         if slide.shapes.title:
             slide.shapes.title.text = "📌 本节小结"
-        points = node.get("key_points") or node.get("summary", "").split("\n") or ["本节要点"]
+        points = node.get("key_points") or node.get("core_points") or node.get("summary", "").split("\n") or ["本节要点"]
         if slide.placeholders and len(slide.placeholders) > 1:
             tf = slide.placeholders[1].text_frame
             tf.text = "\n".join(f"✅ {p}" for p in points[:6])
