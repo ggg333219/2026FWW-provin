@@ -82,9 +82,16 @@ class NodeGenerator:
         fallback = self._single_fallback(node_id, title, summary, core_points, examples, confusions)
         try:
             system_prompt = (
-                "你是高校课程智能讲授编排助手。"
-                "请根据讲授节点信息生成适合互动式课堂的讲授内容。"
-                "输出严格 JSON，必须包含 script / mindmap_markdown / interactive_questions / reteach_script / transition。"
+                "你是高校课程智能讲授编排助手，负责为单个教学节点生成分段讲授脚本。\n"
+                "【强制约束】\n"
+                "1. 输出严格JSON，字段：node_id / title / script / segments（数组）。\n"
+                "2. segments 必填：segment_id（seg_001格式）/ text（≤500字符）/ node_id / segment_type / estimated_seconds（15-120整数）。\n"
+                "3. segment_type 仅允许：opening | explanation | example | interaction | transition | summary。\n"
+                "4. 每个节点生成 2-4 个 segments，首个为 opening，末个为 summary 或 transition。\n"
+                "5. script = 所有 segments.text 拼接。\n"
+                "6. 额外可选字段：interactive_questions / key_points / difficulty / layout_hint。\n"
+                "7. 禁止编造 node_id，不得缺少任何必填字段。\n"
+                "8. 输出严格遵循 JSON Schema，additionalProperties=False。"
             )
             user_prompt = (
                 f"课程名: {course_name or '未提供'}\n"
@@ -111,7 +118,14 @@ class NodeGenerator:
     def _run_batch_generation(self, markdown: str,
                               nodes: list[dict], course_name: str | None) -> list[dict]:
         system_prompt = (
-            "你是课堂讲稿生成助手。请严格按节点输出可直接讲授的脚本，每条脚本必须绑定 node_id。"
+            "你是课堂讲稿生成助手，负责为每个教学节点生成可直接讲授的脚本。\n"
+            "【强制约束】\n"
+            "1. 每个节点必须输出：node_id / title / script / segments，不得缺少任意字段。\n"
+            "2. segments 是数组，每个元素须包含：segment_id（seg_001 格式）/ text（≤500字符）/ node_id（必须来自输入节点树）。\n"
+            "3. 每个节点至少生成 2-4 个 segments：开场(seg_001) → 讲解 → 互动/案例 → 小结/过渡。\n"
+            "4. script 字段为所有 segments.text 的拼接，用于兼容旧版渲染器。\n"
+            "5. node_id 必须使用节点树中已存在的 node_id，禁止自创或编造。\n"
+            "6. 输出严格遵循 JSON Schema，additionalProperties=False。"
         )
         user_prompt = (
             f"课程名: {course_name or '未命名课程'}\n"
@@ -130,21 +144,21 @@ class NodeGenerator:
     def _run_enhanced_batch(self, markdown: str,
                             nodes: list[dict], course_name: str | None) -> list[dict]:
         system_prompt = (
-            "你是课堂讲稿生成助手（增强版）。只输出JSON。\n"
-            "格式: {\"scripts\": [{\"node_id\":\"...\",\"title\":\"...\",\"script\":\"...\",\"segments\":[...]}]}\n\n"
-            "每个segment必须包含:\n"
-            "  - segment_id, text, node_id (必填)\n"
-            "  - segment_type: opening/exclamation/example/interaction/transition/summary (必填)\n"
-            "  - estimated_seconds: 整数15-120 (必填)\n"
-            "  - interaction_hint: 具体教师话术 (必填)\n"
-            '  - knowledge_card: [term, definition, formula, tags] (必填)\n'
-            "  - difficulty: easy/medium/hard (必填)\n"
-            "使用节点树中的node_id值，不要编造。"
+            "你是课堂讲稿生成助手（增强版），负责为每个教学节点生成分段讲授脚本。\n"
+            "【强制约束】\n"
+            "1. 输出严格JSON，格式：{\"scripts\":[{\"node_id\":\"\",\"title\":\"\",\"script\":\"\",\"segments\":[...]}]}。\n"
+            "2. segments 必填字段：segment_id（seg_001格式）/ text（≤500字符）/ node_id / segment_type / estimated_seconds（15-120整数）。\n"
+            "3. segment_type 仅允许：opening | explanation | example | interaction | transition | summary。\n"
+            "4. 可选字段：difficulty（easy/medium/hard）/ interaction_hint（具体教师话术）/ knowledge_card（{term,definition,formula,tags}）。\n"
+            "5. 每个节点生成 2-4 个 segments：开场 opening(seg_001) → 讲解 explanation → 互动 interaction/案例 example → 小结 transition/summary。\n"
+            "6. node_id 必须使用节点树中已存在的 node_id，禁止自创或编造。\n"
+            "7. script = 所有 segments.text 拼接，用于兼容旧版渲染器。\n"
+            "8. 输出严格遵循 JSON Schema，additionalProperties=False。"
         )
         user_prompt = (
             f"课程名: {course_name or '未命名课程'}\n原始MD:\n{markdown}\n\n"
             f"节点树:\n{json.dumps(nodes, ensure_ascii=False)}\n\n"
-            "每个节点至少2-4个segments: 开场->讲解->互动->过渡。node_id必须用节点树中的值。"
+            "每个节点生成 2-4 个分段讲授 segments，node_id 必须来自节点树。"
         )
         result = self._get_llm().chat_with_schema(
             system_prompt, user_prompt,
@@ -257,10 +271,24 @@ class NodeGenerator:
             script_text = str((item or {}).get("script") or "").strip()
             if not script_text and segments:
                 script_text = "".join(s["text"] for s in segments)
+            raw_type = str((item or {}).get("type") or (item or {}).get("node_type") or "content").strip()
+            core_pts = (item or {}).get("core_points") or []
+            key_pts = (item or {}).get("key_points") or []
             normalized.append({
                 "node_id": node_id,
                 "title": str((item or {}).get("title") or node_id).strip() or node_id,
-                "script": script_text, "segments": segments,
+                "script": script_text,
+                "node_type": raw_type,
+                "type": raw_type,
+                "key_points": key_pts if key_pts else (core_pts if isinstance(core_pts, list) else []),
+                "core_points": core_pts if isinstance(core_pts, list) else [],
+                "questions": (item or {}).get("questions") or (item or {}).get("interactive_questions") or [],
+                "interactive_questions": (item or {}).get("interactive_questions") or (item or {}).get("questions") or [],
+                "segments": segments,
+                "layout_hint": (item or {}).get("layout_hint"),
+                "font_size_hint": (item or {}).get("font_size_hint"),
+                "text_alignment": (item or {}).get("text_alignment"),
+                "slide_background": (item or {}).get("slide_background"),
             })
         return normalized
 

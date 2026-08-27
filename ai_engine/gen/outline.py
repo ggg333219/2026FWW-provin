@@ -79,15 +79,21 @@ class OutlineBuilder:
     def _run_node_tree_generation(self, markdown: str, key_points: list[str]) -> list[dict[str, Any]]:
         """调用 LLM 从 markdown 生成节点树"""
         system_prompt = (
-            "你是教学设计助手。"
-            "任务是把课件 Markdown 划分为可讲授的知识节点树。"
-            "每个节点必须包含 node_id / title / summary / source_span / prerequisites。"
-            "输出必须严格符合给定 JSON Schema。"
+            "你是教学设计助手，负责将课件 Markdown 切分为结构化的可讲授节点树。\n"
+            "【强制约束】\n"
+            "1. 每个节点必须输出：node_id / title / node_type / summary / source_span / prerequisites / key_points（≤6条）。\n"
+            "2. node_type 仅允许：content（默认）| section（章节）| quiz（测验）| summary（小结）| cover（封面）| divider（分隔）。\n"
+            "3. title 最多 60 字符，summary 最多 200 字符，每个 key_point 最多 100 字符。\n"
+            "4. source_span 填写对应 Markdown 位置，如「P3-P5」或「## 排序算法」小节。\n"
+            "5. node_id 格式：node_001 / node_002 …，必须与 title 含义相关，保持稳定。\n"
+            "6. 仅当 Markdown 某段落明显为章节入口（## 开头且无详细内容）时才用 section 类型。\n"
+            "7. 输出严格遵循 JSON Schema，additionalProperties=False，不得输出 schema 外字段。"
         )
         user_prompt = (
             f"课件 Markdown:\n{markdown}\n\n"
             f"关键点:\n{json.dumps(key_points, ensure_ascii=False)}\n\n"
-            "请输出 nodes 数组。node_id 必须稳定、可读，例如 node_001。"
+            "请按上述约束输出 nodes 数组。node_id 示例：node_001 / node_002。\n"
+            "每个节点的 key_points 从对应段落中提取 2-6 条核心要点。"
         )
         llm = self._get_llm()
         schema = build_stage2_node_tree_schema()
