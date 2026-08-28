@@ -11,7 +11,7 @@
 | `agenda`, `toc`, `directory` | 目录 |
 | `section`, `divider`, `chapter` | 章节分隔 |
 | `slide`, `content` | 内容/讲授分段自适应 |
-| `two_column` | 固定双栏：左侧核心要点，右侧讲授分段/内容展开 |
+| `two_column` | 固定双栏：左侧核心要点，右侧正文/讲稿与讲授分段完整同源展示 |
 | `quiz`, `interactive`, `question` | 课堂互动 |
 | `summary`, `conclusion`, `recap` | 总结 |
 

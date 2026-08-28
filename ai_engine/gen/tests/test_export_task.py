@@ -133,18 +133,18 @@ class TestPPTExporter(unittest.TestCase):
         self.assertIn("讲解", text)
         self.assertIn("这是主要内容", text)
 
-    def test_node_type_precedes_legacy_type(self):
-        """标准 node_type 优先于冲突的旧 type 字段。"""
+    def test_type_precedes_node_type_like_preview(self):
+        """与预览侧保持一致：冲突时 type 优先于 node_type。"""
         nodes = [{
-            "node_id": "n1", "title": "标准封面", "node_type": "cover",
-            "type": "quiz", "content": "标准字段优先",
+            "node_id": "n1", "title": "课堂互动", "node_type": "cover",
+            "type": "quiz", "questions": ["哪个字段优先？"],
         }]
         buf = self.ppt.export_to_bytes(nodes, "双字段")
         prs = Presentation(buf)
         self.assertEqual(len(prs.slides), 1)
         slide_text = "\n".join(shape.text for shape in prs.slides[0].shapes if hasattr(shape, "text"))
-        self.assertIn("标准封面", slide_text)
-        self.assertNotIn("INTERACTION", slide_text)
+        self.assertIn("INTERACTION", slide_text)
+        self.assertIn("哪个字段优先？", slide_text)
 
     def test_key_points_and_core_points_are_both_exported(self):
         """新旧要点字段同时存在时合并导出，不再产生空白要点页。"""

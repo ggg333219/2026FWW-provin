@@ -61,9 +61,9 @@ def _enum_value(value: Any) -> str:
 
 
 def resolve_node_type(node: Any) -> str:
-    """优先标准字段 node_type，回退历史字段 type；未知值按内容页处理。"""
+    """与预览侧一致：优先读取 type，回退 node_type。"""
     item = _as_mapping(node)
-    raw = _enum_value(item.get("node_type")) or _enum_value(item.get("type"))
+    raw = _enum_value(item.get("type")) or _enum_value(item.get("node_type"))
     return _TYPE_ALIASES.get(raw, "content")
 
 
@@ -259,17 +259,21 @@ class PPTExporter:
             summary = str(node.get("summary") or "暂无核心要点").strip()
             key_items = [("摘要", summary, False)]
 
-        right_items = self._segment_items(node)
-        right_heading = "讲授分段"
-        if not right_items:
+        body_items: list[tuple[str, str, bool]] = []
+        for label, field in (("正文", "content"), ("讲稿", "script")):
+            value = node.get(field)
+            if isinstance(value, str) and value.strip():
+                body_items.append((label, value.strip(), False))
+        segment_items = self._segment_items(node)
+        right_items = body_items + segment_items
+        if body_items and segment_items:
+            right_heading = "内容与讲授分段"
+        elif segment_items:
+            right_heading = "讲授分段"
+        else:
             right_heading = "内容展开"
-            right_items = []
-            for label, field in (("正文", "content"), ("讲稿", "script")):
-                value = node.get(field)
-                if isinstance(value, str) and value.strip():
-                    right_items.append((label, value.strip(), False))
-            if not right_items:
-                right_items = [("正文", "暂无展开内容", False)]
+        if not right_items:
+            right_items = [("正文", "暂无展开内容", False)]
 
         left_chunks = self._chunk_weighted(key_items, 13, 34)
         right_chunks = self._chunk_weighted(right_items, 13, 36)
@@ -467,6 +471,9 @@ class PPTExporter:
         shape = slide.shapes.add_shape(shape_type, Inches(x), Inches(y), Inches(width), Inches(height))
         shape.fill.solid()
         shape.fill.fore_color.rgb = self._rgb(fill)
+        # Keep rendering deterministic across Office/WPS. Inheriting theme
+        # shadows makes edge-aligned decorations bleed outside the canvas.
+        shape.shadow.inherit = False
         if line:
             shape.line.color.rgb = self._rgb(line)
             shape.line.transparency = 60
