@@ -264,7 +264,7 @@ async def chat_with_ai(req: ChatRequest):
 
     # 调用你写的 QA 响应器
     responder = QAResponder(parsed_doc, config=QAConfig(mode=final_mode))
-    result = responder.answer(req.question, req.page)
+    result = await asyncio.to_thread(responder.answer, req.question, req.page)
     
     return result
 
@@ -494,7 +494,10 @@ async def ask_with_context(req: AskWithContextRequest):
             ],
         }
         responder = QAResponder(parsed_document, config=QAConfig(mode=req.mode))
-        return responder.answer(req.question, req.current_page, history_summary=req.history_summary, recent_turns=req.recent_turns)
+        return await asyncio.to_thread(
+            responder.answer, req.question, req.current_page,
+            history_summary=req.history_summary, recent_turns=req.recent_turns,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"问答失败: {str(e)}")
 
@@ -628,9 +631,9 @@ async def generate_outline(req: GenOutlineRequest):
     builder = OutlineBuilder()
     try:
         if req.markdown:
-            result = builder.build_from_markdown(req.markdown, req.course_name)
+            result = await asyncio.to_thread(builder.build_from_markdown, req.markdown, req.course_name)
         else:
-            result = builder.build(req.intent, req.evidence_packet)
+            result = await asyncio.to_thread(builder.build, req.intent, req.evidence_packet)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"大纲构建失败: {str(e)}")
@@ -642,9 +645,9 @@ async def generate_nodes(req: GenNodesRequest):
     generator = NodeGenerator()
     try:
         if req.enhanced:
-            result = generator.generate_enhanced(req.nodes, req.context_markdown, req.course_name)
+            result = await asyncio.to_thread(generator.generate_enhanced, req.nodes, req.context_markdown, req.course_name)
         else:
-            result = generator.generate_all(req.nodes, req.context_markdown, req.course_name)
+            result = await asyncio.to_thread(generator.generate_all, req.nodes, req.context_markdown, req.course_name)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"节点生成失败: {str(e)}")
@@ -657,7 +660,7 @@ async def generate_single_node(req: dict[str, Any]):
     course_name = req.get("course_name")
     generator = NodeGenerator()
     try:
-        return generator.generate_single(node, course_name)
+        return await asyncio.to_thread(generator.generate_single, node, course_name)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"单节点生成失败: {str(e)}")
 
@@ -713,7 +716,7 @@ async def generate_interactive(req: InteractiveRequest):
     """[S3] 生成互动内容（测验/闪卡/投票）"""
     builder = InteractiveBuilder()
     try:
-        return {"items": builder.build_all(req.node)}
+        return {"items": await asyncio.to_thread(builder.build_all, req.node)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"互动内容生成失败: {str(e)}")
 
@@ -795,7 +798,7 @@ async def modify_nodes(req: ModifyRequest):
     # 执行修补
     generator = NodeGenerator(NodeGenConfig()) if req.regenerate else None
     regenerate_fn = (lambda nid, node: generator.generate_single(node, req.course_name)) if generator else None
-    result = patcher.apply(nodes, parse_result.commands, regenerate_fn)
+    result = await asyncio.to_thread(patcher.apply, nodes, parse_result.commands, regenerate_fn)
 
     version_number = None
     if req.generation_id and not result.errors:
@@ -856,11 +859,11 @@ async def full_pipeline_preview(markdown: str = "", course_name: str = "课件")
     try:
         # 1. 大纲
         builder = OutlineBuilder()
-        outline = builder.build_from_markdown(markdown, course_name)
+        outline = await asyncio.to_thread(builder.build_from_markdown, markdown, course_name)
 
         # 2. 节点讲稿
         generator = NodeGenerator()
-        scripts = generator.generate_all(outline["nodes"], markdown, course_name)
+        scripts = await asyncio.to_thread(generator.generate_all, outline["nodes"], markdown, course_name)
 
         # 3. 合并节点数据
         merged_nodes = []
