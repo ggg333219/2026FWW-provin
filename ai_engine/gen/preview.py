@@ -52,6 +52,23 @@ _TYPE_ALIASES = {
     "slide": "content",
 }
 
+# 讲授分段类型 → 中文语义标签（预览展示用）
+_SEGMENT_TYPE_LABELS = {
+    "opening": "导入",
+    "explanation": "讲解",
+    "example": "示例",
+    "interaction": "互动",
+    "transition": "过渡",
+    "summary": "小结",
+}
+
+# 讲授分段难度 → 可视化图标
+_SEGMENT_DIFF_ICONS = {
+    "easy": "🟢",
+    "medium": "🟡",
+    "hard": "🔴",
+}
+
 # 正文兜底时要截取的最大句数
 _MAX_FALLBACK_POINTS = 8
 _MAX_DISPLAY_POINTS = 10
@@ -262,13 +279,15 @@ class PreviewRenderer:
             if not text:
                 continue
             seg_type = str(s.get("segment_type") or "").strip().lower()
-            badge = f'<span class="seg-badge seg-badge-{html.escape(seg_type)}">{html.escape(seg_type)}</span>' if seg_type else ""
+            seg_label = _SEGMENT_TYPE_LABELS.get(seg_type, seg_type or "")
+            badge = f'<span class="seg-badge seg-badge-{html.escape(seg_type)}">{html.escape(seg_label)}</span>' if seg_label else ""
 
-            dur = s.get("estimated_seconds") or 0
-            dur_html = f'<span class="seg-dur">⏱ {dur}s</span>' if dur else ""
+            dur = int(s.get("estimated_seconds") or 0)
+            dur_html = f'<span class="seg-dur">⏱ {dur}秒</span>' if dur else ""
 
             diff = str(s.get("difficulty") or "").strip().lower()
-            diff_html = f'<span class="seg-diff diff-{html.escape(diff)}">{html.escape(diff)}</span>' if diff else ""
+            diff_icon = _SEGMENT_DIFF_ICONS.get(diff, "")
+            diff_html = f'<span class="seg-diff diff-{html.escape(diff)}">{diff_icon}</span>' if diff_icon else ""
 
             hint = str(s.get("interaction_hint") or "").strip()
             hint_html = f'<p class="seg-hint">💬 {html.escape(hint)}</p>' if hint else ""

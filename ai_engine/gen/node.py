@@ -43,32 +43,43 @@ class NodeGenerator:
     def generate_all(self, nodes: list[dict[str, Any]],
                      context_markdown: str = "",
                      course_name: str | None = None) -> dict[str, Any]:
-        """生成所有节点的讲稿"""
+        """生成所有节点的讲稿。整批失败时按节点降级重试，避免整批退兜底。"""
         fallback = self._fallback_scripts(nodes, course_name)
+        node_ids = {n["node_id"] for n in nodes}
         try:
             scripts = self._run_batch_generation(context_markdown, nodes, course_name)
             if not scripts:
                 scripts = fallback["scripts"]
-            node_ids = {n["node_id"] for n in nodes}
             scripts = normalize_stage3_scripts(scripts, node_ids)
             return {"scripts": scripts or fallback["scripts"], "used_fallback": False}
         except Exception:
-            return {"scripts": fallback["scripts"], "used_fallback": True}
+            # 整批失败 → 逐节点降级重试，仍失败的节点才用单节点兜底
+            scripts = []
+            for node in nodes:
+                scripts.append(self.generate_single(node, course_name))
+            scripts = normalize_stage3_scripts(scripts, node_ids)
+            return {"scripts": scripts or fallback["scripts"], "used_fallback": True}
 
     def generate_enhanced(self, nodes: list[dict[str, Any]],
                           context_markdown: str = "",
                           course_name: str | None = None) -> dict[str, Any]:
-        """增强版生成：带 segment_type / estimated_seconds / interaction_hint / knowledge_card"""
+        """增强版生成：带 segment_type / estimated_seconds / interaction_hint / knowledge_card。
+        整批失败时按节点降级重试，避免整批退兜底。"""
         fallback = self._enhanced_fallback(nodes, course_name)
+        node_ids = {n["node_id"] for n in nodes}
         try:
             scripts = self._run_enhanced_batch(context_markdown, nodes, course_name)
             if not scripts:
                 scripts = fallback["scripts"]
-            node_ids = {n["node_id"] for n in nodes}
             scripts = self._normalize_enhanced_scripts(scripts, node_ids)
             return {"scripts": scripts or fallback["scripts"], "used_fallback": False}
         except Exception:
-            return {"scripts": fallback["scripts"], "used_fallback": True}
+            # 整批失败 → 逐节点降级重试，仍失败的节点才用单节点兜底
+            scripts = []
+            for node in nodes:
+                scripts.append(self.generate_single(node, course_name))
+            scripts = self._normalize_enhanced_scripts(scripts, node_ids)
+            return {"scripts": scripts or fallback["scripts"], "used_fallback": True}
 
     def generate_single(self, node: dict[str, Any], course_name: str | None = None) -> dict[str, Any]:
         """生成单个节点的讲稿（供 S4 修补时部分重生成使用）"""
