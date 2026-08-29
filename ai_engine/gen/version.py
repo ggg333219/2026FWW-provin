@@ -95,20 +95,26 @@ class _RedisLock:
         self.ttl = ttl
         self._token: Optional[str] = None
 
-    def acquire(self) -> bool:
+    def acquire(self, max_retries: int = 3) -> bool:
+        import time as _time
         client = _get_redis_client()
         if client is None:
             return False
         import uuid
         token = str(uuid.uuid4())
-        try:
-            ok = client.set(self.key, token, nx=True, ex=self.ttl)
-            if ok:
-                self._token = token
-                return True
-            return False
-        except Exception:
-            return False
+        delay = 0.1  # 100ms
+        for attempt in range(max_retries):
+            try:
+                ok = client.set(self.key, token, nx=True, ex=self.ttl)
+                if ok:
+                    self._token = token
+                    return True
+            except Exception:
+                pass
+            if attempt < max_retries - 1:
+                _time.sleep(delay)
+                delay *= 2  # 100ms -> 200ms -> 400ms
+        return False
 
     def release(self) -> None:
         """安全释放：仅 token 匹配时删除（Redis Lua 原子脚本）。"""
@@ -151,9 +157,15 @@ class _DistributedLock:
         self._rlock = _RedisLock(f"version:{gen_id}")
         self._llock = _lock_for(gen_id)
         self._using_redis = False
+        self._llock_pid = os.getpid()
 
     def __enter__(self) -> "_DistributedLock":
-        if self._rlock.acquire():
+        current_pid = os.getpid()
+        if current_pid != self._llock_pid:
+            # 进程已重启（崩溃恢复），重置本地锁
+            self._llock = _lock_for(self._rlock.key.split(":")[-1])
+            self._llock_pid = current_pid
+        if self._rlock.acquire(max_retries=3):
             self._using_redis = True
             return self
         self._llock.acquire()
