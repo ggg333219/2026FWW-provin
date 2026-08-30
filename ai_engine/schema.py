@@ -217,8 +217,8 @@ def normalize_stage2_nodes(nodes: list[dict[str, Any]] | None) -> list[dict[str,
                 "title": str((item or {}).get("title") or f"知识节点{idx}").strip() or f"知识节点{idx}",
                 "summary": str((item or {}).get("summary") or "").strip(),
                 "source_span": str((item or {}).get("source_span") or "").strip(),
-                "node_type": raw_type,
-                "type": raw_type,
+                "node_type": "slide" if raw_type == "content" else raw_type,
+                "type": "slide" if raw_type == "content" else raw_type,
                 "prerequisites": [
                     str(value).strip()
                     for value in ((item or {}).get("prerequisites") or [])
@@ -272,8 +272,8 @@ def normalize_stage3_scripts(scripts: list[dict[str, Any]] | None, valid_node_id
                 "node_id": node_id,
                 "title": str((item or {}).get("title") or node_id).strip() or node_id,
                 "script": script_text,
-                "node_type": raw_type,
-                "type": raw_type,
+                "node_type": "slide" if raw_type == "content" else raw_type,
+                "type": "slide" if raw_type == "content" else raw_type,
                 # 兼容字段
                 "key_points": key_pts if key_pts else (core_pts if isinstance(core_pts, list) else []),
                 "core_points": core_pts if isinstance(core_pts, list) else [],

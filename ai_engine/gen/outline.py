@@ -84,7 +84,7 @@ class OutlineBuilder:
             "你是教学设计助手，负责将课件 Markdown 切分为结构化的可讲授节点树。\n"
             "【强制约束】\n"
             "1. 每个节点必须输出：node_id / title / node_type / summary / source_span / prerequisites / key_points（≤6条）。\n"
-            "2. node_type 仅允许：content（默认）| section（章节）| quiz（测验）| summary（小结）| cover（封面）| divider（分隔）。\n"
+            "2. node_type 仅允许：slide（默认）| section（章节）| quiz（测验）| interactive（互动）| cover（封面）| divider（分隔）。\n"
             "3. title 最多 60 字符，summary 最多 200 字符，每个 key_point 最多 100 字符。\n"
             "4. source_span 填写对应 Markdown 位置，如「P3-P5」或「## 排序算法」小节。\n"
             "5. node_id 格式：node_001 / node_002 …，必须与 title 含义相关，保持稳定。\n"
