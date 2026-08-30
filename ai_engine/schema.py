@@ -39,58 +39,16 @@ def build_stage2_node_tree_schema() -> dict[str, Any]:
                         "properties": {
                             "node_id": {"type": "string"},
                             "title": {"type": "string", "maxLength": 60},
-                            "summary": {"type": "string", "maxLength": 200},
-                            "source_span": {"type": "string"},
+                            "summary": {"type": "string", "maxLength": 60},
                             "node_type": {
                                 "type": "string",
-                                "enum": ["content", "section", "quiz", "summary", "cover", "divider"],
-                            },
-                            # 兼容字段（部分 LLM 习惯输出 type 而非 node_type）
-                            "type": {
-                                "type": "string",
-                                "enum": ["content", "section", "quiz", "summary", "cover", "divider"],
-                            },
-                            "prerequisites": {
-                                "type": "array",
-                                "items": {"type": "string"},
+                                "enum": ["slide", "section", "quiz", "interactive", "cover", "divider"],
                             },
                             # 核心要点（渲染器统一读 key_points）
                             "key_points": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "maxItems": 6,
-                            },
-                            "core_points": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "maxItems": 6,
-                            },
-                            # 讲授分段
-                            "segments": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "additionalProperties": False,
-                                    "properties": {
-                                        "segment_id": {"type": "string"},
-                                        "text": {"type": "string", "maxLength": 500},
-                                        "node_id": {"type": "string"},
-                                    },
-                                    "required": ["segment_id", "text", "node_id"],
-                                },
-                            },
-                            # 排版提示
-                            "layout_hint": {
-                                "type": "string",
-                                "enum": ["content", "two_column", "section", "quiz", "summary"],
-                            },
-                            "font_size_hint": {
-                                "type": "string",
-                                "enum": ["large", "medium", "small"],
-                            },
-                            "text_alignment": {
-                                "type": "string",
-                                "enum": ["left", "center", "right"],
+                                "maxItems": 4,
                             },
                         },
                         "required": ["node_id", "title", "node_type"],
@@ -219,8 +177,8 @@ def normalize_stage2_nodes(nodes: list[dict[str, Any]] | None) -> list[dict[str,
                 "title": str((item or {}).get("title") or f"知识节点{idx}").strip() or f"知识节点{idx}",
                 "summary": str((item or {}).get("summary") or "").strip(),
                 "source_span": str((item or {}).get("source_span") or "").strip(),
-                "node_type": "slide" if raw_type == "content" else raw_type,
-                "type": "slide" if raw_type == "content" else raw_type,
+                "node_type": sanitize_node_type(raw_type),
+                "type": sanitize_node_type(raw_type),
                 "prerequisites": [
                     str(value).strip()
                     for value in ((item or {}).get("prerequisites") or [])
@@ -278,8 +236,8 @@ def normalize_stage3_scripts(scripts: list[dict[str, Any]] | None, valid_node_id
                 "node_id": node_id,
                 "title": str((item or {}).get("title") or node_id).strip() or node_id,
                 "script": script_text,
-                "node_type": "slide" if raw_type == "content" else raw_type,
-                "type": "slide" if raw_type == "content" else raw_type,
+                "node_type": sanitize_node_type(raw_type),
+                "type": sanitize_node_type(raw_type),
                 # 兼容字段
                 # 类型归一：str/list[dict]/dict 等脏数据统一转为 list[str]（M1-4 P5）
                 "key_points": normalize_text_list(key_pts) or normalize_text_list(core_pts),
@@ -539,6 +497,20 @@ def align_node_segment_mapping(
         seg["node_ids"] = mapped
 
     return knowledge_nodes, script_segments
+
+
+VALID_NODE_TYPES = frozenset({"slide", "section", "quiz", "interactive", "cover", "divider"})
+
+
+def sanitize_node_type(raw: Any) -> str:
+    """把 LLM 输出的 node_type 收敛到合法枚举白名单。
+
+    背景：GenerationVersion.nodes_snapshot 的 node_type 是枚举校验，LLM 偶发输出
+    白名单外的值（实测出现过 'summary'、'content'），会让快照保存整批 ValidationError、
+    连带 status 接口 500。白名单外的值一律收敛为 'slide'（最通用的内容页类型）。
+    """
+    value = str(raw or "").strip().lower()
+    return value if value in VALID_NODE_TYPES else "slide"
 
 
 def normalize_text_list(value: Any) -> list[str]:

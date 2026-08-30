@@ -1205,7 +1205,8 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
                     pass
 
             result = lesson_gen.generate_from_markdown_enhanced(
-                req.markdown, course_name, progress_cb=_stage_progress_cb
+                req.markdown, course_name, progress_cb=_stage_progress_cb,
+                preset_nodes=nodes,
             )
             scripts_list = result.get("scripts", [])
             node_ids = {n["node_id"] for n in nodes}

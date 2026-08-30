@@ -24,6 +24,7 @@ from ..schema import (
     normalize_stage3_scripts,
     build_enhanced_script_schema,
     normalize_text_list,
+    sanitize_node_type,
 )
 from ..core.llm import LLMClient
 
@@ -350,9 +351,9 @@ class NodeGenerator:
                 "summary": str((item or {}).get("summary") or "").strip(),
                 "source_span": str((item or {}).get("source_span") or "").strip(),
                 "prerequisites": normalize_text_list((item or {}).get("prerequisites")),
-                # 与函数A对齐的值映射：content → slide（M1-4B P4）
-                "node_type": "slide" if raw_type == "content" else raw_type,
-                "type": "slide" if raw_type == "content" else raw_type,
+                # 与函数A对齐的值映射：content → slide，其余白名单外值收敛为 slide
+                "node_type": sanitize_node_type(raw_type),
+                "type": sanitize_node_type(raw_type),
                 # 类型归一：str/list[dict]/dict 等脏数据统一转为 list[str]（M1-4 P5）
                 "key_points": normalize_text_list(key_pts) or normalize_text_list(core_pts),
                 "core_points": core_pts if isinstance(core_pts, list) else [],

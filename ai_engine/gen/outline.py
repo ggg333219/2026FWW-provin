@@ -61,9 +61,10 @@ class OutlineBuilder:
             nodes = self._run_node_tree_generation(markdown, key_points)
             if not nodes:
                 nodes = fallback["nodes"]
-            return {"nodes": nodes, "used_fallback": False}
+            # 统一经 normalize_stage2_nodes 净化（node_type 白名单收敛等），与 build_from_markdown 对齐
+            return {"nodes": normalize_stage2_nodes(nodes), "used_fallback": False}
         except Exception:
-            return {"nodes": fallback["nodes"], "used_fallback": True}
+            return {"nodes": normalize_stage2_nodes(fallback["nodes"]), "used_fallback": True}
 
     def build_from_markdown(self, markdown: str, course_name: str | None = None) -> dict[str, Any]:
         """从已有 Markdown 构建节点树（兼容旧接口）"""
@@ -83,13 +84,12 @@ class OutlineBuilder:
         system_prompt = (
             "你是教学设计助手，负责将课件 Markdown 切分为结构化的可讲授节点树。\n"
             "【强制约束】\n"
-            "1. 每个节点必须输出：node_id / title / node_type / summary / source_span / prerequisites / key_points（≤6条）。\n"
+            "1. 每个节点只需输出：node_id / title / node_type / summary / key_points（≤4条）。不要输出 source_span / prerequisites / segments / 讲稿正文——由后续管线生成。\n"
             "2. node_type 仅允许：slide（默认）| section（章节）| quiz（测验）| interactive（互动）| cover（封面）| divider（分隔）。\n"
-            "3. title 最多 60 字符，summary 最多 200 字符，每个 key_point 最多 100 字符。\n"
-            "4. source_span 填写对应 Markdown 位置，如「P3-P5」或「## 排序算法」小节。\n"
-            "5. node_id 格式：node_001 / node_002 …，必须与 title 含义相关，保持稳定。\n"
-            "6. 仅当 Markdown 某段落明显为章节入口（## 开头且无详细内容）时才用 section 类型。\n"
-            "7. 输出严格遵循 JSON Schema，additionalProperties=False，不得输出 schema 外字段。"
+            "3. title 最多 60 字符，summary 最多 60 字符，每个 key_point 最多 100 字符。\n"
+            "4. node_id 格式：node_001 / node_002 …，必须与 title 含义相关，保持稳定。\n"
+            "5. 仅当 Markdown 某段落明显为章节入口（## 开头且无详细内容）时才用 section 类型。\n"
+            "6. 输出严格遵循 JSON Schema，additionalProperties=False，不得输出 schema 外字段。"
         )
         user_prompt = (
             f"课件 Markdown:\n{markdown}\n\n"
