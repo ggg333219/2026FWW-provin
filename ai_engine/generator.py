@@ -27,6 +27,11 @@ except ImportError:
     from qa import resolve_llm_base_url
 
 try:
+    from .core.llm import resolve_llm_timeout
+except ImportError:  # 直接以脚本方式运行时的回退导入
+    from core.llm import resolve_llm_timeout
+
+try:
     from .schema import (
         build_node_script_schema,
         build_stage1_markdown_schema,
@@ -429,7 +434,7 @@ class LessonGenerator:
             raise RuntimeError("缺少环境变量 AI_API_KEY，无法调用大模型。")
 
         base_url, _ = resolve_llm_base_url(self.config.model)
-        return OpenAI(api_key=api_key, base_url=base_url)
+        return OpenAI(api_key=api_key, base_url=base_url, timeout=resolve_llm_timeout())
 
     def _request_llm_payload(self, client: Any, system_prompt: str, user_prompt: str, json_schema: dict[str, Any] | None = None) -> str:
         messages = [

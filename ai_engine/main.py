@@ -18,12 +18,11 @@ PROJECT_ROOT = CURRENT_DIR.parent  # 项目根目录
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from ai_engine.parse.minio_client import MinioClient
-
 # 导入 AI 核心逻辑（使用绝对导入，依赖 PROJECT_ROOT 已在 sys.path 中）
 from ai_engine.parser import DocumentParser
 from ai_engine.generator import LessonGenerator, GenerationConfig
 from ai_engine.qa import QAResponder, QAConfig, resolve_llm_base_url
+from ai_engine.core.llm import resolve_llm_timeout, _is_retryable_error
 from ai_engine.reconstructor import LessonReconstructor, ReconstructionConfig
 from ai_engine.recommendation.service import router as recommendation_router
 from ai_engine.gen.outline import OutlineBuilder, OutlineConfig
@@ -156,6 +155,26 @@ class GenerateAudioRequest(BaseModel):
     nodes: List[GenerateAudioNode] = Field(default_factory=list)
     playback_id: str = ""
 
+def _llm_endpoint_error(e: Exception, fallback_prefix: str) -> HTTPException:
+    """LLM 端点层统一异常兜底：把意外异常转成友好 HTTP 错误，不裸抛 500。
+
+    - 超时类异常 → 504 "生成超时，请稍后重试"
+    - 连接类异常 → 503 "AI 服务网络异常，请检查 API 配置"
+    - 其余异常   → 500，保持原有 "{前缀}: {详情}" 格式
+
+    说明：LLMClient._call 内部已有兜底回退（不外抛，返回 used_fallback 标记），
+    本函数只处理端点层漏出的意外异常（如 OpenAI 客户端直连、TTS、JSON 解析等）。
+    复用 ai_engine.core.llm._is_retryable_error 的超时/连接判定，保持判定口径一致。
+    """
+    if _is_retryable_error(e):
+        name = type(e).__name__.lower()
+        msg = str(e).lower()
+        if "timeout" in name or "timed out" in msg or "timeout" in msg:
+            return HTTPException(status_code=504, detail="生成超时，请稍后重试")
+        return HTTPException(status_code=503, detail="AI 服务网络异常，请检查 API 配置")
+    return HTTPException(status_code=500, detail=f"{fallback_prefix}: {str(e)}")
+
+
 # =============================================================================
 # 旧版 generator.py 路由（已废弃，仅保留供兼容）
 # 前端已全部改用 /api/v1/gen/* 系列路由
@@ -264,8 +283,11 @@ async def chat_with_ai(req: ChatRequest):
 
     # 调用你写的 QA 响应器
     responder = QAResponder(parsed_doc, config=QAConfig(mode=final_mode))
-    result = await asyncio.to_thread(responder.answer, req.question, req.page)
-    
+    try:
+        result = await asyncio.to_thread(responder.answer, req.question, req.page)
+    except Exception as e:
+        raise _llm_endpoint_error(e, "问答失败")
+
     return result
 
 
@@ -293,7 +315,7 @@ async def generate_script(req: GenerateScriptRequest):
             "mindmap_markdown": lesson.get("mindmap_markdown", ""),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"讲稿生成失败: {str(e)}")
+        raise _llm_endpoint_error(e, "讲稿生成失败")
 
 
 @app.post("/generate-node-script")
@@ -303,7 +325,7 @@ async def generate_node_script(req: GenerateNodeScriptRequest):
         generator = LessonGenerator(GenerationConfig(mode=req.mode))
         return generator.generate_node_script(req.teaching_node, req.course_name, evidence=req.evidence)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"节点讲稿生成失败: {str(e)}")
+        raise _llm_endpoint_error(e, "节点讲稿生成失败")
 
 
 @app.post("/generate-enhanced")
@@ -313,7 +335,7 @@ async def generate_enhanced(req: GenerateFromMarkdownRequest):
         generator = LessonGenerator(GenerationConfig(mode=req.mode))
         return generator.generate_from_markdown_enhanced(req.markdown, req.course_name)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"增强生成失败: {str(e)}")
+        raise _llm_endpoint_error(e, "增强生成失败")
 
 
 @app.post("/generate-from-markdown")
@@ -323,7 +345,7 @@ async def generate_from_markdown(req: GenerateFromMarkdownRequest):
         generator = LessonGenerator(GenerationConfig(mode=req.mode))
         return generator.generate_from_markdown(req.markdown, req.course_name)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Markdown 三阶段生成失败: {str(e)}")
+        raise _llm_endpoint_error(e, "Markdown 三阶段生成失败")
 
 
 def _audio_base_url() -> str:
@@ -414,7 +436,7 @@ def _generate_openai_tts(req: GenerateAudioRequest, provider: str, voice_type: s
 
     model = os.getenv("TTS_MODEL", "gpt-4o-mini-tts")
     base_url, _ = resolve_llm_base_url(model)
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=resolve_llm_timeout())
 
     sections: List[dict[str, Any]] = []
     total_duration = 0
@@ -499,7 +521,7 @@ async def ask_with_context(req: AskWithContextRequest):
             history_summary=req.history_summary, recent_turns=req.recent_turns,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"问答失败: {str(e)}")
+        raise _llm_endpoint_error(e, "问答失败")
 
 
 def _llm_parse_knowledge(text: str, mode: str) -> dict[str, Any]:
@@ -517,7 +539,7 @@ def _llm_parse_knowledge(text: str, mode: str) -> dict[str, Any]:
 
     model = os.getenv("AI_MODEL", "qwen-turbo")
     base_url, _ = resolve_llm_base_url(model)
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=resolve_llm_timeout())
 
     prompt = (
         "请把输入内容拆解为知识点树，输出严格 JSON，格式为: "
@@ -550,7 +572,7 @@ async def parse_knowledge(req: ParseKnowledgeRequest):
     try:
         return _llm_parse_knowledge(text, req.mode)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"知识点解析失败: {e}")
+        raise _llm_endpoint_error(e, "知识点解析失败")
 
 
 def _llm_health_payload() -> dict[str, Any]:
@@ -636,7 +658,7 @@ async def generate_outline(req: GenOutlineRequest):
             result = await asyncio.to_thread(builder.build, req.intent, req.evidence_packet)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"大纲构建失败: {str(e)}")
+        raise _llm_endpoint_error(e, "大纲构建失败")
 
 
 @app.post("/gen/nodes")
@@ -650,7 +672,7 @@ async def generate_nodes(req: GenNodesRequest):
             result = await asyncio.to_thread(generator.generate_all, req.nodes, req.context_markdown, req.course_name)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"节点生成失败: {str(e)}")
+        raise _llm_endpoint_error(e, "节点生成失败")
 
 
 @app.post("/gen/node/single")
@@ -662,7 +684,7 @@ async def generate_single_node(req: dict[str, Any]):
     try:
         return await asyncio.to_thread(generator.generate_single, node, course_name)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"单节点生成失败: {str(e)}")
+        raise _llm_endpoint_error(e, "单节点生成失败")
 
 
 @app.post("/gen/export/ppt")
@@ -718,7 +740,7 @@ async def generate_interactive(req: InteractiveRequest):
     try:
         return {"items": await asyncio.to_thread(builder.build_all, req.node)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"互动内容生成失败: {str(e)}")
+        raise _llm_endpoint_error(e, "互动内容生成失败")
 
 
 # — S4 个性化满足接口 —
@@ -798,7 +820,11 @@ async def modify_nodes(req: ModifyRequest):
     # 执行修补
     generator = NodeGenerator(NodeGenConfig()) if req.regenerate else None
     regenerate_fn = (lambda nid, node: generator.generate_single(node, req.course_name)) if generator else None
-    result = await asyncio.to_thread(patcher.apply, nodes, parse_result.commands, regenerate_fn)
+    try:
+        result = await asyncio.to_thread(patcher.apply, nodes, parse_result.commands, regenerate_fn)
+    except Exception as e:
+        # regenerate=True 时 patcher 内部会调用 LLM 重生成节点，需兜底超时/网络异常
+        raise _llm_endpoint_error(e, "修改命令执行失败")
 
     version_number = None
     if req.generation_id and not result.errors:
@@ -888,7 +914,7 @@ async def full_pipeline_preview(markdown: str = "", course_name: str = "课件")
             "preview_html": html,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"全流程失败: {str(e)}")
+        raise _llm_endpoint_error(e, "全流程失败")
 
 
 # =============================================================================
@@ -1399,30 +1425,47 @@ async def _run_export(job_id: str, nodes: list[dict], fmt: ExportFormat):
 
         job.status = ExportStatus.DONE
 
-        # 真实上传 MinIO（记录 minio:// URL，download_url 由 Go 端通过预签名 URL 提供）
-        minio_client = MinioClient()
-        ppt_meta = job.metadata or {}
-        doc_meta = job.metadata or {}
+        # 真实上传 MinIO（导出成功后尽力上传；失败降级为本地路径，任务仍为 done）。
+        # 上传段独立捕获异常：任何上传问题都不能把已 DONE 的导出翻转为 FAILED。
+        from ai_engine.gen.export_upload import upload_export_file
 
-        uploaded_paths = []
-        if "ppt_path" in ppt_meta:
-            try:
-                minio_url = minio_client.upload_file(ppt_meta["ppt_path"])
-                job.minio_path = minio_url
-                uploaded_paths.append(minio_url)
-            except Exception as upload_err:
-                # 上传失败仍保留本地路径，确保下载链路不中断
-                job.minio_path = ppt_meta["ppt_path"]
-                job.error = f"MinIO上传警告: {upload_err}"
+        try:
+            meta = job.metadata or {}
+            upload_results: list[dict] = []
+            for key, ext in (("ppt_path", "pptx"), ("doc_path", "docx")):
+                local_path = meta.get(key)
+                if not local_path:
+                    continue
+                result = upload_export_file(
+                    local_path, f"exports/{job_id}.{ext}",
+                    bucket=None,  # bucket 默认值统一由 export_upload 解析（MINIO_BUCKET，默认 teaching）
+                )
+                upload_results.append(result.to_meta())
+                if result.upload_status == "uploaded":
+                    job.minio_path = result.minio_path
+                else:
+                    # 降级：保留本地路径，任务仍为 done，但记录失败原因
+                    job.minio_path = local_path
+                    job.error = (f"{job.error}; " if job.error else "") + result.reason
 
-        elif "doc_path" in doc_meta:
-            try:
-                minio_url = minio_client.upload_file(doc_meta["doc_path"])
-                job.minio_path = minio_url
-                uploaded_paths.append(minio_url)
-            except Exception as upload_err:
-                job.minio_path = doc_meta["doc_path"]
-                job.error = f"MinIO上传警告: {upload_err}"
+            if upload_results:
+                meta["uploads"] = upload_results
+                # 汇总状态：全部 uploaded 才是 uploaded，否则 failed/skipped
+                statuses = {r["upload_status"] for r in upload_results}
+                if statuses == {"uploaded"}:
+                    meta["upload_status"] = "uploaded"
+                    meta["upload_error"] = None
+                else:
+                    meta["upload_status"] = "failed" if "failed" in statuses else "skipped"
+                    meta["upload_error"] = "; ".join(
+                        r.get("upload_error") or "" for r in upload_results
+                    ).strip(" ;") or None
+                job.metadata = meta
+        except Exception as upload_exc:
+            # 上传辅助逻辑本身的意外错误也降级，不影响导出主流程
+            job.metadata = job.metadata or {}
+            job.metadata["upload_status"] = "failed"
+            job.metadata["upload_error"] = f"上传模块异常: {upload_exc}"
 
         async with _export_lock:
             _export_tasks[job_id] = job
@@ -1455,11 +1498,15 @@ async def export_status(job_id: str):
         elif "doc_path" in meta:
             download_url = f"/download/{job_id}.docx"
 
+    meta = job.metadata or {}
     return ExportStatusResponse(
         job_id=job.job_id,
         status=job.status,
         download_url=download_url,
         error=job.error,
+        upload_status=meta.get("upload_status"),
+        minio_path=job.minio_path,
+        file_size=job.file_size,
     )
 
 
