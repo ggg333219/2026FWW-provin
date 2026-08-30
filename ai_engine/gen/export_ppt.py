@@ -37,7 +37,8 @@ _TYPE_ALIASES = {
     "agenda": "agenda", "toc": "agenda", "directory": "agenda", "目录": "agenda",
     "section": "section", "divider": "section", "chapter": "section",
     "summary": "summary", "conclusion": "summary", "recap": "summary",
-    "quiz": "quiz", "interactive": "quiz", "question": "quiz",
+    "quiz": "quiz", "question": "quiz",
+    "interactive": "interactive", "activity": "interactive",
     "two_column": "content", "content": "content", "slide": "content",
     "opening": "content", "explain": "content", "explanation": "content",
     "transition": "content",
@@ -66,9 +67,13 @@ def _enum_value(value: Any) -> str:
 
 
 def resolve_node_type(node: Any) -> str:
-    """优先标准字段 node_type，回退历史字段 type；未知值按内容页处理。"""
+    """与 preview.py 完全同序：优先 type，回退 node_type。
+
+    前端/HTML 预览已经以 ``type`` 为首选字段。导出侧必须使用同一判定顺序，
+    否则两个字段冲突时会出现“预览是内容页、PPTX 却是封面”的同源偏差。
+    """
     item = _as_mapping(node)
-    raw = _enum_value(item.get("node_type")) or _enum_value(item.get("type"))
+    raw = _enum_value(item.get("type")) or _enum_value(item.get("node_type"))
     return _TYPE_ALIASES.get(raw, "content")
 
 
@@ -168,22 +173,21 @@ class PPTExporter:
         return {
             "cover": self._add_cover_slide, "agenda": self._add_agenda_slide,
             "section": self._add_section_slide, "summary": self._add_summary_slide,
-            "quiz": self._add_quiz_slide, "content": self._add_content_slide,
+            "quiz": self._add_quiz_slide, "interactive": self._add_interactive_slide,
+            "content": self._add_content_slide,
         }.get(node_type, self._add_content_slide)
 
     def _blank_slide(self, prs: Presentation, page_number: int | None = None):
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         self._set_background(slide, self._theme.background)
         if page_number is not None:
-            self._add_textbox(slide, str(page_number), 12.35, 7.05, 0.45, 0.22,
-                              font_size=9, color=self._theme.muted, align=PP_ALIGN.RIGHT)
+            self._add_page_badge(slide, page_number)
         return slide
 
     def _add_cover_slide(self, prs: Presentation, node: dict[str, Any], index: int = 1) -> None:
         slide = self._blank_slide(prs)
-        self._set_background(slide, self._theme.primary)
-        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0, 0, 0.23, 7.5, self._theme.accent)
-        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0.23, 6.92, 13.1, 0.58, self._theme.secondary)
+        self._set_gradient_background(slide, self._theme.primary, self._theme.secondary, 135)
+        self._add_page_badge(slide, index, inverse=True)
         title = str(node.get("title") or node.get("content") or "课件").strip()
         subtitle = str(node.get("content") or node.get("summary") or "").strip()
         if subtitle == title:
@@ -198,19 +202,22 @@ class PPTExporter:
                           font_size=11, color=self._theme.inverse, bold=True)
 
     def _add_section_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
-        slide = self._blank_slide(prs, index)
-        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0, 0, 4.2, 7.5, self._theme.primary)
-        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 4.2, 0, 0.12, 7.5, self._theme.accent)
-        self._add_textbox(slide, f"{index:02d}", 0.75, 1.35, 2.3, 1.0,
+        slide = self._blank_slide(prs)
+        # default 主题对应预览的洋红→紫色章节背景；其他教学主题沿用各自令牌。
+        gradient_start = self._theme.accent if self._theme.template_id == "default" else self._theme.primary
+        self._set_gradient_background(slide, gradient_start, self._theme.secondary, 135)
+        self._add_page_badge(slide, index, inverse=True)
+        self._add_textbox(slide, f"{index:02d}", 0.82, 1.22, 2.3, 1.0,
                           font_size=46, color=self._theme.inverse, bold=True)
         title = str(node.get("title") or "新章节")
-        self._add_textbox(slide, title, 4.95, 2.25, 7.45, 1.7,
-                          font_size=self._fit_font(title, 30, 42, 14), color=self._theme.text,
+        self._add_textbox(slide, title, 1.02, 2.55, 11.1, 1.35,
+                          font_size=self._fit_font(title, 30, 42, 14), color=self._theme.inverse,
                           bold=True, valign=MSO_ANCHOR.MIDDLE)
+        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 1.04, 4.02, 0.75, 0.05, self._theme.inverse)
         summary = str(node.get("summary") or node.get("content") or "").strip()
         if summary:
-            self._add_textbox(slide, summary, 5.0, 4.15, 6.9, 1.0,
-                              font_size=self._fit_font(summary, 17, 23, 36), color=self._theme.muted)
+            self._add_textbox(slide, summary, 1.04, 4.32, 10.6, 1.0,
+                              font_size=self._fit_font(summary, 17, 23, 36), color=self._theme.inverse)
 
     def _add_agenda_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
         items = resolve_key_points(node)
@@ -257,18 +264,29 @@ class PPTExporter:
                 self._add_panel(slide, "教学内容", main_chunk, 0.72, 1.42, 11.88, 5.35)
 
     def _add_quiz_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
+        self._add_question_slides(prs, node, index, "INTERACTION", self._theme.accent,
+                                  "FFF5F9")
+
+    def _add_interactive_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
+        """与预览 interactive-slide 一致的绿色互动页，不再退化为粉色测验页。"""
+        self._add_question_slides(prs, node, index, "ACTIVITY", "2A9D5C", "F2FBF6")
+
+    def _add_question_slides(self, prs: Presentation, node: dict[str, Any], index: int,
+                             kicker: str, accent: str, background: str) -> None:
         items = self._quiz_question_items(node)
         chunks = self._chunk_quiz_items(items)
         number = 0
         for chunk_index, chunk in enumerate(chunks):
             slide = self._blank_slide(prs, index)
+            if self._theme.template_id == "default":
+                self._set_background(slide, background)
             title = str(node.get("title") or "课堂互动") + ("（续）" if chunk_index else "")
-            self._add_page_title(slide, title, "INTERACTION")
+            self._add_page_title(slide, title, kicker)
             y = 1.55
             for question, options, answer in chunk:
                 number += 1
                 self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE,
-                                0.85, y, 0.58, 0.58, self._theme.accent)
+                                0.85, y, 0.58, 0.58, accent)
                 self._add_textbox(slide, str(number), 0.85, y + 0.02, 0.58, 0.42,
                                   font_size=17, color=self._theme.inverse, bold=True,
                                   align=PP_ALIGN.CENTER)
@@ -339,12 +357,15 @@ class PPTExporter:
         chunks = self._chunk_items(points or ["本节要点"], 6)
         for chunk_index, chunk in enumerate(chunks):
             slide = self._blank_slide(prs, index)
+            if self._theme.template_id == "default":
+                self._set_background(slide, "F8F9FF")
             title = str(node.get("title") or "本节小结") + ("（续）" if chunk_index else "")
             self._add_page_title(slide, title, "SUMMARY")
-            self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0.72, 1.48, 0.09, 5.15, self._theme.accent)
+            summary_accent = self._theme.primary if self._theme.template_id == "default" else self._theme.accent
+            self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0.72, 1.48, 0.09, 5.15, summary_accent)
             y = 1.62
             for text in chunk:
-                self._add_shape(slide, MSO_SHAPE.OVAL, 1.08, y + 0.13, 0.18, 0.18, self._theme.secondary)
+                self._add_shape(slide, MSO_SHAPE.OVAL, 1.08, y + 0.13, 0.18, 0.18, summary_accent)
                 self._add_textbox(slide, text, 1.52, y, 10.45, 0.67,
                                   font_size=self._fit_font(text, 18, 25, 42), color=self._theme.text)
                 y += 0.78
@@ -452,7 +473,7 @@ class PPTExporter:
     def _add_page_title(self, slide, title: str, kicker: str) -> None:
         self._add_textbox(slide, kicker, 0.75, 0.4, 2.2, 0.24,
                           font_size=10, color=self._theme.accent, bold=True)
-        self._add_textbox(slide, title, 0.72, 0.7, 11.75, 0.56,
+        self._add_textbox(slide, title, 0.72, 0.7, 10.95, 0.56,
                           font_size=self._fit_font(title, 26, 34, 20), color=self._theme.text, bold=True)
         self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0.72, 1.27, 11.88, 0.02, self._theme.secondary)
 
@@ -535,6 +556,16 @@ class PPTExporter:
             self._apply_ea_font(run.font)
         return box
 
+    def _add_page_badge(self, slide, page_number: int, inverse: bool = False) -> None:
+        """右上角页码胶囊，与 HTML 预览的 slide-num 位置/层级一致。"""
+        fill = self._theme.secondary if inverse else "EEF1F5"
+        color = self._theme.inverse if inverse else self._theme.muted
+        self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE,
+                        12.06, 0.27, 0.62, 0.31, fill)
+        self._add_textbox(slide, str(page_number), 12.08, 0.305, 0.58, 0.2,
+                          font_size=9, color=color, align=PP_ALIGN.CENTER,
+                          valign=MSO_ANCHOR.MIDDLE)
+
     @staticmethod
     def _apply_ea_font(font) -> None:
         """补充东亚字体（a:ea）：WPS/中文 Office 用 ea 字形渲染中文，
@@ -558,6 +589,19 @@ class PPTExporter:
         fill = slide.background.fill
         fill.solid()
         fill.fore_color.rgb = PPTExporter._rgb(color)
+
+    @staticmethod
+    def _set_gradient_background(slide, start: str, end: str, angle: float = 135) -> None:
+        """设置 Office/WPS 原生线性渐变；不使用整页位图，仍可编辑。"""
+        fill = slide.background.fill
+        fill.gradient()
+        fill.gradient_angle = angle
+        stops = fill.gradient_stops
+        if len(stops) >= 2:
+            stops[0].color.rgb = PPTExporter._rgb(start)
+            stops[0].position = 0.0
+            stops[-1].color.rgb = PPTExporter._rgb(end)
+            stops[-1].position = 1.0
 
     @staticmethod
     def _rgb(value: str) -> RGBColor:

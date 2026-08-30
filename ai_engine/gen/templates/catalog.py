@@ -25,13 +25,15 @@ _THEMES = {
     "default": PPTTheme(
         template_id="default",
         display_name="通用教学",
-        primary="245B78",
-        secondary="2F7E83",
-        accent="E89B52",
-        background="F5F8FA",
+        # 与 preview.py 的默认 HTML 视觉令牌保持一致：
+        # 封面蓝紫、章节洋红、正文深蓝灰、浅色内容底。
+        primary="4361EE",
+        secondary="7209B7",
+        accent="F72585",
+        background="FFFFFF",
         surface="FFFFFF",
-        text="183042",
-        muted="627987",
+        text="1A1A2E",
+        muted="5F6C84",
         inverse="FFFFFF",
     ),
     "academic": PPTTheme(

@@ -29,6 +29,11 @@ OUTPUT = Path(PROJECT_ROOT) / "docs" / "导出验证" / "sample_export.pptx"
 
 SAMPLE_NODES = [
     {
+        "node_type": "cover",
+        "title": "排序算法教学课件",
+        "content": "从直观比较到分治优化",
+    },
+    {
         "node_type": "section",
         "title": "第一章 排序算法概述",
         "summary": "理解常见排序算法的思想与复杂度差异。",
@@ -66,7 +71,7 @@ SAMPLE_NODES = [
     },
 ]
 
-EXPECTED_PAGES = 5  # section + content + quiz(3题中2题带选项各占1页) + summary
+EXPECTED_PAGES = 6  # cover + section + content + quiz×2 + summary
 # 说明：带选项题目每页 2 题 → quiz 需要 2 页（2 题选项页 + 1 题开放题页）
 
 RESULTS = []
