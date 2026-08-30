@@ -210,6 +210,8 @@ def normalize_stage2_nodes(nodes: list[dict[str, Any]] | None) -> list[dict[str,
         raw_type = str((item or {}).get("type") or (item or {}).get("node_type") or "content").strip()
         core_pts = (item or {}).get("core_points") or []
         key_pts = (item or {}).get("key_points") or []
+        questions_raw = (item or {}).get("questions")
+        interactive_raw = (item or {}).get("interactive_questions")
 
         result.append(
             {
@@ -225,11 +227,13 @@ def normalize_stage2_nodes(nodes: list[dict[str, Any]] | None) -> list[dict[str,
                     if str(value).strip()
                 ],
                 # 兼容字段：key_points 优先，否则 fallback 到 core_points
-                "key_points": key_pts if key_pts else (core_pts if isinstance(core_pts, list) else []),
+                # 类型归一：str/list[dict]/dict 等脏数据统一转为 list[str]（M1-4 P5）
+                "key_points": normalize_text_list(key_pts) or normalize_text_list(core_pts),
                 "core_points": core_pts if isinstance(core_pts, list) else [],
                 # 兼容字段：questions 优先，否则 fallback 到 interactive_questions
-                "questions": (item or {}).get("questions") or (item or {}).get("interactive_questions") or [],
-                "interactive_questions": (item or {}).get("interactive_questions") or (item or {}).get("questions") or [],
+                # 类型归一：str/list[dict]/dict 等脏数据统一转为 list[str]（M1-4A P5）
+                "questions": normalize_text_list(questions_raw) or normalize_text_list(interactive_raw),
+                "interactive_questions": normalize_text_list(interactive_raw) or normalize_text_list(questions_raw),
                 # 空数组显式声明，避免 None
                 "segments": (item or {}).get("segments") or [],
                 "layout_hint": (item or {}).get("layout_hint"),
@@ -266,6 +270,8 @@ def normalize_stage3_scripts(scripts: list[dict[str, Any]] | None, valid_node_id
         raw_type = str((item or {}).get("type") or (item or {}).get("node_type") or "content").strip()
         core_pts = (item or {}).get("core_points") or []
         key_pts = (item or {}).get("key_points") or []
+        questions_raw = (item or {}).get("questions")
+        interactive_raw = (item or {}).get("interactive_questions")
 
         normalized.append(
             {
@@ -275,10 +281,11 @@ def normalize_stage3_scripts(scripts: list[dict[str, Any]] | None, valid_node_id
                 "node_type": "slide" if raw_type == "content" else raw_type,
                 "type": "slide" if raw_type == "content" else raw_type,
                 # 兼容字段
-                "key_points": key_pts if key_pts else (core_pts if isinstance(core_pts, list) else []),
+                # 类型归一：str/list[dict]/dict 等脏数据统一转为 list[str]（M1-4 P5）
+                "key_points": normalize_text_list(key_pts) or normalize_text_list(core_pts),
                 "core_points": core_pts if isinstance(core_pts, list) else [],
-                "questions": (item or {}).get("questions") or (item or {}).get("interactive_questions") or [],
-                "interactive_questions": (item or {}).get("interactive_questions") or (item or {}).get("questions") or [],
+                "questions": normalize_text_list(questions_raw) or normalize_text_list(interactive_raw),
+                "interactive_questions": normalize_text_list(interactive_raw) or normalize_text_list(questions_raw),
                 "segments": segments,
                 "layout_hint": (item or {}).get("layout_hint"),
                 "font_size_hint": (item or {}).get("font_size_hint"),
@@ -532,6 +539,34 @@ def align_node_segment_mapping(
         seg["node_ids"] = mapped
 
     return knowledge_nodes, script_segments
+
+
+def normalize_text_list(value: Any) -> list[str]:
+    """把 questions / interactive_questions / key_points 等字段归一为 list[str]。
+
+    规则（与 migrate_snapshot._normalize_questions 对齐，供多个 normalize 写入点共享，
+    避免各处实现漂移）：
+      - str → 单元素包装（非空才保留）
+      - list：str 保留；dict 提取 question / content / text 键文本；其他非 None 元素 str 化
+      - 其他类型（dict / None / 数字等）→ []
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            if item.strip():
+                result.append(item.strip())
+        elif isinstance(item, dict):
+            text = item.get("question") or item.get("content") or item.get("text")
+            if isinstance(text, str) and text.strip():
+                result.append(text.strip())
+        elif item is not None:
+            result.append(str(item).strip())
+    return result
 
 
 def _to_string_list(value: Any) -> list[str]:
