@@ -1190,7 +1190,23 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         course_name = req.intent.topic or "课件"
         if req.markdown:
             lesson_gen = LessonGenerator(GenerationConfig(mode="llm"))
-            result = lesson_gen.generate_from_markdown_enhanced(req.markdown, course_name)
+
+            def _stage_progress_cb(pct: float, message: str = "") -> None:
+                # Stage3 分块并行的 worker 线程会并发回调本函数：
+                # 1) 只增不减，避免乱序回调把进度拉回去
+                # 2) 持久化走 _persist_task_sync（daemon 线程内临时事件循环写 Redis /
+                #    线程安全的内存回退），回调异常必须吞掉，不能打断生成管道
+                try:
+                    task.progress_pct = max(task.progress_pct, float(pct))
+                    with _gen_tasks_lock:
+                        _gen_tasks[task_id] = task
+                    _persist_task_sync(task)
+                except Exception:
+                    pass
+
+            result = lesson_gen.generate_from_markdown_enhanced(
+                req.markdown, course_name, progress_cb=_stage_progress_cb
+            )
             scripts_list = result.get("scripts", [])
             node_ids = {n["node_id"] for n in nodes}
             scripts_dict = {"scripts": scripts_list}

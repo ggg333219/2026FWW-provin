@@ -34,6 +34,8 @@ _KEY_MAX_CONTENT_CHARS = "AI_MAX_CONTENT_CHARS"
 _KEY_EMBEDDING_MODEL = "AI_EMBEDDING_MODEL"
 _KEY_EMBEDDING_DIM = "AI_EMBEDDING_DIM"
 _KEY_LLM_TIMEOUT = "LLM_TIMEOUT_SECONDS"
+_KEY_LLM_GEN_CHUNK_SIZE = "LLM_GEN_CHUNK_SIZE"
+_KEY_LLM_GEN_MAX_WORKERS = "LLM_GEN_MAX_WORKERS"
 
 # ---- 默认值 ----
 _DEFAULT_MODEL = "qwen-turbo"
@@ -41,6 +43,9 @@ _DEFAULT_TEMPERATURE = 0.2
 _DEFAULT_MODE = "llm"
 _DEFAULT_MAX_CONTENT_CHARS = 3500
 _DEFAULT_LLM_TIMEOUT = 120
+# Stage3 讲稿分块并行：每块节点数 / 最大并行 worker 数
+_DEFAULT_LLM_GEN_CHUNK_SIZE = 3
+_DEFAULT_LLM_GEN_MAX_WORKERS = 3
 _DEFAULT_EMBEDDING_MODEL = "text-embedding-v3"
 _DEFAULT_EMBEDDING_DIM = 1024
 
@@ -64,6 +69,18 @@ def _get_env_int(key: str, default: int) -> int:
         return default
 
 
+def resolve_llm_gen_chunk_size() -> int:
+    """Stage3 讲稿生成：每块包含的节点数（env LLM_GEN_CHUNK_SIZE，非法值/小于1回退默认 3）。"""
+    val = _get_env_int(_KEY_LLM_GEN_CHUNK_SIZE, _DEFAULT_LLM_GEN_CHUNK_SIZE)
+    return val if val >= 1 else _DEFAULT_LLM_GEN_CHUNK_SIZE
+
+
+def resolve_llm_gen_max_workers() -> int:
+    """Stage3 讲稿生成：并行 LLM 调用的最大 worker 数（env LLM_GEN_MAX_WORKERS，非法值/小于1回退默认 3）。"""
+    val = _get_env_int(_KEY_LLM_GEN_MAX_WORKERS, _DEFAULT_LLM_GEN_MAX_WORKERS)
+    return val if val >= 1 else _DEFAULT_LLM_GEN_MAX_WORKERS
+
+
 @dataclass(frozen=True)
 class Settings:
     """
@@ -84,6 +101,10 @@ class Settings:
 
     # ---- LLM 调用超时（秒）----
     LLM_TIMEOUT: int = _DEFAULT_LLM_TIMEOUT
+
+    # ---- Stage3 讲稿分块并行 ----
+    LLM_GEN_CHUNK_SIZE: int = _DEFAULT_LLM_GEN_CHUNK_SIZE
+    LLM_GEN_MAX_WORKERS: int = _DEFAULT_LLM_GEN_MAX_WORKERS
 
     # ---- 嵌入 / RAG ----
     EMBEDDING_MODEL: str = _DEFAULT_EMBEDDING_MODEL
@@ -114,6 +135,8 @@ def _build_settings() -> Settings:
         GEN_MODE=_get_env_str(_KEY_MODE, _DEFAULT_MODE),
         MAX_CONTENT_CHARS=_get_env_int(_KEY_MAX_CONTENT_CHARS, _DEFAULT_MAX_CONTENT_CHARS),
         LLM_TIMEOUT=_get_env_int(_KEY_LLM_TIMEOUT, _DEFAULT_LLM_TIMEOUT),
+        LLM_GEN_CHUNK_SIZE=resolve_llm_gen_chunk_size(),
+        LLM_GEN_MAX_WORKERS=resolve_llm_gen_max_workers(),
         EMBEDDING_MODEL=_get_env_str(_KEY_EMBEDDING_MODEL, _DEFAULT_EMBEDDING_MODEL),
         EMBEDDING_DIM=_get_env_int(_KEY_EMBEDDING_DIM, _DEFAULT_EMBEDDING_DIM),
         HOST=_get_env_str("HOST", "0.0.0.0"),
