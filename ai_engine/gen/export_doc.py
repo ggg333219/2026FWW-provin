@@ -91,6 +91,11 @@ class DOCExporter:
     def _add_node_section(self, doc: Document, node: dict[str, Any], index: int) -> None:
         node = _as_mapping(node)
         node_type = node.get("type") or "content"
+        if node_type == "slide":
+            # node.py 数据层已把 "content" 统一映射为 "slide"（与 export_ppt.py /
+            # preview.py 的别名处理对齐），这里收敛回 "content"，否则新版课件
+            # 导出 DOCX 时正文/segments/key_points 会静默丢失。
+            node_type = "content"
         title = node.get("title") or f"第{index}节"
         content = node.get("content") or node.get("script") or node.get("summary") or ""
 
