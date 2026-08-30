@@ -1361,7 +1361,9 @@ async def get_preview(gen_id: str, version: Optional[int] = None):
 # =============================================================================
 
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
-from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
+from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig, LessonPlanDOCExporter
+from ai_engine.gen.export_html5 import export_interactive_html
+from ai_engine.gen.lesson_plan import LessonPlanGenerator
 
 # 进程内导出任务存储
 _export_tasks: dict[str, ExportJob] = {}
@@ -1397,8 +1399,19 @@ async def export_create(gen_id: str, req: ExportRequest):
     async with _export_lock:
         _export_tasks[job_id] = job
 
+    # 教案导出（lesson_plan）需要意图摘要补充课时/授课对象等，从内存生成任务查找（找不到则 fallback 全靠节点）
+    intent_dict = None
+    with _gen_tasks_lock:
+        for _task in _gen_tasks.values():
+            if _task.generation_id == gen_id:
+                intent_dict = (
+                    _task.intent.model_dump()
+                    if hasattr(_task.intent, "model_dump") else dict(_task.intent)
+                )
+                break
+
     # 后台执行导出
-    asyncio.create_task(_run_export(job_id, nodes, req.format))
+    asyncio.create_task(_run_export(job_id, nodes, req.format, intent=intent_dict))
 
     return ExportStatusResponse(
         job_id=job_id,
@@ -1408,7 +1421,9 @@ async def export_create(gen_id: str, req: ExportRequest):
     )
 
 
-async def _run_export(job_id: str, nodes: list[dict], fmt: ExportFormat):
+async def _run_export(
+    job_id: str, nodes: list[dict], fmt: ExportFormat, intent: dict | None = None,
+):
     """后台导出任务"""
     async with _export_lock:
         job = _export_tasks.get(job_id)
@@ -1421,6 +1436,20 @@ async def _run_export(job_id: str, nodes: list[dict], fmt: ExportFormat):
         course_name = "课件"
         export_dir = Path("data/exports")
         export_dir.mkdir(parents=True, exist_ok=True)
+
+        # Word 标准教案（A12 赛题 4b）：LLM 生成 + 确定性 fallback，导出永不空。
+        # 产物存 doc_path（.docx），复用既有上传/下载链路，无需改动 upload 循环。
+        if fmt == ExportFormat.LESSON_PLAN:
+            generator = LessonPlanGenerator()
+            plan = await asyncio.to_thread(generator.generate, nodes, intent or {}, None)
+            exporter = LessonPlanDOCExporter()
+            buf = exporter.export_to_bytes(plan)
+            doc_path = export_dir / f"{job_id}.docx"
+            doc_path.write_bytes(buf.getvalue())
+            job.metadata = job.metadata or {}
+            job.metadata["doc_path"] = str(doc_path)
+            job.metadata["lesson_plan_source"] = getattr(plan, "data_source", "unknown")
+            job.file_size = doc_path.stat().st_size
 
         if fmt in (ExportFormat.BOTH, ExportFormat.PPTX):
             exporter = PPTExporter()
@@ -1440,6 +1469,16 @@ async def _run_export(job_id: str, nodes: list[dict], fmt: ExportFormat):
             job.metadata["doc_path"] = str(doc_path)
             job.file_size = doc_path.stat().st_size
 
+        # HTML5 互动小游戏（A12 赛题 4c/5c）：both/interactive 模式下随 pptx/docx 一起产出
+        if fmt in (ExportFormat.BOTH, ExportFormat.INTERACTIVE):
+            html5 = export_interactive_html(
+                nodes, course_name,
+                output_dir=str(export_dir), file_name=f"{job_id}.html",
+            )
+            job.metadata = job.metadata or {}
+            job.metadata["html_path"] = html5["path"]
+            job.file_size = html5["file_size"]
+
         job.status = ExportStatus.DONE
 
         # 真实上传 MinIO（导出成功后尽力上传；失败降级为本地路径，任务仍为 done）。
@@ -1449,7 +1488,7 @@ async def _run_export(job_id: str, nodes: list[dict], fmt: ExportFormat):
         try:
             meta = job.metadata or {}
             upload_results: list[dict] = []
-            for key, ext in (("ppt_path", "pptx"), ("doc_path", "docx")):
+            for key, ext in (("ppt_path", "pptx"), ("doc_path", "docx"), ("html_path", "html")):
                 local_path = meta.get(key)
                 if not local_path:
                     continue
@@ -1514,6 +1553,8 @@ async def export_status(job_id: str):
             download_url = f"/download/{job_id}.pptx"
         elif "doc_path" in meta:
             download_url = f"/download/{job_id}.docx"
+        elif "html_path" in meta:
+            download_url = f"/download/{job_id}.html"
 
     meta = job.metadata or {}
     return ExportStatusResponse(
@@ -1529,14 +1570,14 @@ async def export_status(job_id: str):
 
 @app.get("/download/{job_id}.{extension}")
 async def export_download(job_id: str, extension: str):
-    """下载已完成的 PPTX/DOCX 导出文件。"""
+    """下载已完成的 PPTX/DOCX/HTML5 导出文件。"""
     async with _export_lock:
         job = _export_tasks.get(job_id)
 
     if not job or job.status != ExportStatus.DONE:
         raise HTTPException(status_code=404, detail="导出文件不存在或任务尚未完成")
 
-    key = {"pptx": "ppt_path", "docx": "doc_path"}.get(extension.lower())
+    key = {"pptx": "ppt_path", "docx": "doc_path", "html": "html_path"}.get(extension.lower())
     path = Path(job.metadata.get(key, "")) if key else None
     if not path or not path.is_file():
         raise HTTPException(status_code=404, detail="请求的导出格式不存在")
@@ -1544,6 +1585,7 @@ async def export_download(job_id: str, extension: str):
     media_types = {
         "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "html": "text/html; charset=utf-8",
     }
     return FileResponse(path, media_type=media_types[extension.lower()], filename=path.name)
 

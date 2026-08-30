@@ -122,6 +122,8 @@ class ExportFormat(str, Enum):
     BOTH = "both"
     INTERACTIVE = "interactive"
     PDF = "pdf"
+    LESSON_PLAN = "lesson_plan"
+    """Word 标准教案（A12 赛题 4b）：三维目标/教学过程表/课堂活动/课后作业等标准结构"""
 
 
 class ExportStatus(str, Enum):
