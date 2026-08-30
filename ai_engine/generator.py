@@ -17,8 +17,10 @@
 import json
 import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 from dotenv import load_dotenv
 
 try:
@@ -28,8 +30,10 @@ except ImportError:
 
 try:
     from .core.llm import resolve_llm_timeout
+    from .core.config import resolve_llm_gen_chunk_size, resolve_llm_gen_max_workers
 except ImportError:  # 直接以脚本方式运行时的回退导入
     from core.llm import resolve_llm_timeout
+    from core.config import resolve_llm_gen_chunk_size, resolve_llm_gen_max_workers
 
 try:
     from .schema import (
@@ -162,7 +166,18 @@ class LessonGenerator:
             result["used_fallback"] = True
             return result
 
-    def generate_from_markdown_enhanced(self, markdown: str, course_name: str | None = None) -> dict[str, Any]:
+    def generate_from_markdown_enhanced(
+        self,
+        markdown: str,
+        course_name: str | None = None,
+        progress_cb: Callable[[float, str], None] | None = None,
+    ) -> dict[str, Any]:
+        """增强版三阶段生成（向后兼容：progress_cb 为可选参数，旧调用点无需改动）。
+
+        progress_cb: 可选回调，接收 (pct: float 0-100, message: str)。
+        会在 Stage1 完成(55)、Stage2 完成(60)、每个 Stage3 分块完成(60→78 线性)时被调用；
+        回调可能来自工作线程，实现方需自行保证线程安全，回调异常不会中断生成。
+        """
         normalized_markdown = self._prepare_content(markdown or "")
         if not normalized_markdown:
             normalized_markdown = "# 未命名课件\n\n- 内容为空"
@@ -173,10 +188,12 @@ class LessonGenerator:
             stage1 = self._run_stage1_markdown_understanding(client, normalized_markdown)
             stage1_md = str(stage1.get("normalized_markdown") or normalized_markdown).strip() or normalized_markdown
             stage1_points = [str(item).strip() for item in (stage1.get("key_points") or []) if str(item).strip()]
+            self._notify_progress(progress_cb, 55.0, "Stage1 markdown 理解完成")
             stage2_nodes = self._run_stage2_node_tree(client, stage1_md, stage1_points)
             if not stage2_nodes:
                 stage2_nodes = fallback["node_tree"]["nodes"]
-            enhanced_scripts = self._run_stage3_enhanced_scripts(client, stage1_md, stage2_nodes, course_name)
+            self._notify_progress(progress_cb, 60.0, "Stage2 节点树构建完成")
+            enhanced_scripts = self._run_stage3_enhanced_scripts(client, stage1_md, stage2_nodes, course_name, progress_cb)
             if not enhanced_scripts:
                 enhanced_scripts = enhanced["scripts"]
             node_ids = {item["node_id"] for item in stage2_nodes}
@@ -198,7 +215,81 @@ class LessonGenerator:
             result["used_fallback"] = True
             return result
 
-    def _run_stage3_enhanced_scripts(self, client, markdown: str, nodes: list, course_name: str | None) -> list:
+    @staticmethod
+    def _notify_progress(progress_cb: Callable[[float, str], None] | None, pct: float, message: str) -> None:
+        """进度回调安全封装：回调缺失直接跳过，回调异常吞掉（进度上报绝不能打断生成）。"""
+        if progress_cb is None:
+            return
+        try:
+            progress_cb(float(pct), str(message or ""))
+        except Exception:
+            pass
+
+    def _run_stage3_enhanced_scripts(
+        self,
+        client,
+        markdown: str,
+        nodes: list,
+        course_name: str | None,
+        progress_cb: Callable[[float, str], None] | None = None,
+    ) -> list:
+        """Stage3 讲稿生成（分块并行版）。
+
+        将节点按 LLM_GEN_CHUNK_SIZE（默认 3）切块，用 ThreadPoolExecutor
+        以 LLM_GEN_MAX_WORKERS（默认 3）个 worker 并行调用 LLM；每块独立
+        client（规避 OpenAI 客户端并发隐患）、独立重试与失败语义：
+        某块彻底失败只对该块节点降级为 fallback，不影响其他块。
+        """
+        if not nodes:
+            return []
+        chunk_size = resolve_llm_gen_chunk_size()
+        max_workers = resolve_llm_gen_max_workers()
+        chunks = [nodes[i : i + chunk_size] for i in range(0, len(nodes), chunk_size)]
+        total = len(chunks)
+        results: dict[int, list] = {}
+        progress_lock = threading.Lock()
+        completed = 0
+
+        def _run_chunk(idx: int, chunk_nodes: list) -> None:
+            nonlocal completed
+            try:
+                # 保守起见每个工作线程独立创建 LLM client，避免共享 OpenAI client 的线程安全问题
+                try:
+                    chunk_client = self._build_llm_client()
+                except Exception:
+                    chunk_client = client  # 新建失败（如离线测试环境）回退共用 client
+                scripts = self._run_stage3_chunk(chunk_client, markdown, chunk_nodes, course_name)
+                if not scripts:
+                    scripts = self._build_enhanced_fallback_scripts_for_nodes(chunk_nodes)
+                results[idx] = scripts
+            except Exception:
+                # 本块重试后仍失败：只对本块节点走 fallback，其他块结果不受影响
+                results[idx] = self._build_enhanced_fallback_scripts_for_nodes(chunk_nodes)
+            finally:
+                with progress_lock:
+                    completed += 1
+                    done = completed
+                self._notify_progress(progress_cb, 60.0 + (done / total) * 18.0, f"Stage3 讲稿分块完成 {done}/{total}")
+
+        worker_count = min(max_workers, total)
+        if worker_count <= 1:
+            for i, chunk_nodes in enumerate(chunks):
+                _run_chunk(i, chunk_nodes)
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                futures = [pool.submit(_run_chunk, i, chunk_nodes) for i, chunk_nodes in enumerate(chunks)]
+                for future in futures:
+                    future.result()  # _run_chunk 内部已兜底，不会抛出
+
+        merged: list = []
+        for i in range(total):
+            merged.extend(results.get(i) or [])
+        return merged
+
+    def _run_stage3_chunk(self, client, markdown: str, chunk_nodes: list, course_name: str | None) -> list:
+        """单个分块的讲稿生成：prompt 复用原格式，但只要求输出本块节点的 scripts。"""
+        chunk_ids = [str(n.get("node_id") or "").strip() for n in chunk_nodes]
+        chunk_ids = [nid for nid in chunk_ids if nid]
         system_prompt = (
             "你是课堂讲稿生成助手（增强版）。只输出JSON。\n"
             "格式: {\"scripts\": [{\"node_id\":\"...\",\"title\":\"...\",\"script\":\"...\",\"segments\":[...]}]}\n\n"
@@ -209,18 +300,20 @@ class LessonGenerator:
             "  - interaction_hint: 具体教师话术 (必填)\n"
             "  - knowledge_card: {\"term\":\"术语\",\"definition\":\"定义\",\"formula\":\"公式或空串\",\"tags\":[\"标签\"]} (必填)\n"
             "  - difficulty: easy/medium/hard (必填)\n"
-            "使用节点树中的node_id值，不要编造。"
+            "使用节点树中的node_id值，不要编造。\n"
+            "⚠️ 只输出本块 node_id 对应的内容，不要输出其他节点的脚本。"
         )
         user_prompt = (
-            f"课程名: {course_name or '未命名课程'}\n原始MD:\n{markdown}\n\n节点树:\n{json.dumps(nodes, ensure_ascii=False)}\n\n"
-            "每个节点至少2-4个segments: 开场->讲解->互动->过渡。node_id必须用节点树中的值。"
+            f"课程名: {course_name or '未命名课程'}\n原始MD:\n{markdown}\n\n"
+            f"本块节点 node_id 列表: {json.dumps(chunk_ids, ensure_ascii=False)}\n"
+            f"本块节点树:\n{json.dumps(chunk_nodes, ensure_ascii=False)}\n\n"
+            "只生成本块节点的讲稿，不要输出其他节点。"
+            "每个节点至少2-4个segments: 开场->讲解->互动->过渡。node_id必须用本块节点树中的值。"
         )
         raw = self._request_llm_payload(client, system_prompt, user_prompt)
-        with open("/tmp/enhanced_raw.json", "w") as f:
-            f.write(raw)
         data = self._extract_json(raw)
         scripts = data if isinstance(data, list) else data.get("scripts") or []
-        valid_ids = {n["node_id"] for n in nodes}
+        valid_ids = set(chunk_ids)
         valid_list = sorted(valid_ids)
         for idx, script in enumerate(scripts):
             raw_id = str(script.get("node_id") or "").strip()
@@ -231,6 +324,25 @@ class LessonGenerator:
                 script["node_id"] = mapped
                 for seg in script.get("segments") or []:
                     seg["node_id"] = mapped
+        return scripts
+
+    def _build_enhanced_fallback_scripts_for_nodes(self, nodes: list) -> list:
+        """为指定节点列表构造增强版 fallback 讲稿（结构与 _build_enhanced_fallback 一致）。"""
+        scripts = []
+        for idx, node in enumerate(nodes, start=1):
+            nid = str(node.get("node_id") or f"node_{idx:03d}")
+            title = str(node.get("title") or nid)
+            st = f"讲解节点 {nid}：{title}。"
+            scripts.append({
+                "node_id": nid, "title": title, "script": st,
+                "segments": [{
+                    "segment_id": f"seg_{nid}_{idx}_1", "text": st, "node_id": nid,
+                    "segment_type": "explanation", "estimated_seconds": 45,
+                    "difficulty": "medium",
+                    "interaction_hint": f"提问：你对{title}有什么理解？",
+                    "knowledge_card": {"term": title, "definition": f"关于{title}的核心知识", "formula": "", "tags": ["core"]},
+                }],
+            })
         return scripts
 
     @staticmethod
