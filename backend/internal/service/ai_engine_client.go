@@ -489,8 +489,12 @@ type TeachingNodeItem struct {
 	CitationRefs []string `json:"citation_refs,omitempty"`
 	NextNodeID   string   `json:"next_node_id,omitempty"`
 	// 透传字段：版本快照 / 预览返回节点带有的讲授分段与互动问答等元数据。
+	// Questions 引擎侧为 list[str]（normalize_text_list 产出），用 interface 透传避免解码失败。
 	Segments  []map[string]interface{} `json:"segments,omitempty"`
-	Questions []map[string]interface{} `json:"questions,omitempty"`
+	Questions []interface{}            `json:"questions,omitempty"`
+	Script    string                   `json:"script,omitempty"`
+	// type 为引擎侧字符串渲染类型（与 node_type 等效），透传给前端渲染层。
+	Type string `json:"type,omitempty"`
 }
 
 type GenerationCreateRequest struct {
@@ -519,6 +523,9 @@ type GenerationStatusResponse struct {
 	Nodes       []TeachingNodeItem `json:"nodes,omitempty"`
 	PreviewURL  string             `json:"preview_url,omitempty"`
 	Error       string             `json:"error,omitempty"`
+	// 引擎侧前端兼容字段（progress 为 0~1 小数、stage_text 为阶段文案），透传给前端。
+	Progress  float64 `json:"progress,omitempty"`
+	StageText string  `json:"stage_text,omitempty"`
 }
 
 type GenerationPreviewRequest struct {
@@ -543,7 +550,9 @@ type GenerationPreviewResponse struct {
 // =============================================================================
 
 type ModifyCommandItem struct {
-	CommandType   string   `json:"command_type"`
+	// 引擎侧 CommandParser 读取 cmd["type"]（其余键作为 params），前端也发送 type；
+	// json tag 必须为 "type" 才能让命令两端对齐（此前 command_type 导致命令类型丢失）。
+	CommandType   string   `json:"type"`
 	NodeID        string   `json:"node_id,omitempty"`
 	TargetNodeIDs []string `json:"target_node_ids,omitempty"`
 	Content       string   `json:"content,omitempty"`
@@ -613,6 +622,10 @@ type ExportStatusResponse struct {
 	Status      string `json:"status"`
 	DownloadURL string `json:"download_url,omitempty"`
 	Error       string `json:"error,omitempty"`
+	// 引擎侧导出产物上传状态等扩展字段（字段只增不删），透传给前端。
+	UploadStatus string `json:"upload_status,omitempty"`
+	MinioPath    string `json:"minio_path,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
 }
 
 // =============================================================================
