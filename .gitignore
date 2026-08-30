@@ -76,3 +76,6 @@ ai_engine/data/
 
 data/versions/
 data/exports/
+
+# S2 视频解析测试素材（本地生成，不入库）
+scripts/tmp_testvideo/

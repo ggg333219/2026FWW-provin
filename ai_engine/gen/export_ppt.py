@@ -49,6 +49,15 @@ _SEGMENT_LABELS = {
     "transition": "过渡", "summary": "小结",
 }
 
+# ── 内容可视化特征检测 ──
+# 流程特征：正文出现顺序词时，把句子抽取为横向流程条（矩形序列 + "→" 连接）。
+_FLOW_KEYWORDS = ("步骤", "流程", "首先", "然后", "接着", "其次", "最后",
+                  "第一", "第二", "第三", "随后", "最终")
+_FLOW_LEADING_RE = re.compile(
+    r"^(首先|然后|接着|其次|最后|随后|最终|第[一二三四五六]步|步骤[一二三四五六]?)[，,：:、\s]*")
+# 数值对比特征：出现 ≥2 个百分比时渲染为按数值比例的条形对比块。
+_PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[%％]")
+
 
 def _as_mapping(node: Any) -> dict[str, Any]:
     """兼容 dict、Pydantic v1/v2 和普通对象。"""
@@ -95,6 +104,9 @@ class ExportPPTConfig:
     default_template: str = "default"
     output_dir: str = "data/exports"
     include_auto_cover: bool = False
+    # 图文并茂增强（默认关闭，保持既有导出页数与预览节点同源）：
+    include_auto_toc: bool = False      # 封面后自动插入目录页（条目=节点标题列表）
+    include_closing_slide: bool = False # 末节点为 summary 时追加"感谢聆听"结束页
 
 
 class PPTExporter:
@@ -134,14 +146,39 @@ class PPTExporter:
         self._theme = get_theme(template_id or self.config.default_template)
         prs = self._create_presentation(template_id)
         normalized = [_as_mapping(node) for node in (nodes or [])]
-        if self.config.include_auto_cover or not normalized:
+        auto_cover = self.config.include_auto_cover or not normalized
+        toc_entries = self._toc_entries(normalized) if self.config.include_auto_toc else []
+        leading_cover = auto_cover or (normalized and resolve_node_type(normalized[0]) == "cover")
+        if toc_entries and not leading_cover:
+            # 全程无封面时，目录作为首页
+            self._add_auto_toc_slides(prs, toc_entries)
+            toc_entries = []
+        if auto_cover:
             self._add_cover_slide(prs, {"title": course_name, "content": "AI 智能生成课件"})
+            if toc_entries:
+                self._add_auto_toc_slides(prs, toc_entries)
+                toc_entries = []
         for index, node in enumerate(normalized, start=1):
             self._get_slide_handler(resolve_node_type(node))(prs, node, index)
+            if toc_entries and index == 1 and resolve_node_type(node) == "cover":
+                self._add_auto_toc_slides(prs, toc_entries)
+                toc_entries = []
+        if self.config.include_closing_slide and normalized \
+                and resolve_node_type(normalized[-1]) == "summary":
+            self._add_ending_slide(prs)
         prs.core_properties.title = str(course_name or "课件")
         prs.core_properties.subject = "多模态 AI 互动式教学课件"
         prs.core_properties.author = "多模态 AI 互动式教学智能体"
         return prs
+
+    @staticmethod
+    def _toc_entries(normalized: list[dict[str, Any]]) -> list[str]:
+        """目录条目 = 每个教学节点的标题（条目数与节点数一一对应）。"""
+        entries: list[str] = []
+        for index, node in enumerate(normalized, start=1):
+            title = str(node.get("title") or "").strip()
+            entries.append(title or f"第 {index} 页")
+        return entries
 
     def _create_presentation(self, template_id: str) -> Presentation:
         """加载可选母版并清除示例页；默认创建干净 16:9 文件。"""
@@ -171,29 +208,45 @@ class PPTExporter:
             "quiz": self._add_quiz_slide, "content": self._add_content_slide,
         }.get(node_type, self._add_content_slide)
 
-    def _blank_slide(self, prs: Presentation, page_number: int | None = None):
+    def _blank_slide(self, prs: Presentation, page_number: int | None = None,
+                     footer: bool = True):
+        """创建空白页。page_number 仅用于兼容旧调用，页码统一由标题条渲染。"""
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         self._set_background(slide, self._theme.background)
-        if page_number is not None:
-            self._add_textbox(slide, str(page_number), 12.35, 7.05, 0.45, 0.22,
-                              font_size=9, color=self._theme.muted, align=PP_ALIGN.RIGHT)
+        if footer:
+            self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0.72, 7.14, 11.88, 0.012,
+                            self._theme.muted)
+            self._add_textbox(slide, "多模态 AI 互动式教学智能体 · 教学课件", 0.72, 7.0,
+                              5.2, 0.3, font_size=9, color=self._theme.muted)
         return slide
 
     def _add_cover_slide(self, prs: Presentation, node: dict[str, Any], index: int = 1) -> None:
-        slide = self._blank_slide(prs)
+        slide = self._blank_slide(prs, footer=False)
         self._set_background(slide, self._theme.primary)
+        # 几何装饰：左侧强调条 + 底部色带 + 错落圆形（纯形状，WPS 兼容）
         self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0, 0, 0.23, 7.5, self._theme.accent)
-        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0.23, 6.92, 13.1, 0.58, self._theme.secondary)
+        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0.23, 6.92, 13.11, 0.58, self._theme.secondary)
+        self._add_shape(slide, MSO_SHAPE.OVAL, 10.55, -1.35, 3.7, 3.7,
+                        self._blend(self._theme.primary, self._theme.inverse, 0.14))
+        self._add_shape(slide, MSO_SHAPE.OVAL, 11.95, 4.55, 2.6, 2.6,
+                        self._blend(self._theme.secondary, self._theme.inverse, 0.22))
+        self._add_shape(slide, MSO_SHAPE.OVAL, -0.95, 5.35, 2.3, 2.3,
+                        self._blend(self._theme.primary, self._theme.inverse, 0.10))
         title = str(node.get("title") or node.get("content") or "课件").strip()
         subtitle = str(node.get("content") or node.get("summary") or "").strip()
         if subtitle == title:
             subtitle = ""
-        self._add_textbox(slide, title, 1.05, 2.15, 11.1, 1.65,
+        # 标题上下居中：主标题 + 副标题整体居中排布，配短装饰条
+        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 5.92, 1.72, 1.5, 0.075, self._theme.accent)
+        self._add_textbox(slide, title, 1.05, 2.05, 11.23, 1.75,
                           font_size=self._fit_font(title, 34, 50, 18), color=self._theme.inverse,
-                          bold=True, valign=MSO_ANCHOR.MIDDLE)
+                          bold=True, align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
         if subtitle:
-            self._add_textbox(slide, subtitle, 1.08, 4.05, 9.8, 0.95,
-                              font_size=self._fit_font(subtitle, 20, 28, 32), color=self._theme.inverse)
+            self._add_textbox(slide, subtitle, 1.6, 4.0, 10.13, 0.95,
+                              font_size=self._fit_font(subtitle, 20, 28, 32),
+                              color=self._theme.inverse, align=PP_ALIGN.CENTER)
+            self._add_shape(slide, MSO_SHAPE.RECTANGLE, 5.92, 5.12, 1.5, 0.05,
+                            self._blend(self._theme.accent, self._theme.inverse, 0.25))
         self._add_textbox(slide, self._theme.display_name, 1.08, 6.19, 3.4, 0.3,
                           font_size=11, color=self._theme.inverse, bold=True)
 
@@ -211,6 +264,33 @@ class PPTExporter:
         if summary:
             self._add_textbox(slide, summary, 5.0, 4.15, 6.9, 1.0,
                               font_size=self._fit_font(summary, 17, 23, 36), color=self._theme.muted)
+        self._add_textbox(slide, f"{index:02d}", 12.05, 6.98, 0.95, 0.32,
+                          font_size=10, color=self._theme.muted, align=PP_ALIGN.RIGHT)
+
+    def _add_auto_toc_slides(self, prs: Presentation, entries: list[str]) -> None:
+        """自动目录页：两栏卡片式，每页 8 条（4 行 × 2 列），条目与节点一一对应。"""
+        chunks = self._chunk_items(entries, 8)
+        col_x = (0.85, 6.95)
+        card_w, card_h, gap_y = 5.55, 1.02, 0.24
+        for chunk_index, chunk in enumerate(chunks):
+            slide = self._blank_slide(prs)
+            title = "目录" + ("（续）" if chunk_index else "")
+            self._add_page_title(slide, title, "CONTENTS")
+            start = chunk_index * 8
+            for offset, text in enumerate(chunk):
+                row, col = divmod(offset, 2)
+                x, y = col_x[col], 1.6 + row * (card_h + gap_y)
+                self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, y, card_w, card_h,
+                                self._theme.surface, line=self._theme.muted)
+                self._add_shape(slide, MSO_SHAPE.OVAL, x + 0.2, y + 0.26, 0.5, 0.5,
+                                self._theme.accent)
+                number = start + offset + 1
+                self._add_textbox(slide, f"{number:02d}", x + 0.2, y + 0.34, 0.5, 0.36,
+                                  font_size=14, color=self._theme.inverse, bold=True,
+                                  align=PP_ALIGN.CENTER)
+                self._add_textbox(slide, text, x + 0.88, y + 0.25, card_w - 1.1, 0.56,
+                                  font_size=self._fit_font(text, 14, 19, 15),
+                                  color=self._theme.text, valign=MSO_ANCHOR.MIDDLE)
 
     def _add_agenda_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
         items = resolve_key_points(node)
@@ -222,7 +302,7 @@ class PPTExporter:
         for chunk_index, chunk in enumerate(chunks):
             slide = self._blank_slide(prs, index)
             title = str(node.get("title") or "课程目录") + ("（续）" if chunk_index else "")
-            self._add_page_title(slide, title, "AGENDA")
+            self._add_page_title(slide, title, "AGENDA", index)
             y = 1.55
             for offset, text in enumerate(chunk, start=chunk_index * 7 + 1):
                 self._add_textbox(slide, f"{offset:02d}", 0.95, y, 0.7, 0.48,
@@ -237,24 +317,182 @@ class PPTExporter:
         segment_items = self._segment_items(node)
         if not main_items and not segment_items:
             main_items = [("正文", "暂无正文内容", False)]
-        main_chunks = self._chunk_weighted(main_items, 12 if segment_items else 22,
-                                           37 if segment_items else 72)
-        segment_chunks = self._chunk_weighted(segment_items, 13, 35)
+        viz = self._select_visualization(node)
+        scale = self._viz_body_scale(viz)
+        main_cpl = max(16, int((72 if not segment_items else 37) * scale))
+        seg_cpl = max(12, int(37 * scale))
+        main_chunks = self._chunk_weighted(main_items, 12 if segment_items else 22, main_cpl)
+        segment_chunks = self._chunk_weighted(segment_items, 13, seg_cpl)
         page_count = max(len(main_chunks), len(segment_chunks), 1)
         title = str(node.get("title") or f"第 {index} 页")
         for page_index in range(page_count):
             slide = self._blank_slide(prs, index)
             page_title = title + (f"（续 {page_index + 1}）" if page_index else "")
-            self._add_page_title(slide, page_title, "CONTENT")
+            self._add_page_title(slide, page_title, "CONTENT", index)
+            body_y, body_h = 1.42, 5.35
+            if viz and page_index == 0:
+                zone_h = self._render_visualization(slide, viz, 1.42)
+                body_y = 1.42 + zone_h + 0.16
+                body_h = max(5.35 - zone_h - 0.16, 1.3)
             main_chunk = main_chunks[page_index] if page_index < len(main_chunks) else []
             seg_chunk = segment_chunks[page_index] if page_index < len(segment_chunks) else []
             if main_chunk and seg_chunk:
-                self._add_panel(slide, "教学内容", main_chunk, 0.72, 1.42, 5.86, 5.35)
-                self._add_panel(slide, "讲授分段", seg_chunk, 6.78, 1.42, 5.82, 5.35)
+                self._add_panel(slide, "教学内容", main_chunk, 0.72, body_y, 5.86, body_h)
+                self._add_panel(slide, "讲授分段", seg_chunk, 6.78, body_y, 5.82, body_h)
             elif seg_chunk:
-                self._add_panel(slide, "讲授分段", seg_chunk, 0.72, 1.42, 11.88, 5.35)
+                self._add_panel(slide, "讲授分段", seg_chunk, 0.72, body_y, 11.88, body_h)
             else:
-                self._add_panel(slide, "教学内容", main_chunk, 0.72, 1.42, 11.88, 5.35)
+                self._add_panel(slide, "教学内容", main_chunk, 0.72, body_y, 11.88, body_h)
+
+    # ── 内容可视化：流程条 / 数值对比条 / 序号要点条 ──
+
+    @staticmethod
+    def _node_body_text(node: dict[str, Any]) -> str:
+        parts = []
+        for field in ("content", "script", "summary"):
+            value = node.get(field)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+        return "\n".join(parts)
+
+    @classmethod
+    def _detect_flow_steps(cls, node: dict[str, Any]) -> list[str]:
+        """正文含顺序词时抽取 2-4 步流程；否则返回空。"""
+        text = cls._node_body_text(node)
+        if not text or not any(keyword in text for keyword in _FLOW_KEYWORDS):
+            return []
+        sentences = [part.strip() for part in re.split(r"[。！？；;.!?\n]", text) if part.strip()]
+        steps = [s for s in sentences if any(keyword in s for keyword in _FLOW_KEYWORDS)]
+        if len(steps) < 2:
+            steps = sentences if 2 <= len(sentences) <= 4 else []
+        if len(steps) < 2:
+            return []
+        cleaned: list[str] = []
+        for step in steps[:4]:
+            step = _FLOW_LEADING_RE.sub("", step)
+            if step:
+                cleaned.append(step[:34])
+        return cleaned if len(cleaned) >= 2 else []
+
+    @classmethod
+    def _detect_comparison_bars(cls, node: dict[str, Any]) -> list[tuple[str, float]]:
+        """正文/要点含 ≥2 个百分比时返回（标签, 数值）列表，供条形对比渲染。"""
+        text = cls._node_body_text(node)
+        points = resolve_key_points(node)
+        if points:
+            text = "\n".join([text, *points]).strip()
+        if not text:
+            return []
+        items: list[tuple[str, float]] = []
+        for match in list(_PERCENT_RE.finditer(text))[:4]:
+            value = float(match.group(1))
+            context = text[max(0, match.start() - 12):match.start()]
+            context = re.sub(r"^[\s，,。；;：:、()（）\-—*•]*", "", context)[-8:].strip()
+            items.append((context or "占比", value))
+        if len(items) < 2 or all(value <= 0 for _, value in items):
+            return []
+        return items
+
+    def _select_visualization(self, node: dict[str, Any]) -> tuple[str, Any] | None:
+        """可视化优先级：流程条 > 数值对比条 > 序号要点条（3-5 条要点）。"""
+        flow = self._detect_flow_steps(node)
+        if flow:
+            return ("flow", flow)
+        bars = self._detect_comparison_bars(node)
+        if bars:
+            return ("bars", bars)
+        points = resolve_key_points(node)
+        if 3 <= len(points) <= 5:
+            return ("points", points[:5])
+        return None
+
+    @staticmethod
+    def _viz_body_scale(viz: tuple[str, Any] | None) -> float:
+        """图示区占据首页空间后，正文按剩余高度比例折算每行字数。"""
+        if not viz:
+            return 1.0
+        return {"flow": 0.64, "bars": 0.58, "points": 0.5}.get(viz[0], 0.6)
+
+    def _render_visualization(self, slide, viz: tuple[str, Any], y: float) -> float:
+        """在 (0.72, y, 11.88, zone) 区域渲染图示，返回占用高度。"""
+        kind, payload = viz
+        if kind == "flow":
+            return self._render_flow(slide, payload, y)
+        if kind == "bars":
+            return self._render_bars(slide, payload, y)
+        return self._render_point_bars(slide, payload, y)
+
+    def _render_zone_label(self, slide, text: str, y: float) -> None:
+        self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, 0.72, y, 1.4, 0.34,
+                        self._theme.secondary)
+        self._add_textbox(slide, text, 0.72, y + 0.04, 1.4, 0.28, font_size=11,
+                          color=self._theme.inverse, bold=True, align=PP_ALIGN.CENTER)
+
+    def _render_flow(self, slide, steps: list[str], y: float) -> float:
+        """横向流程条：矩形步骤框 + "→" 连接符（纯文本符号，WPS 兼容）。"""
+        self._render_zone_label(slide, "流程图示", y)
+        zone_h = 1.78
+        count = len(steps)
+        arrow_w = 0.42
+        box_w = (11.88 - (count - 1) * arrow_w) / count
+        box_y, box_h = y + 0.52, 1.1
+        for i, step in enumerate(steps):
+            x = 0.72 + i * (box_w + arrow_w)
+            self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, box_y, box_w, box_h,
+                            self._theme.surface, line=self._theme.secondary)
+            self._add_shape(slide, MSO_SHAPE.OVAL, x + box_w / 2 - 0.16, box_y + 0.1,
+                            0.32, 0.32, self._theme.accent)
+            self._add_textbox(slide, str(i + 1), x + box_w / 2 - 0.16, box_y + 0.14,
+                              0.32, 0.26, font_size=11, color=self._theme.inverse,
+                              bold=True, align=PP_ALIGN.CENTER)
+            self._add_textbox(slide, step, x + 0.12, box_y + 0.5, box_w - 0.24, 0.55,
+                              font_size=self._fit_font(step, 10, 13, 14),
+                              color=self._theme.text, align=PP_ALIGN.CENTER)
+            if i < count - 1:
+                self._add_textbox(slide, "→", x + box_w, box_y + 0.36, arrow_w, 0.5,
+                                  font_size=20, color=self._theme.accent, bold=True,
+                                  align=PP_ALIGN.CENTER)
+        return zone_h
+
+    def _render_bars(self, slide, items: list[tuple[str, float]], y: float) -> float:
+        """条形对比块：矩形宽度按数值比例，数值文本标注在条末。"""
+        self._render_zone_label(slide, "数据对比", y)
+        count = len(items)
+        zone_h = 0.52 + 0.55 * count + 0.12
+        max_value = max(value for _, value in items) or 1.0
+        label_w, bar_x, bar_max_w = 2.4, 3.3, 8.0
+        row_y = y + 0.52
+        for i, (label, value) in enumerate(items):
+            width = max(0.4, bar_max_w * (value / max_value))
+            fill = self._theme.accent if i % 2 == 0 else self._theme.secondary
+            self._add_textbox(slide, label, 0.72, row_y + 0.03, label_w, 0.4,
+                              font_size=12, color=self._theme.text, align=PP_ALIGN.RIGHT)
+            self._add_shape(slide, MSO_SHAPE.RECTANGLE, bar_x, row_y + 0.06, width, 0.34, fill)
+            self._add_textbox(slide, f"{value:g}%", bar_x + width + 0.12, row_y + 0.05,
+                              1.4, 0.38, font_size=13, color=self._theme.text, bold=True)
+            row_y += 0.55
+        return zone_h
+
+    def _render_point_bars(self, slide, points: list[str], y: float) -> float:
+        """序号要点条：圆角矩形 + 编号圆，逐条排布。"""
+        count = len(points)
+        zone_h = min(0.52 + 0.62 * count, 3.85)
+        row_h = min(0.52, (zone_h - 0.52) / max(count, 1))
+        row_y = y + 0.52
+        for i, point in enumerate(points):
+            text = point if len(point) <= 40 else point[:39] + "…"
+            self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, 0.72, row_y, 11.88, row_h,
+                            self._theme.surface, line=self._theme.muted)
+            self._add_shape(slide, MSO_SHAPE.OVAL, 0.94, row_y + row_h / 2 - 0.16,
+                            0.32, 0.32, self._theme.accent)
+            self._add_textbox(slide, str(i + 1), 0.94, row_y + row_h / 2 - 0.12,
+                              0.32, 0.26, font_size=11, color=self._theme.inverse,
+                              bold=True, align=PP_ALIGN.CENTER)
+            self._add_textbox(slide, text, 1.52, row_y + row_h / 2 - 0.16, 10.9, 0.36,
+                              font_size=13, color=self._theme.text,
+                              valign=MSO_ANCHOR.MIDDLE)
+            row_y += row_h + 0.1
+        return zone_h
 
     def _add_quiz_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
         items = self._quiz_question_items(node)
@@ -263,7 +501,7 @@ class PPTExporter:
         for chunk_index, chunk in enumerate(chunks):
             slide = self._blank_slide(prs, index)
             title = str(node.get("title") or "课堂互动") + ("（续）" if chunk_index else "")
-            self._add_page_title(slide, title, "INTERACTION")
+            self._add_page_title(slide, title, "INTERACTION", index)
             y = 1.55
             for question, options, answer in chunk:
                 number += 1
@@ -336,18 +574,50 @@ class PPTExporter:
         if not points:
             raw = node.get("content") or node.get("summary") or "本节要点"
             points = [line.strip(" -•\t") for line in str(raw).splitlines() if line.strip()]
-        chunks = self._chunk_items(points or ["本节要点"], 6)
+        points = points or ["本节要点"]
+        chunks = self._chunk_items(points, 5)
+        tint = self._blend(self._theme.background, self._theme.primary, 0.07)
         for chunk_index, chunk in enumerate(chunks):
             slide = self._blank_slide(prs, index)
+            self._set_background(slide, tint)  # 总结版式：浅色主题底，区隔内容页
             title = str(node.get("title") or "本节小结") + ("（续）" if chunk_index else "")
-            self._add_page_title(slide, title, "SUMMARY")
-            self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0.72, 1.48, 0.09, 5.15, self._theme.accent)
+            self._add_page_title(slide, title, "SUMMARY", index)
             y = 1.62
-            for text in chunk:
-                self._add_shape(slide, MSO_SHAPE.OVAL, 1.08, y + 0.13, 0.18, 0.18, self._theme.secondary)
-                self._add_textbox(slide, text, 1.52, y, 10.45, 0.67,
-                                  font_size=self._fit_font(text, 18, 25, 42), color=self._theme.text)
-                y += 0.78
+            for offset, text in enumerate(chunk):
+                number = chunk_index * 5 + offset + 1
+                self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, 0.72, y, 11.88, 0.78,
+                                self._theme.surface, line=self._theme.muted)
+                self._add_shape(slide, MSO_SHAPE.OVAL, 1.0, y + 0.19, 0.4, 0.4,
+                                self._theme.secondary)
+                self._add_textbox(slide, str(number), 1.0, y + 0.24, 0.4, 0.32,
+                                  font_size=12, color=self._theme.inverse, bold=True,
+                                  align=PP_ALIGN.CENTER)
+                self._add_textbox(slide, text, 1.66, y + 0.16, 10.7, 0.5,
+                                  font_size=self._fit_font(text, 15, 19, 34),
+                                  color=self._theme.text, valign=MSO_ANCHOR.MIDDLE)
+                y += 0.9
+            if chunk_index == len(chunks) - 1:
+                # 结尾收束条：致谢语固定在末页底部
+                self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, 0.72, 6.2, 11.88, 0.6,
+                                self._theme.primary)
+                self._add_textbox(slide, "感谢聆听 · 本节内容到此结束", 0.72, 6.32, 11.88, 0.4,
+                                  font_size=14, color=self._theme.inverse, bold=True,
+                                  align=PP_ALIGN.CENTER)
+
+    def _add_ending_slide(self, prs: Presentation) -> None:
+        """结束页：深色底 + 居中致谢，仅 include_closing_slide 开启时追加。"""
+        slide = self._blank_slide(prs, footer=False)
+        self._set_background(slide, self._theme.primary)
+        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0, 0, 0.23, 7.5, self._theme.accent)
+        self._add_shape(slide, MSO_SHAPE.OVAL, 10.9, -1.2, 3.3, 3.3,
+                        self._blend(self._theme.primary, self._theme.inverse, 0.14))
+        self._add_shape(slide, MSO_SHAPE.OVAL, -1.0, 5.2, 2.6, 2.6,
+                        self._blend(self._theme.secondary, self._theme.inverse, 0.2))
+        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 5.92, 2.45, 1.5, 0.075, self._theme.accent)
+        self._add_textbox(slide, "感谢聆听", 1.05, 2.85, 11.23, 1.3, font_size=44,
+                          color=self._theme.inverse, bold=True, align=PP_ALIGN.CENTER)
+        self._add_textbox(slide, "多模态 AI 互动式教学智能体 · 谢谢观看", 1.6, 4.3, 10.13, 0.6,
+                          font_size=16, color=self._theme.inverse, align=PP_ALIGN.CENTER)
 
     def _main_items(self, node: dict[str, Any]) -> list[tuple[str, str, bool]]:
         items: list[tuple[str, str, bool]] = []
@@ -449,12 +719,20 @@ class PPTExporter:
             pieces.append(current)
         return pieces or [normalized]
 
-    def _add_page_title(self, slide, title: str, kicker: str) -> None:
-        self._add_textbox(slide, kicker, 0.75, 0.4, 2.2, 0.24,
+    def _add_page_title(self, slide, title: str, kicker: str,
+                        page_number: int | None = None) -> None:
+        """统一顶部标题条：主题色带 + kicker + 标题 + 页码，底部强调色细条。"""
+        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0, 0, 13.34, 1.16, self._theme.primary)
+        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0, 1.16, 13.34, 0.05, self._theme.accent)
+        self._add_textbox(slide, kicker, 0.78, 0.18, 3.2, 0.26,
                           font_size=10, color=self._theme.accent, bold=True)
-        self._add_textbox(slide, title, 0.72, 0.7, 11.75, 0.56,
-                          font_size=self._fit_font(title, 26, 34, 20), color=self._theme.text, bold=True)
-        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0.72, 1.27, 11.88, 0.02, self._theme.secondary)
+        self._add_textbox(slide, title, 0.75, 0.44, 10.4, 0.6,
+                          font_size=self._fit_font(title, 24, 32, 22), color=self._theme.inverse,
+                          bold=True)
+        if page_number is not None:
+            self._add_textbox(slide, f"{page_number:02d}", 12.1, 0.44, 0.9, 0.44,
+                              font_size=14, color=self._theme.inverse, bold=True,
+                              align=PP_ALIGN.RIGHT)
 
     def _add_panel(self, slide, heading: str, items: list[tuple[str, str, bool]],
                    x: float, y: float, width: float, height: float) -> None:
@@ -562,3 +840,15 @@ class PPTExporter:
     @staticmethod
     def _rgb(value: str) -> RGBColor:
         return RGBColor.from_string(value.lstrip("#").upper())
+
+    @staticmethod
+    def _blend(color: str, toward: str, ratio: float) -> str:
+        """把 color 按 ratio 比例混向 toward，用于纯形状的浅色装饰（不用透明度）。"""
+        source = color.lstrip("#")
+        target = toward.lstrip("#")
+        channels = []
+        for i in (0, 2, 4):
+            base = int(source[i:i + 2], 16)
+            other = int(target[i:i + 2], 16)
+            channels.append(max(0, min(255, round(base * (1 - ratio) + other * ratio))))
+        return "{:02X}{:02X}{:02X}".format(*channels)

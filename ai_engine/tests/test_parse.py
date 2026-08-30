@@ -894,7 +894,11 @@ class VideoProcessorTest(unittest.TestCase):
         from ai_engine.parse.video_processor import VideoProcessor
         vp = VideoProcessor()
         self.assertEqual(vp.max_keyframes, 5)
-        self.assertEqual(vp.whisper_model_name, "base")
+        # 离线优先契约：项目内置模型目录存在则优先，否则回退 "base"（CI/新机器无该目录）
+        from pathlib import Path as _P
+        _builtin = _P("ai_engine/data/models/faster-whisper-base")
+        expected_model = str(_builtin.resolve()) if _builtin.is_dir() else "base"
+        self.assertEqual(vp.whisper_model_name, expected_model)
         self.assertIsNone(vp.asr_language)
 
     def test_video_processor_custom_params(self):

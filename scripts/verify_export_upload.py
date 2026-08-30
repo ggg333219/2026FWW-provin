@@ -164,12 +164,14 @@ def main():
           str(job.minio_path))
 
     # T8: BOTH 格式 → pptx 与 docx 都上传
+    # 2026-08-31 起 BOTH 模式同步产出 HTML5 互动小游戏（A12 赛题 4c/5c），
+    # 上传清单扩展为 pptx/docx/html 三件，断言同步更新（检查数不变）。
     FakeMinioClient.behavior = {"bucket_exists": True, "fail_fput": False}
     FakeMinioClient.calls = []
     job = asyncio.run(run_export_case("exp_t8", ExportFormat.BOTH, nodes))
     uploads = (job.metadata or {}).get("uploads", [])
     exts = sorted(u["local_path"].rsplit(".", 1)[-1] for u in uploads)
-    check("T8 BOTH 两个文件都上传", exts == ["docx", "pptx"], str(exts))
+    check("T8 BOTH 三个文件都上传(pptx/docx/html)", exts == ["docx", "html", "pptx"], str(exts))
     check("T8 upload_status=uploaded", (job.metadata or {}).get("upload_status") == "uploaded")
     remove_fake_minio()
 
