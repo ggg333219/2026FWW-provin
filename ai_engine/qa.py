@@ -6,6 +6,11 @@ from typing import Any
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 
+try:
+    from .core.llm import resolve_llm_timeout
+except ImportError:  # 直接以脚本方式运行时的回退导入
+    from core.llm import resolve_llm_timeout
+
 load_dotenv()
 
 
@@ -95,7 +100,7 @@ class QAResponder:
         try:
             from openai import OpenAI
             base_url, _ = resolve_llm_base_url(self.config.model)
-            client = OpenAI(api_key=api_key, base_url=base_url)
+            client = OpenAI(api_key=api_key, base_url=base_url, timeout=resolve_llm_timeout())
             resp = client.chat.completions.create(
                 model=self.config.model, temperature=0.1,
                 messages=[
@@ -146,7 +151,7 @@ class QAResponder:
             return self._fallback_answer(question, source_content, need_reteach, reason), True, reason
 
         base_url, _ = resolve_llm_base_url(self.config.model)
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=resolve_llm_timeout())
 
         role_desc = "高校专业课老师" if not need_reteach else "善于举例的耐心导师"
         system_prompt = (

@@ -16,6 +16,11 @@ except ImportError:
     from schema import build_document_schema
 
 try:
+    from .core.llm import resolve_llm_timeout
+except ImportError:  # 直接以脚本方式运行时的回退导入
+    from core.llm import resolve_llm_timeout
+
+try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
@@ -58,7 +63,7 @@ class DocumentParser:
         base_url = os.getenv("AI_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/")
         if not api_key:
             return ""
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=resolve_llm_timeout())
         total_size = sum(img["size"] for img in images)
         if total_size > 10 * 1024 * 1024:
             images = images[:1]
@@ -89,7 +94,7 @@ class DocumentParser:
             return ""
         try:
             from openai import OpenAI
-            client = OpenAI(api_key=api_key, base_url=os.getenv("AI_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/"))
+            client = OpenAI(api_key=api_key, base_url=os.getenv("AI_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/"), timeout=resolve_llm_timeout())
             pix = page.get_pixmap(dpi=150)
             img_bytes = pix.tobytes("png")
             b64 = base64.b64encode(img_bytes).decode()

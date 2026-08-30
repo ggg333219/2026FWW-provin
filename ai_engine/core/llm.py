@@ -24,18 +24,99 @@
 """
 
 import json
+import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Generator, Optional
 from urllib.parse import urlparse
 
 from .config import settings
 
+logger = logging.getLogger(__name__)
+
 # ---- 常量 ----
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_COMPAT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+# 超时/连接类异常的自动重试参数（默认值；可用环境变量覆盖，见下方 resolve_* 函数）：
+#   LLM_RETRY_MAX_ATTEMPTS     总尝试次数上限，默认 2（首次 + 1 次重试）
+#   LLM_RETRY_BACKOFF_SECONDS  重试退避秒数，逗号分隔，默认 "2,4"（2s→4s）
+# 单次调用最坏耗时 ≈ max_attempts × timeout + sum(backoff)；批量降级路径
+# （node.py 逐节点 generate_single）应传 max_attempts=1 收紧，避免 N×(timeout+退避) 放大。
+LLM_RETRY_MAX_ATTEMPTS = 2
+LLM_RETRY_BACKOFF_SECONDS = (2.0, 4.0)
+
+
+def resolve_llm_retry_max_attempts() -> int:
+    """解析重试总尝试次数上限：环境变量 LLM_RETRY_MAX_ATTEMPTS 优先，非法值回退默认 2。"""
+    raw = (os.getenv("LLM_RETRY_MAX_ATTEMPTS") or "").strip()
+    if raw:
+        try:
+            val = int(raw)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    return LLM_RETRY_MAX_ATTEMPTS
+
+
+def resolve_llm_retry_backoff_seconds() -> tuple[float, ...]:
+    """解析重试退避秒数序列：环境变量 LLM_RETRY_BACKOFF_SECONDS（逗号分隔）优先，非法值回退默认 (2.0, 4.0)。"""
+    raw = (os.getenv("LLM_RETRY_BACKOFF_SECONDS") or "").strip()
+    if raw:
+        try:
+            parts = tuple(float(p.strip()) for p in raw.split(",") if p.strip())
+            if parts:
+                return parts
+        except ValueError:
+            pass
+    return LLM_RETRY_BACKOFF_SECONDS
+
+
+def resolve_llm_timeout() -> int:
+    """
+    解析 LLM 调用超时秒数。
+
+    优先读环境变量 LLM_TIMEOUT_SECONDS（运行时可改，便于测试/压测），
+    未设置或非法时回退 settings.LLM_TIMEOUT（同样来自该变量，默认 120）。
+
+    供 core.LLMClient 及 legacy 直连 OpenAI() 的模块（qa.py/parser.py/
+    generator.py/main.py）统一使用，保证超时保护口径一致。
+    """
+    raw = (os.getenv("LLM_TIMEOUT_SECONDS") or "").strip()
+    if raw:
+        try:
+            val = int(raw)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    return settings.LLM_TIMEOUT
+
+
+def _is_retryable_error(e: BaseException) -> bool:
+    """
+    判断是否为超时/连接类异常（可安全重试）。
+
+    覆盖：
+      - 内置 TimeoutError / socket.timeout（3.10+ 归一为 TimeoutError）
+      - openai.APITimeoutError / openai.APIConnectionError（按类名匹配）
+      - httpx.TimeoutException 等类名含 timeout/connection 的异常
+    业务类错误（如 RateLimitError 429、AuthenticationError 401）不在重试范围。
+    """
+    if isinstance(e, TimeoutError):
+        return True
+    name = type(e).__name__.lower()
+    if "timeout" in name or "connection" in name:
+        return True
+    msg = str(e).lower()
+    return any(
+        marker in msg
+        for marker in ("timed out", "timeout", "connection error", "connection refused", "connection reset")
+    )
 
 
 # ---- 公共工具函数（从 qa.py 提取，保持签名兼容） ----
@@ -107,13 +188,19 @@ class LLMClient:
         self,
         model: Optional[str] = None,
         temperature: Optional[float] = None,
-        timeout: int = 60,
+        timeout: Optional[int] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        max_attempts: Optional[int] = None,
     ):
         self.model = model or settings.MODEL
         self.temperature = temperature if temperature is not None else settings.TEMPERATURE
-        self.timeout = timeout
+        # 超时保护：显式传入优先（如 video_processor 的 300s），
+        # 否则取 LLM_TIMEOUT_SECONDS / 默认 120
+        self.timeout = int(timeout) if timeout else resolve_llm_timeout()
+        # 重试收紧：显式传入 max_attempts（如批量降级路径传 1 = 不重试）优先，
+        # None 时每次调用按 LLM_RETRY_MAX_ATTEMPTS 环境变量 / 默认 2 解析
+        self.max_attempts = int(max_attempts) if max_attempts and int(max_attempts) > 0 else None
         self._api_key = api_key
         self._base_url = base_url
 
@@ -394,6 +481,31 @@ class LLMClient:
 
     # ---- 内部实现 ----
 
+    def _post_chat_completions(
+        self,
+        messages: list[dict[str, str]],
+        actual_model: str,
+        actual_temperature: float,
+        **kwargs: Any,
+    ) -> Any:
+        """发起一次 OpenAI 兼容 chat.completions 调用（带超时保护）。
+
+        独立成方法便于测试时 monkeypatch（离线验证超时重试逻辑）。
+        """
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=self.timeout,
+        )
+        return client.chat.completions.create(
+            model=actual_model,
+            messages=messages,
+            temperature=actual_temperature,
+            **kwargs,
+        )
+
     def _call(
         self,
         messages: list[dict[str, str]],
@@ -401,7 +513,7 @@ class LLMClient:
         model: Optional[str] = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        """底层 LLM 调用，处理统一异常、回退和日志。"""
+        """底层 LLM 调用，处理统一异常、超时重试、回退和日志。"""
         # Mock 模式
         if settings.is_mock:
             return LLMResponse(
@@ -421,49 +533,56 @@ class LLMClient:
                 fallback_reason="missing_api_key_mock",
             )
 
-        try:
-            from openai import OpenAI
+        actual_model = model or self.model
+        actual_temperature = temperature if temperature is not None else self.temperature
 
-            client = OpenAI(
-                api_key=api_key,
-                base_url=self.base_url,
-                timeout=self.timeout,
-            )
+        last_error: Optional[Exception] = None
+        max_attempts = self.max_attempts or resolve_llm_retry_max_attempts()
+        backoff = resolve_llm_retry_backoff_seconds()
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = self._post_chat_completions(
+                    messages, actual_model, actual_temperature, **kwargs
+                )
 
-            actual_model = model or self.model
-            actual_temperature = temperature if temperature is not None else self.temperature
+                content = response.choices[0].message.content or ""
+                usage = None
+                if hasattr(response, "usage") and response.usage:
+                    usage = {
+                        "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+                        "completion_tokens": getattr(response.usage, "completion_tokens", 0),
+                        "total_tokens": getattr(response.usage, "total_tokens", 0),
+                    }
 
-            response = client.chat.completions.create(
-                model=actual_model,
-                messages=messages,
-                temperature=actual_temperature,
-                **kwargs,
-            )
+                return LLMResponse(
+                    content=content,
+                    model=actual_model,
+                    usage=usage,
+                    used_fallback=False,
+                    fallback_reason="",
+                )
+            except Exception as e:
+                last_error = e
+                if attempt < max_attempts and _is_retryable_error(e):
+                    delay = backoff[min(attempt - 1, len(backoff) - 1)]
+                    logger.warning(
+                        "[LLMClient] 超时/连接类异常（第 %d 次尝试），%.1fs 后重试: %s",
+                        attempt, delay, e,
+                    )
+                    time.sleep(delay)
+                    continue
+                break
 
-            content = response.choices[0].message.content or ""
-            usage = None
-            if hasattr(response, "usage") and response.usage:
-                usage = {
-                    "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
-                    "completion_tokens": getattr(response.usage, "completion_tokens", 0),
-                    "total_tokens": getattr(response.usage, "total_tokens", 0),
-                }
-
-            return LLMResponse(
-                content=content,
-                model=actual_model,
-                usage=usage,
-                used_fallback=False,
-                fallback_reason="",
-            )
-
-        except Exception as e:
-            return LLMResponse(
-                content=self._fallback_text(messages),
-                model=model or self.model,
-                used_fallback=True,
-                fallback_reason=str(e),
-            )
+        logger.error(
+            "[LLMClient] LLM 调用最终失败，回退兜底内容: model=%s, error=%s",
+            actual_model, last_error,
+        )
+        return LLMResponse(
+            content=self._fallback_text(messages),
+            model=model or self.model,
+            used_fallback=True,
+            fallback_reason=str(last_error),
+        )
 
     # ---- 回退 ----
 
