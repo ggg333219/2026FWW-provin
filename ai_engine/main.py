@@ -1147,25 +1147,39 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         task.progress_pct = 30.0
         _persist_task_sync(task)
         builder = OutlineBuilder()
-        intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
-        outline = builder.build(intent_dict, evidence_dict)
+        # 有 markdown 时从 markdown 构建节点树（利用已有课件内容），否则从 intent 构建
+        if req.markdown:
+            outline = builder.build_from_markdown(req.markdown, req.intent.topic or "课件")
+        else:
+            intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
+            outline = builder.build(intent_dict, evidence_dict)
         nodes = outline.get("nodes", [])
         task.nodes = nodes
         task.progress_pct = 50.0
 
-        # Stage 4: 逐节点生成
+        # Stage 4: 讲稿生成（增强版）
+        # 有 markdown 时用 LessonGenerator（已验证 LLM 路径正确），无 markdown 时降级为 NodeGenerator
         task.stage = GenerationStage.GENERATING
         _persist_task_sync(task)
-        generator = NodeGenerator()
         course_name = req.intent.topic or "课件"
-        scripts = generator.generate_all(nodes, "", course_name)
+        if req.markdown:
+            lesson_gen = LessonGenerator(GenerationConfig(mode="llm"))
+            result = lesson_gen.generate_from_markdown_enhanced(req.markdown, course_name)
+            scripts_list = result.get("scripts", [])
+            node_ids = {n["node_id"] for n in nodes}
+            scripts_dict = {"scripts": scripts_list}
+        else:
+            generator = NodeGenerator()
+            scripts_dict = generator.generate_all(nodes, "", course_name)
+            scripts_list = scripts_dict.get("scripts", [])
+            node_ids = {n["node_id"] for n in nodes}
         task.progress_pct = 80.0
 
         # 合并节点
         merged_nodes = []
         for node in nodes:
             script_data = next(
-                (s for s in scripts.get("scripts", []) if s.get("node_id") == node.get("node_id")),
+                (s for s in scripts_list if s.get("node_id") == node.get("node_id")),
                 {"script": "", "segments": []},
             )
             merged = {**node}
@@ -1206,6 +1220,11 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         _persist_task_sync(task)
 
     except Exception as e:
+        import logging, traceback
+        logging.getLogger(__name__).error(
+            "[Pipeline ERROR] gen_id=%s task_id=%s error=%s\n%s",
+            getattr(task, 'generation_id', '?'), task_id, str(e), traceback.format_exc()
+        )
         task.status = GenerationStatus.FAILED
         task.error = str(e)
         with _gen_tasks_lock:
