@@ -380,6 +380,12 @@ class TeachingNode(BaseModel):
     要点列表，与 core_points 等效，兼容主流 AI-PPT 规范命名。
     新增节点时自动从 core_points 复制，确保字段统一。
     """
+    script: str = ""
+    """
+    节点完整讲稿正文（LLM 生成管道合并产物，见 main.py _run_generation_pipeline）。
+    字段只增不删：此前未声明导致 pydantic 序列化时静默丢弃（UserWarning），
+    前端轮询 /api/v1/gen/status 拿不到讲稿正文、版本快照与导出链路同步丢失。
+    """
     segments: list[dict[str, Any]] = Field(default_factory=list)
     """
     内容分段列表，每段为 {title, content, duration_minutes} 结构。

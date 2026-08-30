@@ -215,6 +215,8 @@ func runS1Standalone(mode string, aiClient service.AIEngine) {
 		gen.GET("/status/:task_id", genHandler.Status)
 		gen.POST("/preview", genHandler.PreviewHTML)
 		gen.GET("/preview/:gen_id", genHandler.Preview)
+		// S4 版本页修改命令走 /api/v1/gen/modify，轻量模式下同样放行（仅依赖 AI Client）。
+		gen.POST("/modify", genHandler.Modify)
 	}
 
 	// S4: 版本管理
