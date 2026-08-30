@@ -640,3 +640,7 @@ class ExportStatusResponse(BaseModel):
     status: ExportStatus = ExportStatus.PENDING
     download_url: Optional[str] = None
     error: Optional[str] = None
+    # 导出产物上传状态（字段只增不删）：uploaded / failed / skipped，None 表示尚未尝试
+    upload_status: Optional[str] = None
+    minio_path: Optional[str] = None
+    file_size: Optional[int] = None

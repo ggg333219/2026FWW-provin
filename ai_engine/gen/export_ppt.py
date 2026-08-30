@@ -19,6 +19,7 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
+from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
 from .templates import get_theme
@@ -26,6 +27,10 @@ from .templates import get_theme
 
 SLIDE_WIDTH = Inches(13.333333)
 SLIDE_HEIGHT = Inches(7.5)
+
+# 东亚字体：python-pptx 的 font.name 只写入 a:latin（西文字形），
+# WPS / 中文 Office 渲染中文时读取 a:ea 字形，缺失会回退默认宋体。
+EA_FONT_NAME = "微软雅黑"
 
 _TYPE_ALIASES = {
     "cover": "cover", "title": "cover", "title_slide": "cover",
@@ -252,23 +257,79 @@ class PPTExporter:
                 self._add_panel(slide, "教学内容", main_chunk, 0.72, 1.42, 11.88, 5.35)
 
     def _add_quiz_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
-        questions = node.get("questions") or node.get("interactive_questions") or []
-        if isinstance(questions, str):
-            questions = [line for line in questions.splitlines() if line.strip()]
-        questions = [str(q).strip() for q in questions if str(q).strip()] or ["请结合本节内容提出一个关键问题。"]
-        chunks = self._chunk_items(questions, 5)
+        items = self._quiz_question_items(node)
+        chunks = self._chunk_quiz_items(items)
+        number = 0
         for chunk_index, chunk in enumerate(chunks):
             slide = self._blank_slide(prs, index)
             title = str(node.get("title") or "课堂互动") + ("（续）" if chunk_index else "")
             self._add_page_title(slide, title, "INTERACTION")
-            y = 1.6
-            for number, question in enumerate(chunk, start=chunk_index * 5 + 1):
-                self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, 0.85, y, 0.58, 0.58, self._theme.accent)
+            y = 1.55
+            for question, options, answer in chunk:
+                number += 1
+                self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE,
+                                0.85, y, 0.58, 0.58, self._theme.accent)
                 self._add_textbox(slide, str(number), 0.85, y + 0.02, 0.58, 0.42,
-                                  font_size=17, color=self._theme.inverse, bold=True, align=PP_ALIGN.CENTER)
+                                  font_size=17, color=self._theme.inverse, bold=True,
+                                  align=PP_ALIGN.CENTER)
                 self._add_textbox(slide, question, 1.68, y - 0.02, 10.55, 0.82,
-                                  font_size=self._fit_font(question, 18, 24, 42), color=self._theme.text)
-                y += 1.02
+                                  font_size=self._fit_font(question, 18, 24, 42),
+                                  color=self._theme.text, bold=True)
+                if options:
+                    opt_text = "    ".join(
+                        f"{chr(65 + i)}．{opt}" for i, opt in enumerate(options[:6]))
+                    self._add_textbox(slide, opt_text, 1.68, y + 0.82, 10.55, 0.62,
+                                      font_size=self._fit_font(opt_text, 14, 18, 46),
+                                      color=self._theme.text)
+                    if answer:
+                        self._add_textbox(slide, f"参考答案：{answer}", 1.68, y + 1.52,
+                                          10.55, 0.4, font_size=13,
+                                          color=self._theme.secondary, bold=True)
+                    y += 2.45
+                else:
+                    y += 1.02
+
+    _QUIZ_PLAIN_PER_PAGE = 5
+
+    @classmethod
+    def _quiz_question_items(cls, node: dict[str, Any]) -> list[tuple[str, list[str], str]]:
+        """归一化 quiz 题目：兼容 dict（question/options/answer）与纯文本。"""
+        raw = node.get("questions") or node.get("interactive_questions") or []
+        if isinstance(raw, str):
+            raw = [line for line in raw.splitlines() if line.strip()]
+        items: list[tuple[str, list[str], str]] = []
+        for question in raw:
+            if isinstance(question, dict):
+                text = str(question.get("question") or question.get("title")
+                           or question.get("content") or "").strip()
+                options = [str(opt).strip() for opt in (question.get("options") or [])
+                           if str(opt).strip()]
+                answer = str(question.get("answer") or "").strip()
+            else:
+                text, options, answer = str(question).strip(), [], ""
+            if text:
+                items.append((text, options, answer))
+        return items
+
+    @classmethod
+    def _chunk_quiz_items(cls, items: list[tuple[str, list[str], str]]
+                          ) -> list[list[tuple[str, list[str], str]]]:
+        """带选项的题目占位大（每页 2 题），纯题目每页 5 题；
+        一旦页面内含选项题，整页容量按 2 题计算，避免混排溢出。"""
+        if not items:
+            items = [("请结合本节内容提出一个关键问题。", [], "")]
+        chunks: list[list[tuple[str, list[str], str]]] = []
+        current: list[tuple[str, list[str], str]] = []
+        for item in items:
+            capacity = 2 if (item[1] or any(prev[1] for prev in current)) \
+                else cls._QUIZ_PLAIN_PER_PAGE
+            if current and len(current) >= capacity:
+                chunks.append(current)
+                current = []
+            current.append(item)
+        if current:
+            chunks.append(current)
+        return chunks
 
     def _add_summary_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
         points = resolve_key_points(node)
@@ -413,15 +474,22 @@ class PPTExporter:
         size = 16 if total_chars > 500 else 17 if total_chars > 300 else 18
         for item_index, (label, text, bullet) in enumerate(items):
             paragraph = frame.paragraphs[0] if item_index == 0 else frame.add_paragraph()
-            paragraph.text = f"{label}｜{text}" if label else text
+            # 先确定最终文本再设 run 样式：paragraph.text 赋值会重建 run
+            paragraph.text = f"• {label}｜{text}" if bullet and label \
+                else f"• {text}" if bullet \
+                else f"{label}｜{text}" if label else text
             paragraph.level = 0
             paragraph.space_after = Pt(7)
             paragraph.line_spacing = 1.13
             paragraph.font.name = self._theme.body_font
             paragraph.font.size = Pt(size)
             paragraph.font.color.rgb = self._rgb(self._theme.text)
-            if bullet:
-                paragraph.text = f"• {paragraph.text}"
+            self._apply_ea_font(paragraph.font)
+            for run in paragraph.runs:
+                run.font.name = self._theme.body_font
+                run.font.size = Pt(size)
+                run.font.color.rgb = self._rgb(self._theme.text)
+                self._apply_ea_font(run.font)
 
     @staticmethod
     def _fit_font(text: str, minimum: int, maximum: int, chars_per_line: int) -> int:
@@ -458,7 +526,32 @@ class PPTExporter:
         paragraph.font.size = Pt(font_size)
         paragraph.font.bold = bold
         paragraph.font.color.rgb = self._rgb(color)
+        self._apply_ea_font(paragraph.font)
+        for run in paragraph.runs:
+            run.font.name = self._theme.title_font if bold else self._theme.body_font
+            run.font.size = Pt(font_size)
+            run.font.bold = bold
+            run.font.color.rgb = self._rgb(color)
+            self._apply_ea_font(run.font)
         return box
+
+    @staticmethod
+    def _apply_ea_font(font) -> None:
+        """补充东亚字体（a:ea）：WPS/中文 Office 用 ea 字形渲染中文，
+        仅设置 latin 字形时中文会回退为默认宋体。"""
+        try:
+            rPr = font._rPr
+        except AttributeError:
+            return
+        ea = rPr.find(qn("a:ea"))
+        if ea is None:
+            ea = rPr.makeelement(qn("a:ea"), {})
+            latin = rPr.find(qn("a:latin"))
+            if latin is not None:
+                latin.addnext(ea)
+            else:
+                rPr.append(ea)
+        ea.set("typeface", EA_FONT_NAME)
 
     @staticmethod
     def _set_background(slide, color: str) -> None:

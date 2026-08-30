@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>排序算法入门</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+          background: #f0f2f5; color: #1a1a2e; padding: 20px; }
+  .presentation { max-width: 1100px; margin: 0 auto; }
+  .slide { background: #fff; border-radius: 14px; box-shadow: 0 2px 14px rgba(0,0,0,0.08);
+           padding: 44px 52px 48px; margin-bottom: 24px; position: relative;
+           min-height: 320px; overflow: hidden; }
+  /* 页码：绝对定位右上角，标题加右侧内边距避免重叠 */
+  .slide-num { position: absolute; top: 16px; right: 20px; z-index: 2;
+                font-size: 13px; color: rgba(0,0,0,0.4);
+                background: rgba(0,0,0,0.06); padding: 2px 10px; border-radius: 999px; }
+  .slide h1, .slide h2 { padding-right: 52px; }
+  h1 { font-size: 34px; line-height: 1.3; }
+  h2 { font-size: 24px; margin-bottom: 16px; color: #1a1a2e; line-height: 1.4; }
+
+  /* ── 封面 ── */
+  .cover-slide, .title-slide { background: linear-gradient(135deg, #4361ee 0%, #7209b7 100%);
+                                 color: #fff; display: flex; align-items: center;
+                                 justify-content: center; text-align: center; }
+  .cover-slide .slide-num, .title-slide .slide-num { color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.16); }
+  .cover-inner { max-width: 720px; margin: 0 auto; }
+  .cover-slide h1, .title-slide h1 { color: #fff; margin-bottom: 18px; }
+  .cover-slide .subtitle, .title-slide .subtitle { font-size: 19px; color: rgba(255,255,255,0.85); }
+  .cover-points { list-style: none; margin: 28px auto 0; display: grid; gap: 10px; max-width: 520px; }
+  .cover-points li { background: rgba(255,255,255,0.14); border-radius: 10px; padding: 10px 18px;
+                      font-size: 15px; line-height: 1.6; }
+
+  /* ── 目录 / 章节 ── */
+  .section-slide { background: linear-gradient(135deg, #f72585 0%, #b5179e 100%); color: #fff; }
+  .section-slide .slide-num { color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.16); }
+  .section-inner { max-width: 720px; margin: 0 auto; }
+  .section-slide h2 { color: #fff; }
+  .section-slide .divider { width: 60px; height: 4px; background: rgba(255,255,255,0.9);
+                             margin: 20px 0; border-radius: 2px; }
+  .section-sub { font-size: 16px; color: rgba(255,255,255,0.85); margin-bottom: 18px; line-height: 1.6; }
+  .section-list { list-style: none; display: grid; gap: 10px; margin-top: 8px; }
+  .section-list li { display: flex; align-items: center; gap: 12px; background: rgba(255,255,255,0.14);
+                      border-radius: 10px; padding: 10px 16px; font-size: 15px; line-height: 1.5; }
+  .section-list .kp-idx { flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%;
+                           background: #fff; color: #b5179e; font-weight: 700; font-size: 12px;
+                           display: flex; align-items: center; justify-content: center; }
+
+  /* ── 问答 ── */
+  .quiz-slide { border-left: 5px solid #f72585; background: linear-gradient(180deg, #fff, #fff5f9); }
+  .questions { list-style: none; counter-reset: q; margin-top: 8px; display: grid; gap: 12px; }
+  .questions .q-item { counter-increment: q; position: relative; padding: 14px 18px 14px 52px;
+                        background: #fff; border: 1px solid #f0d7e6; border-radius: 12px;
+                        font-size: 15px; line-height: 1.6; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
+  .questions .q-item::before { content: counter(q); position: absolute; left: 16px; top: 14px;
+                                width: 24px; height: 24px; border-radius: 50%; background: #f72585;
+                                color: #fff; font-weight: 700; font-size: 13px;
+                                display: flex; align-items: center; justify-content: center; }
+  .q-text { font-weight: 600; color: #2a1a2e; }
+  .q-options { list-style: none; margin: 10px 0 0; display: grid; gap: 6px; }
+  .q-option { display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+               background: #faf5f8; border-radius: 8px; font-size: 14px; line-height: 1.5; }
+  .q-option-answer { background: #e6f9ee; border: 1px solid #b7e4c7; }
+  .q-opt-letter { flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%;
+                   background: #fce3ef; color: #b5179e; font-size: 11px; font-weight: 700;
+                   display: flex; align-items: center; justify-content: center; }
+  .q-option-answer .q-opt-letter { background: #2e7d32; color: #fff; }
+  .q-explanation { margin-top: 8px; font-size: 13px; color: #6b5b66;
+                    background: #fbf3f7; padding: 6px 10px; border-radius: 8px; }
+
+  /* ── 互动（与 quiz 同源，绿色系视觉区分） ── */
+  .interactive-slide { border-left-color: #2a9d5c; background: linear-gradient(180deg, #fff, #f2fbf6); }
+  .interactive-slide .q-item::before { background: #2a9d5c; }
+  .interactive-slide .q-item { border-color: #d2eadc; }
+  .interactive-slide .q-opt-letter { background: #dff3e6; color: #217a43; }
+
+  /* ── 总结 ── */
+  .summary-slide { border-left: 5px solid #4361ee; background: linear-gradient(180deg, #f8f9ff, #fff); }
+  .key-points { list-style: none; display: grid; gap: 10px; margin-top: 12px; }
+  .key-points li { position: relative; padding: 10px 16px 10px 40px; background: #eef1ff;
+                    border-radius: 10px; font-size: 15px; line-height: 1.6; }
+  .key-points li::before { content: "✓"; position: absolute; left: 14px; top: 10px; color: #4361ee;
+                            font-weight: 700; }
+  /* 要点高亮：kp-item + kp-highlight（纯 CSS 视觉强调，不依赖外部资源） */
+  .kp-highlight { color: #2743b8; font-weight: 600; }
+
+  /* ── 通用 ── */
+  .body { font-size: 15px; line-height: 1.85; color: #333; margin-top: 10px; }
+  .body p { margin-bottom: 8px; }
+  .body ul { padding-left: 22px; }
+  .body li { margin-bottom: 4px; }
+
+  /* ── 讲授文本区块 ── */
+  .script-block { margin-top: 16px; padding: 14px 16px; background: #f7f9fc;
+                   border: 1px solid #e2e8f2; border-left: 4px solid #4361ee; border-radius: 10px; }
+  .script-block h4 { font-size: 13px; color: #4361ee; margin-bottom: 8px; letter-spacing: 0.04em;
+                      display: flex; align-items: center; gap: 6px; }
+  .script-block h4::before { content: "🎤"; font-size: 14px; }
+  .script-body { font-size: 14px; line-height: 1.8; color: #3a4356; white-space: pre-wrap; }
+
+  /* ── 讲授分段 ── */
+  .segments-block { margin-top: 20px; padding-top: 16px; border-top: 1px dashed #d4d9e4; }
+  .segments-block h4 { font-size: 14px; color: #5f6c84; margin-bottom: 10px; letter-spacing: 0.02em; }
+  .segments { list-style: none; display: grid; gap: 10px; }
+  .seg-item { padding: 12px 16px; background: #f6f8fb; border-radius: 10px;
+               border-left: 3px solid #a9b4c8; }
+  .seg-badge { display: inline-block; font-size: 11px; padding: 2px 10px; border-radius: 999px;
+                font-weight: 600; text-transform: capitalize; }
+  .seg-badge-opening { background: #e3f2fd; color: #1565c0; }
+  .seg-badge-explanation { background: #f3e5f5; color: #7b1fa2; }
+  .seg-badge-example { background: #e8f5e9; color: #2e7d32; }
+  .seg-badge-interaction { background: #fff3e0; color: #e65100; }
+  .seg-badge-transition { background: #fce4ec; color: #c62828; }
+  .seg-badge-summary { background: #e8eaf6; color: #283593; }
+  .seg-badge-default { background: #eceff3; color: #5f6c84; }
+  .seg-dur { display: inline-block; font-size: 12px; color: #667; margin-left: 8px; }
+  .seg-diff { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px;
+               margin-left: 6px; text-transform: capitalize; }
+  .diff-easy { background: #e8f5e9; color: #2e7d32; }
+  .diff-medium { background: #fff8e1; color: #f57f17; }
+  .diff-hard { background: #ffebee; color: #c62828; }
+  .seg-text { margin-top: 6px; font-size: 14px; line-height: 1.7; color: #2b3140; }
+  .seg-hint { margin-top: 6px; font-size: 12px; color: #7a5b00; background: #fff8e1;
+               display: inline-block; padding: 3px 10px; border-radius: 8px; }
+
+  /* ── 知识卡片 ── */
+  .knowledge-card { margin-top: 8px; padding: 10px 12px; background: #fff;
+                     border: 1px solid #dfe6f0; border-radius: 10px; }
+  .kc-term { font-size: 13px; color: #2f5d8f; display: block; margin-bottom: 4px; }
+  .kc-def { font-size: 13px; color: #445; line-height: 1.6; }
+  .kc-formula { font-size: 12px; background: #f4f6fa; padding: 6px 10px; border-radius: 6px;
+                 overflow-x: auto; margin-top: 4px; }
+  .kc-tags { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .kc-tags span { font-size: 11px; background: #eef3fa; color: #445; padding: 1px 8px;
+                   border-radius: 999px; }
+
+  /* ── 空态 ── */
+  .empty-state { text-align: center; padding: 60px 20px; color: #94a3b8; font-size: 15px; }
+</style>
+</head>
+<body>
+<div class="presentation">
+<div class="slide cover-slide">
+  <div class="slide-num">1</div>
+  <div class="cover-inner">
+    <h1>排序算法入门</h1>
+    <p class="subtitle">面向大一计算机专业</p>
+    
+  </div>
+</div>
+<div class="slide content-slide">
+  <div class="slide-num">2</div>
+  <h2>冒泡排序的基本思想</h2>
+  <ul class="key-points"><li class="kp-item"><span class="kp-highlight">相邻元素两两比较</span></li><li class="kp-item"><span class="kp-highlight">每轮把最大值冒泡到末尾</span></li><li class="kp-item"><span class="kp-highlight">时间复杂度 O(n²)</span></li></ul>
+  <div class="body"><p>冒泡排序通过相邻元素两两比较，把较大元素逐步交换到序列尾部。</p></div>
+  <section class="script-block"><h4>讲授文本</h4><div class="script-body">同学们好，这一页我们先来看冒泡排序的核心思想。请大家注意每一轮比较结束后，最大的元素会像气泡一样浮到序列末尾。</div></section>
+  <section class="segments-block"><h4>讲授分段</h4><ol class="segments"><li class="seg-item"><span class="seg-badge seg-badge-opening">导入</span><span class="seg-dur">⏱ 30秒</span><span class="seg-diff diff-easy">🟢</span><p class="seg-text">我们先从一个生活中的例子说起。</p></li><li class="seg-item"><span class="seg-badge seg-badge-explanation">讲解</span><span class="seg-dur">⏱ 60秒</span><span class="seg-diff diff-medium">🟡</span><p class="seg-text">冒泡排序每一轮都会把当前未排序部分的最大值放到最后。</p></li><li class="seg-item"><span class="seg-badge seg-badge-example">示例</span><span class="seg-dur">⏱ 45秒</span><span class="seg-diff diff-easy">🟢</span><p class="seg-text">比如数组 [5, 3, 8]，第一轮比较后 8 会被放到最后。</p></li><li class="seg-item"><span class="seg-badge seg-badge-summary">小结</span><span class="seg-dur">⏱ 20秒</span><span class="seg-diff diff-easy">🟢</span><p class="seg-text">这一段就是本页的小结。</p></li></ol></section>
+</div>
+<div class="slide quiz-slide">
+  <div class="slide-num">3</div>
+  <h2>💡 随堂小测</h2>
+  <ol class="questions"><li class="q-item"><p class="q-text">冒泡排序的时间复杂度是多少？</p><ul class="q-options"><li class="q-option"><span class="q-opt-letter">A</span>O(n)</li><li class="q-option"><span class="q-opt-letter">B</span>O(n log n)</li><li class="q-option q-option-answer"><span class="q-opt-letter">C</span>O(n²)</li><li class="q-option"><span class="q-opt-letter">D</span>O(1)</li></ul><p class="q-explanation">解析：冒泡排序最坏情况下需要进行 n(n-1)/2 次比较，属于平方级。</p></li><li class="q-item"><p class="q-text">请用自己的话复述冒泡排序的一轮比较过程。</p></li></ol>
+  <section class="script-block"><h4>讲授文本</h4><div class="script-body">给大家两分钟时间完成这道选择题，之后我会随机请一位同学复述冒泡排序的过程。</div></section>
+  
+</div>
+<div class="slide quiz-slide interactive-slide">
+  <div class="slide-num">4</div>
+  <h2>🎯 课堂互动：你掌握了吗？</h2>
+  <ol class="questions"><li class="q-item"><p class="q-text">你对冒泡排序的掌握程度是？</p><ul class="q-options"><li class="q-option"><span class="q-opt-letter">A</span>完全掌握</li><li class="q-option"><span class="q-opt-letter">B</span>基本理解</li><li class="q-option"><span class="q-opt-letter">C</span>有些模糊</li><li class="q-option"><span class="q-opt-letter">D</span>需要重讲</li></ul></li></ol>
+  
+  
+</div>
+<div class="slide content-slide">
+  <div class="slide-num">5</div>
+  <h2>课后练习</h2>
+  <ul class="key-points"><li class="kp-item"><span class="kp-highlight">完成教材第 3 章习题 1-5</span></li></ul>
+  <div class="body"><p>完成教材第 3 章习题 1-5。</p></div>
+  
+  <section class="segments-block"><h4>讲授分段</h4><ol class="segments"><li class="seg-item"><span class="seg-badge seg-badge-default">段落</span><p class="seg-text">这是一个没有 segment_type 的旧分段。</p></li><li class="seg-item"><span class="seg-badge seg-badge-demo_type">其他</span><p class="seg-text">这是一个 segment_type 未知（demo）的分段。</p></li></ol></section>
+</div>
+</div>
+</body>
+</html>
