@@ -381,10 +381,24 @@ class LLMClient:
         model: Optional[str] = None,
     ) -> dict[str, Any]:
         """
-        带 JSON Schema 的结构化输出调用（显式版本）。
+        带 JSON Schema 的结构化输出调用（显式版本，带三级降级链）。
 
-        与 chat_json(schema=...) 等价，但语义更明确：
-        明确告诉调用方这个调用一定会携带 schema。
+        背景：严格 response_format=json_schema 在部分 OpenAI 兼容网关上不稳定
+        （400 / 空 content / 偶发失败），一旦失败整段调用就退回兜底内容，造成质量塌方。
+
+        降级链（每级失败自动进入下一级，全部失败才抛 RuntimeError，由调用方走 fallback）：
+          ① json_schema 严格模式（response_format=json_schema，原 system prompt）
+          ② response_format=json_object + 把 schema 融合进 system prompt
+          ③ 纯 prompt 约束（无 response_format，schema 融合进 system prompt）
+
+        与 _call 重试的关系：降级链位于 _call 之上，每级仅发起一次 _call；
+        _call 内部对超时/连接类异常的重试沿用既有策略（max_attempts + 退避），
+        降级链本身不追加任何重试。降级只发生在「该级最终失败（重试耗尽 /
+        不可重试错误如 400）或返回内容解析失败」之后，切换的是不同请求形态，
+        因此不存在同一请求形态的重复重试套娃。
+
+        Mock 模式 / 缺少 API key：保持旧行为（解析 mock 内容返回 dict，不抛异常），
+        保证离线演示与既有测试不受影响。
 
         Args:
             system: 系统提示词
@@ -395,13 +409,76 @@ class LLMClient:
 
         Returns:
             解析后的 JSON 字典
+
+        Raises:
+            RuntimeError: 三级降级链全部失败时抛出（调用方应捕获并走 fallback）。
         """
-        return self.chat_json(
-            system=system,
-            user=user,
-            schema=schema,
-            temperature=temperature,
-            model=model,
+        # Mock 模式 / 缺少 key：与旧 chat_json 行为一致，不进入降级链
+        if settings.is_mock or not self.api_key:
+            return self.chat_json(
+                system=system,
+                user=user,
+                schema=schema,
+                temperature=temperature,
+                model=model,
+            )
+
+        schema_text = json.dumps(schema, ensure_ascii=False)
+        fused_system = (
+            f"{system}\n\n"
+            "【输出格式强制要求】请输出一个且仅一个 JSON 对象，严格符合以下 JSON Schema"
+            "（不得输出 schema 之外的字段，不要输出解释性文字或 Markdown 代码块标记）：\n"
+            f"{schema_text}"
+        )
+
+        # (级别名, 额外 kwargs, 该级使用的 system prompt)
+        levels: list[tuple[str, dict[str, Any], str]] = [
+            ("json_schema_strict", {"response_format": {"type": "json_schema", "json_schema": schema}}, system),
+            ("json_object_plus_schema_prompt", {"response_format": {"type": "json_object"}}, fused_system),
+            ("pure_prompt_constraint", {}, fused_system),
+        ]
+
+        failures: list[str] = []
+        for level_name, extra_kwargs, level_system in levels:
+            try:
+                response = self._call(
+                    messages=[
+                        {"role": "system", "content": level_system},
+                        {"role": "user", "content": user},
+                    ],
+                    temperature=temperature or 0.1,
+                    model=model,
+                    **extra_kwargs,
+                )
+            except Exception as exc:  # _call 理论上不抛异常，此处为防御性兜底
+                failures.append(f"{level_name}: {exc}")
+                logger.warning(
+                    "[chat_with_schema] 级别 %s 调用异常，降级到下一级: %s", level_name, exc,
+                )
+                continue
+
+            if response.used_fallback:
+                # _call 重试耗尽或遇到不可重试错误（如 400）→ 该级失败，降级
+                failures.append(f"{level_name}: {response.fallback_reason or 'used_fallback'}")
+                logger.warning(
+                    "[chat_with_schema] 级别 %s 请求失败（重试耗尽或不可重试错误），降级到下一级: %s",
+                    level_name, response.fallback_reason,
+                )
+                continue
+
+            try:
+                try:
+                    return json.loads(response.content)
+                except (json.JSONDecodeError, TypeError):
+                    return extract_json(response.content)
+            except (ValueError, json.JSONDecodeError) as exc:
+                failures.append(f"{level_name}: json_parse_failed({exc})")
+                logger.warning(
+                    "[chat_with_schema] 级别 %s 返回内容无法解析为 JSON，降级到下一级", level_name,
+                )
+
+        raise RuntimeError(
+            "chat_with_schema 三级降级链全部失败: " + " | ".join(failures)
         )
 
     def chat_messages(

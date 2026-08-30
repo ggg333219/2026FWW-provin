@@ -44,8 +44,10 @@ _DEFAULT_MODE = "llm"
 _DEFAULT_MAX_CONTENT_CHARS = 3500
 _DEFAULT_LLM_TIMEOUT = 120
 # Stage3 讲稿分块并行：每块节点数 / 最大并行 worker 数
-_DEFAULT_LLM_GEN_CHUNK_SIZE = 3
-_DEFAULT_LLM_GEN_MAX_WORKERS = 3
+# 提速改造（S3 一分钟量级）：默认每块 1 个节点（每节点独立 LLM 调用，粒度最细、
+# 失败影响面最小），并行 worker 提到 4。均可通过环境变量覆盖。
+_DEFAULT_LLM_GEN_CHUNK_SIZE = 1
+_DEFAULT_LLM_GEN_MAX_WORKERS = 4
 _DEFAULT_EMBEDDING_MODEL = "text-embedding-v3"
 _DEFAULT_EMBEDDING_DIM = 1024
 
@@ -70,13 +72,13 @@ def _get_env_int(key: str, default: int) -> int:
 
 
 def resolve_llm_gen_chunk_size() -> int:
-    """Stage3 讲稿生成：每块包含的节点数（env LLM_GEN_CHUNK_SIZE，非法值/小于1回退默认 3）。"""
+    """Stage3 讲稿生成：每块包含的节点数（env LLM_GEN_CHUNK_SIZE，非法值/小于1回退默认 1）。"""
     val = _get_env_int(_KEY_LLM_GEN_CHUNK_SIZE, _DEFAULT_LLM_GEN_CHUNK_SIZE)
     return val if val >= 1 else _DEFAULT_LLM_GEN_CHUNK_SIZE
 
 
 def resolve_llm_gen_max_workers() -> int:
-    """Stage3 讲稿生成：并行 LLM 调用的最大 worker 数（env LLM_GEN_MAX_WORKERS，非法值/小于1回退默认 3）。"""
+    """Stage3 讲稿生成：并行 LLM 调用的最大 worker 数（env LLM_GEN_MAX_WORKERS，非法值/小于1回退默认 4）。"""
     val = _get_env_int(_KEY_LLM_GEN_MAX_WORKERS, _DEFAULT_LLM_GEN_MAX_WORKERS)
     return val if val >= 1 else _DEFAULT_LLM_GEN_MAX_WORKERS
 
