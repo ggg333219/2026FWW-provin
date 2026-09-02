@@ -1,0 +1,31 @@
+﻿🚀 P0 smoke（生成→预览→修改→导出） target=http://127.0.0.1:8000/api/v1  mode=引擎直连
+  ✅ gen/create 返回 task_id+generation_id
+  ✅ gen 最终 status=done
+  ✅ progress_pct=100
+  ✅ 生成节点数 ≥2
+  ✅ 节点 canonical 字段齐全
+  ✅ node_type ∈ 白名单
+  ✅ questions 严格 list[str]
+  ✅ 预览 HTML 渲染(版本快照恢复)
+  ✅ version/history 含初稿 v1
+  ✅ 版本历史元数据字段齐全
+  ✅ 版本 v1 完整快照字段齐全
+  ✅ 版本 v1 nodes_snapshot 为非空列表
+  ✅ gen/modify 执行
+  ✅ 修改后 version_number=2
+  ✅ history 递增为 2 个版本
+  ✅ 版本 v2 完整快照可加载
+  ✅ export pptx 创建 job
+  ✅ export pptx status=done
+  ✅ export pptx 返回 download_url
+  ✅ export pptx 下载成功(33713B)
+  ✅ export interactive 创建 job
+  ✅ export interactive status=done
+  ✅ export interactive 返回 download_url
+  ✅ export interactive 下载成功(15359B)
+  ✅ export lesson_plan 创建 job
+  ✅ export lesson_plan status=done
+  ✅ export lesson_plan 返回 download_url
+  ✅ export lesson_plan 下载成功(38363B)
+
+🎉 P0 smoke 全通过

@@ -38,30 +38,6 @@ from typing import Any, AsyncGenerator, Optional
 from ai_engine.core.llm import LLMClient
 
 
-def _resolve_tool(name: str) -> Optional[str]:
-    """
-    解析外部工具的可执行路径。
-
-    优先取系统 PATH 中的同名工具；若 name 为 "ffmpeg" 且 PATH 中不存在，
-    则回退到 imageio-ffmpeg 自带的静态 ffmpeg 二进制（pip install imageio-ffmpeg）。
-    注意：imageio-ffmpeg 只提供 ffmpeg，不提供 ffprobe。
-
-    Returns:
-        str 或 None（找不到时返回 None，由调用方走降级路径）。
-    """
-    from shutil import which
-    found = which(name)
-    if found:
-        return found
-    if name == "ffmpeg":
-        try:
-            import imageio_ffmpeg
-            return imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            return None
-    return None
-
-
 class VideoProcessor:
     """
     视频处理器，多级回退确保始终产出解析块。
@@ -78,7 +54,7 @@ class VideoProcessor:
     def __init__(
         self,
         max_keyframes: int = 5,
-        whisper_model: Optional[str] = None,
+        whisper_model: str = "base",
         asr_language: Optional[str] = None,
         vlm_model: Optional[str] = None,
         llm_model: Optional[str] = None,
@@ -100,22 +76,7 @@ class VideoProcessor:
 
         """
         self.max_keyframes = max_keyframes
-        # whisper 模型解析优先级（离线优先）：
-        #   显式参数 > AI_WHISPER_MODEL 环境变量 > 项目内置模型目录 > "base"（联网从 HF 下载）
-        if whisper_model:
-            self.whisper_model_name = whisper_model
-        else:
-            env_model = os.getenv("AI_WHISPER_MODEL")
-            if env_model:
-                self.whisper_model_name = env_model
-            else:
-                from pathlib import Path
-                local_model_dir = (
-                    Path(__file__).resolve().parent.parent / "data" / "models" / "faster-whisper-base"
-                )
-                self.whisper_model_name = (
-                    str(local_model_dir) if local_model_dir.is_dir() else "base"
-                )
+        self.whisper_model_name = whisper_model
         self.asr_language = asr_language
         self.initial_prompt = initial_prompt if initial_prompt is not None else (
             "这是一段关于 AI 工具、VS Code、PPT 制作、播客、Plexigate、编程的视频。"
@@ -384,65 +345,37 @@ class VideoProcessor:
 
         # 尝试 ffprobe 获取更精确信息
         duration = 0.0
-        ffprobe_exe = _resolve_tool("ffprobe")
-        if ffprobe_exe:
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", media_path],
+                capture_output=True, text=True, timeout=10, check=True,
+            )
+            duration = float(result.stdout.strip())
+            metadata["duration_sec"] = round(duration, 2)
+            metadata["duration_method"] = "ffprobe"
+
+            # 获取分辨率
             try:
-                result = subprocess.run(
-                    [ffprobe_exe, "-v", "error", "-show_entries", "format=duration",
+                v_result = subprocess.run(
+                    ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                     "-show_entries", "stream=width,height",
                      "-of", "csv=p=0", media_path],
                     capture_output=True, text=True, timeout=10, check=True,
                 )
-                duration = float(result.stdout.strip())
-                metadata["duration_sec"] = round(duration, 2)
-                metadata["duration_method"] = "ffprobe"
-
-                # 获取分辨率
-                try:
-                    v_result = subprocess.run(
-                        [ffprobe_exe, "-v", "error", "-select_streams", "v:0",
-                         "-show_entries", "stream=width,height",
-                         "-of", "csv=p=0", media_path],
-                        capture_output=True, text=True, timeout=10, check=True,
-                    )
-                    parts = v_result.stdout.strip().split(",")
-                    if len(parts) == 2:
-                        metadata["width"] = int(parts[0])
-                        metadata["height"] = int(parts[1])
-                except Exception:
-                    pass
-
+                parts = v_result.stdout.strip().split(",")
+                if len(parts) == 2:
+                    metadata["width"] = int(parts[0])
+                    metadata["height"] = int(parts[1])
             except Exception:
-                # ffprobe 不可用 → 纯 Python 解析时长
-                duration = VideoProcessor._parse_mp4_duration(media_path)
-                if duration > 0:
-                    metadata["duration_sec"] = round(duration, 2)
-                    metadata["duration_method"] = "python_parser"
-        else:
+                pass
+
+        except Exception:
+            # ffprobe 不可用 → 纯 Python 解析时长
             duration = VideoProcessor._parse_mp4_duration(media_path)
             if duration > 0:
                 metadata["duration_sec"] = round(duration, 2)
                 metadata["duration_method"] = "python_parser"
-
-        # 无 ffprobe 时，用 ffmpeg -i 的 stderr 解析分辨率（imageio-ffmpeg 场景）
-        if "width" not in metadata:
-            ffmpeg_exe = _resolve_tool("ffmpeg")
-            if ffmpeg_exe and metadata.get("source_type") == "video":
-                try:
-                    import re
-                    probe = subprocess.run(
-                        [ffmpeg_exe, "-i", media_path],
-                        capture_output=True, text=True, timeout=10,
-                    )
-                    m = re.search(
-                        r"Stream #.*Video:.*?, (\d{2,5})x(\d{2,5})",
-                        probe.stderr or "",
-                    )
-                    if m:
-                        metadata["width"] = int(m.group(1))
-                        metadata["height"] = int(m.group(2))
-                        metadata["resolution_method"] = "ffmpeg_stderr"
-                except Exception:
-                    pass
 
         if not metadata.get("duration_sec"):
             metadata["duration_sec"] = 0.0
@@ -471,10 +404,6 @@ class VideoProcessor:
 
         如果 ffmpeg 不可用，返回空列表（不阻塞流水线）。
         """
-        ffmpeg_exe = _resolve_tool("ffmpeg")
-        if not ffmpeg_exe:
-            return []
-
         duration = self._get_video_duration(video_path)
         if duration <= 0:
             return []
@@ -489,7 +418,7 @@ class VideoProcessor:
             output_path = os.path.join(tmp_dir, f"frame_{ts:04d}.jpg")
             try:
                 subprocess.run(
-                    [ffmpeg_exe, "-y", "-ss", str(ts), "-i", video_path,
+                    ["ffmpeg", "-y", "-ss", str(ts), "-i", video_path,
                      "-vframes", "1", "-q:v", "2", output_path],
                     capture_output=True, timeout=30, check=True,
                 )
@@ -502,42 +431,16 @@ class VideoProcessor:
 
     @staticmethod
     def _get_video_duration(video_path: str) -> float:
-        """
-        获取视频时长（秒），多级回退：
-          1. ffprobe（PATH 中存在时，最精确）
-          2. ffmpeg -i 输出中解析 Duration 行（imageio-ffmpeg 场景）
-          3. 纯 Python 解析 MP4 moov/mvhd atom
-        """
-        # 1) ffprobe
-        ffprobe_exe = _resolve_tool("ffprobe")
-        if ffprobe_exe:
-            try:
-                result = subprocess.run(
-                    [ffprobe_exe, "-v", "error", "-show_entries", "format=duration",
-                     "-of", "csv=p=0", video_path],
-                    capture_output=True, text=True, timeout=10, check=True,
-                )
-                return float(result.stdout.strip())
-            except (subprocess.SubprocessError, ValueError, FileNotFoundError):
-                pass
-
-        # 2) ffmpeg -i 的 stderr 中解析 "Duration: 00:00:25.00"
-        ffmpeg_exe = _resolve_tool("ffmpeg")
-        if ffmpeg_exe:
-            try:
-                result = subprocess.run(
-                    [ffmpeg_exe, "-i", video_path],
-                    capture_output=True, text=True, timeout=10,
-                )
-                import re
-                m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr or "")
-                if m:
-                    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
-            except (subprocess.SubprocessError, FileNotFoundError):
-                pass
-
-        # 3) 纯 Python MP4 解析
-        return VideoProcessor._parse_mp4_duration(video_path)
+        """FFprobe 获取视频时长（秒）。"""
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", video_path],
+                capture_output=True, text=True, timeout=10, check=True,
+            )
+            return float(result.stdout.strip())
+        except (subprocess.SubprocessError, ValueError, FileNotFoundError):
+            return 0.0
 
     # ======================================================================
     # 帧视觉描述 — Qwen-VL
@@ -812,10 +715,4 @@ class VideoProcessor:
         except ImportError:
             return []
         except Exception as e:
-            # 保留错误信息用于排查（模型下载失败、音频解码失败等），但不阻塞流水线
-            import logging
-            logging.getLogger(__name__).warning(
-                "Faster-Whisper 转写失败（将走 ASR 降级路径）: %s: %s",
-                type(e).__name__, e,
-            )
             return []

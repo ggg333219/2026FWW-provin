@@ -17,13 +17,10 @@ Python 端实际提供服务，Go 端通过 HTTP 调用本 router。
 import asyncio
 import json
 import os
-import shutil
 import traceback
-import uuid
-from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from ai_engine.core.schema import (
@@ -51,47 +48,6 @@ _background_tasks: dict[str, asyncio.Task] = {}
 # =============================================================================
 # 端点
 # =============================================================================
-
-# S2 上传文件落盘目录（与 Go Backend parseUploadDir 对齐）
-_S2_PARSE_DIR = Path(os.environ.get("S2_PARSE_DIR", str(Path(__file__).resolve().parent.parent / "data" / "s2_parse")))
-_S2_PARSE_DIR.mkdir(parents=True, exist_ok=True)
-
-
-@router.post("/upload")
-async def upload_parse_file(
-    session_id: str = Form(""),
-    file: UploadFile = File(...),
-):
-    """
-    POST /api/v1/parse/upload — 接收 multipart 文件，落盘到 AI Engine 可读目录，
-    返回本地路径供 parse/process 使用（S1 Standalone 下替代 Go Backend）。
-
-    与 Go Backend parseUploadDir 对齐：
-    - Go: S2_PARSE_DIR = filepath.Join(os.TempDir(), "fuww_s2_parse")
-    - AI Engine: 同目录，保证 parse/process 能找到文件
-    """
-    sess_dir = _S2_PARSE_DIR / (session_id or "default")
-    sess_dir.mkdir(parents=True, exist_ok=True)
-
-    safe_name = "".join(c if c.isalnum() or c in ".-_" else "_" for c in file.filename)
-    out_path = sess_dir / f"{uuid.uuid4().hex[:8]}_{safe_name}"
-
-    with out_path.open("wb") as buf:
-        shutil.copyfileobj(file.file, buf)
-
-    return {
-        "file_path": str(out_path),
-        "file_name": file.filename,
-        "file_size": out_path.stat().st_size,
-        "source_type": _detect_source_type(file.filename),
-    }
-
-
-def _detect_source_type(filename: str) -> str:
-    ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-    mapping = {"pdf": "pdf", "pptx": "pptx", "ppt": "pptx", "mp4": "video", "mp3": "audio"}
-    return mapping.get(ext, "text")
-
 
 @router.post("/process", response_model=ParseProcessResponse)
 async def process_files(req: ParseProcessRequest) -> ParseProcessResponse:
