@@ -230,7 +230,11 @@ LESSON_PLAN_SCHEMA = {
             "homework": {"type": "array", "items": {"type": "string"}},
             "board_design": {"type": "string"},
         },
-        "required": ["course_name", "teaching_objectives", "teaching_process"],
+        "required": [
+            "course_name", "subject", "grade_level", "duration_minutes",
+            "teaching_objectives", "key_difficulties", "teaching_methods",
+            "teaching_process", "classroom_activities", "homework", "board_design",
+        ],
     },
 }
 
@@ -333,7 +337,11 @@ class LessonPlanGenerator:
     def _plan_from_llm(
         self, data: Any, nodes: list[dict[str, Any]], intent: dict[str, Any],
     ) -> LessonPlan:
-        """把 LLM 返回的 JSON 规范化为 LessonPlan；字段缺失/非法时抛 ValueError。"""
+        """把 LLM 返回的 JSON 规范化为 LessonPlan。
+
+        LLM 经常只返回 schema 中的核心字段。这里保留模型生成的有效内容，同时用
+        节点驱动的确定性教案补齐缺失章节，避免导出的“真实 LLM 教案”出现空白栏。
+        """
         if not isinstance(data, dict):
             raise ValueError("LLM 返回内容不是 JSON 对象")
         if data.get("error"):
@@ -354,6 +362,17 @@ class LessonPlanGenerator:
         if not objectives:
             raise ValueError("LLM 教案缺少 teaching_objectives")
 
+        fallback = self._build_fallback_plan(nodes, intent)
+        canonical_dimensions = (
+            DIMENSION_KNOWLEDGE, DIMENSION_ABILITY, DIMENSION_LITERACY,
+        )
+        objective_dimensions = {item["dimension"] for item in objectives}
+        for fallback_objective in fallback.teaching_objectives:
+            dimension = fallback_objective["dimension"]
+            if dimension in canonical_dimensions and dimension not in objective_dimensions:
+                objectives.append(dict(fallback_objective))
+                objective_dimensions.add(dimension)
+
         process_raw = data.get("teaching_process") or []
         phases: list[ProcessPhase] = []
         if isinstance(process_raw, list):
@@ -373,6 +392,32 @@ class LessonPlanGenerator:
                 ))
         if not phases:
             raise ValueError("LLM 教案缺少 teaching_process")
+
+        # 标准四阶段必须齐全；模型阶段内容缺字段时逐项补齐，而不是整份降级。
+        fallback_phases = {phase.phase: phase for phase in fallback.teaching_process}
+        normalized_phases: list[ProcessPhase] = []
+        consumed: set[int] = set()
+        for phase_name in (PHASE_INTRO, PHASE_NEW, PHASE_PRACTICE, PHASE_SUMMARY):
+            matched_index = next(
+                (idx for idx, phase in enumerate(phases)
+                 if idx not in consumed and phase.phase == phase_name),
+                None,
+            )
+            base = fallback_phases[phase_name]
+            if matched_index is None:
+                normalized_phases.append(base)
+                continue
+            consumed.add(matched_index)
+            current = phases[matched_index]
+            normalized_phases.append(ProcessPhase(
+                phase=phase_name,
+                duration_minutes=current.duration_minutes if current.duration_minutes > 0
+                else base.duration_minutes,
+                teacher_activity=current.teacher_activity or base.teacher_activity,
+                student_activity=current.student_activity or base.student_activity,
+                design_intent=current.design_intent or base.design_intent,
+            ))
+        phases = normalized_phases
 
         kd_raw = data.get("key_difficulties") or {}
         key_difficulties = {}
@@ -396,27 +441,51 @@ class LessonPlanGenerator:
                 elif isinstance(item, str) and item.strip():
                     activities.append({"name": item.strip(), "description": ""})
 
+        # 教师明确给出的课时属于意图约束，优先级高于模型自行估算。
         try:
-            duration = int(data.get("duration_minutes") or 0)
+            duration = int(intent.get("duration_minutes") or data.get("duration_minutes") or 0)
         except (TypeError, ValueError):
             duration = 0
         if duration <= 0:
             duration = self._resolve_total_minutes(nodes, intent)
 
+        # 课时总和是教案表格的硬约束。优先调整“新授”阶段；若模型时长严重异常，
+        # 直接采用确定性分配，保证每阶段至少 1 分钟且总和准确。
+        delta = duration - sum(phase.duration_minutes for phase in phases)
+        new_phase = next(phase for phase in phases if phase.phase == PHASE_NEW)
+        if delta and new_phase.duration_minutes + delta > 0:
+            new_phase.duration_minutes += delta
+        elif delta:
+            durations = self._split_durations(duration)
+            for phase in phases:
+                phase.duration_minutes = durations[phase.phase]
+
+        fallback_kd = fallback.key_difficulties
+        key_difficulties = {
+            "key_points": key_difficulties.get("key_points") or fallback_kd["key_points"],
+            "difficult_points": key_difficulties.get("difficult_points")
+            or fallback_kd["difficult_points"],
+        }
+
+        teaching_methods = _clean_list(data.get("teaching_methods"))
+        classroom_activities = activities or [dict(item) for item in fallback.classroom_activities]
+        homework = _clean_list(data.get("homework")) or list(fallback.homework)
+        board_design = _clean_str(data.get("board_design")) or fallback.board_design
+
         return LessonPlan(
-            course_name=_clean_str(data.get("course_name"))
-                        or _clean_str(intent.get("topic")) or "课程",
+            course_name=_clean_str(intent.get("topic"))
+                        or _clean_str(data.get("course_name")) or "课程",
             subject=_clean_str(data.get("subject"), "综合"),
             grade_level=_clean_str(data.get("grade_level")
                                    or intent.get("target_student"), "全体学生"),
             duration_minutes=duration,
             teaching_objectives=objectives,
             key_difficulties=key_difficulties,
-            teaching_methods=_clean_list(data.get("teaching_methods")) or ["讲授法"],
+            teaching_methods=teaching_methods or list(fallback.teaching_methods),
             teaching_process=phases,
-            classroom_activities=activities,
-            homework=_clean_list(data.get("homework")),
-            board_design=_clean_str(data.get("board_design")),
+            classroom_activities=classroom_activities,
+            homework=homework,
+            board_design=board_design,
         )
 
     # ---- Fallback 路径（确定性，永不失败） ----
