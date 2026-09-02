@@ -475,26 +475,67 @@ type KnowledgeUploadResponse struct {
 // S3: 课件生成 — 请求/响应类型
 // =============================================================================
 
+// 任务状态 / 阶段 / 导出状态枚举锚点 —— 与 ai_engine/core/schema.py 一一对应。
+// 4 个 Skill 各自实现时禁止再发明新字符串，统一引用此处常量（P0 状态统一）。
+const (
+	GenerationStatusPending    = "pending"
+	GenerationStatusGenerating = "generating"
+	GenerationStatusPreview    = "preview"
+	GenerationStatusModifying  = "modifying"
+	GenerationStatusDone       = "done"
+	GenerationStatusFailed     = "failed"
+
+	GenerationStageIntentLocked   = "intent_locked"
+	GenerationStageEvidenceGather = "evidence_gathering"
+	GenerationStageStructuring    = "structuring"
+	GenerationStageGenerating     = "generating"
+	GenerationStagePreview        = "preview"
+	GenerationStageModifying      = "modifying"
+	GenerationStageDone           = "done"
+
+	ExportStatusPending   = "pending"
+	ExportStatusExporting = "exporting"
+	ExportStatusDone      = "done"
+	ExportStatusFailed    = "failed"
+)
+
+// TeachingNodeItem —— 引擎 TeachingNode 的 Go 镜像（字段=ai_engine/core/schema.py）。
+// 字段只增不删：node 由 S3 生成 → S4 版本快照 / 导出 / 前端渲染全链路共用本结构。
 type TeachingNodeItem struct {
-	NodeID       string   `json:"node_id"`
-	Title        string   `json:"title"`
-	NodeType     string   `json:"node_type,omitempty"`
-	Content      string   `json:"content,omitempty"`
-	Summary      string   `json:"summary,omitempty"`
-	PageRef      int      `json:"page_ref,omitempty"`
-	CorePoints   []string `json:"core_points,omitempty"`
-	KeyPoints    []string `json:"key_points,omitempty"`
-	Examples     []string `json:"examples,omitempty"`
-	DurationMin  float64  `json:"estimated_duration_minutes,omitempty"`
-	CitationRefs []string `json:"citation_refs,omitempty"`
-	NextNodeID   string   `json:"next_node_id,omitempty"`
+	NodeID               string         `json:"node_id"`
+	Title                string         `json:"title"`
+	NodeType             string         `json:"node_type,omitempty"` // 引擎枚举渲染类型（slide/section/quiz/cover/...）
+	Content              string         `json:"content"`             // 完整节点内容（markdown / html）
+	Summary              string         `json:"summary"`
+	PageRef              int            `json:"page_ref,omitempty"`
+	SourceChunkIDs       []string       `json:"source_chunk_ids"` // 引用证据 chunk 列表
+	CorePoints           []string       `json:"core_points"`
+	KeyPoints            []string       `json:"key_points"` // 与 core_points 等效（兼容主流 AI-PPT 规范）
+	Examples             []string       `json:"examples"`
+	KeyDifficulties      []string       `json:"key_difficulties"`
+	ExpectedOutcomes     []string       `json:"expected_outcomes"`
+	DurationMin          float64        `json:"estimated_duration_minutes"` // 单位统一为分钟
+	InteractiveQuestions []string       `json:"interactive_questions"`      // 与 questions 等效
+	CitationRefs         []string       `json:"citation_refs"`
+	NextNodeID           string         `json:"next_node_id,omitempty"`
+	PrevNodeID           string         `json:"prev_node_id,omitempty"`
+	Metadata             map[string]any `json:"metadata"`
 	// 透传字段：版本快照 / 预览返回节点带有的讲授分段与互动问答等元数据。
-	// Questions 引擎侧为 list[str]（normalize_text_list 产出），用 interface 透传避免解码失败。
-	Segments  []map[string]interface{} `json:"segments,omitempty"`
-	Questions []interface{}            `json:"questions,omitempty"`
-	Script    string                   `json:"script,omitempty"`
+	// Questions 引擎侧已归一为 list[str]（normalize_text_list 产出，见 schema.py 注释）；
+	// Go 侧用 interface 透传仅为兼容历史 dict 缓存，收到的一律是字符串列表。
+	// 注意：content/summary/core_points 等为 canonical 非 Optional 字段，禁加 omitempty——
+	//   引擎 Pydantic 空值时键仍在，Go 加 omitempty 会把空键整体丢弃，导致网关响应缺 canonical 字段。
+	Segments  []map[string]interface{} `json:"segments"`
+	Questions []interface{}            `json:"questions"`
+	Script    string                   `json:"script"`
 	// type 为引擎侧字符串渲染类型（与 node_type 等效），透传给前端渲染层。
 	Type string `json:"type,omitempty"`
+	// 排版元数字段（对齐主流 AI-PPT 规范）：layout_hint / font_size_hint / text_alignment / slide_background。
+	// PPT 图文并茂导出（A12 4a）与前端渲染层据此布局，须随 node 快照透传。
+	LayoutHint      string `json:"layout_hint,omitempty"`
+	FontSizeHint    string `json:"font_size_hint,omitempty"`
+	TextAlignment   string `json:"text_alignment,omitempty"`
+	SlideBackground string `json:"slide_background,omitempty"`
 }
 
 type GenerationCreateRequest struct {
@@ -514,6 +555,10 @@ type GenerationCreateResponse struct {
 	GenerationType string `json:"generation_type,omitempty"`
 }
 
+// GenerationStatusResponse —— S3 任务状态响应。
+// 状态口径（P0 统一）：Status 取值见上方 GenerationStatus* 常量；Stage 见 GenerationStage* 常量；
+// 进度 canonical 为 ProgressPct（0~100 百分制，前端 generationStore 优先读它）；
+// Progress 为引擎历史遗留的 0~1 小数副本，仅作前端兼容保留，禁止新逻辑读写。
 type GenerationStatusResponse struct {
 	TaskID      string             `json:"task_id"`
 	Status      string             `json:"status"`
@@ -522,14 +567,16 @@ type GenerationStatusResponse struct {
 	CurrentNode string             `json:"current_node,omitempty"`
 	Nodes       []TeachingNodeItem `json:"nodes,omitempty"`
 	PreviewURL  string             `json:"preview_url,omitempty"`
-	Error       string             `json:"error,omitempty"`
+	Error       string             `json:"error,omitempty"` // 失败原因纯文本（结构化 error_code/message 属 P1，暂不引入）
 	// 引擎侧前端兼容字段（progress 为 0~1 小数、stage_text 为阶段文案），透传给前端。
 	Progress  float64 `json:"progress,omitempty"`
 	StageText string  `json:"stage_text,omitempty"`
 }
 
 type GenerationPreviewRequest struct {
-	Nodes      []TeachingNodeItem `json:"nodes"`
+	// omitempty：仅传 gen_id 做版本快照预览时 Nodes 为 nil，直接省略而非发 "nodes":null，
+	// 避免引擎 PreviewRequest(nodes: list[dict]=[]) 收到 null 触发 422。
+	Nodes      []TeachingNodeItem `json:"nodes,omitempty"`
 	CourseName string             `json:"course_name,omitempty"`
 	// 版本快照预览：只传 gen_id（可带 version）时由 AI 引擎按版本恢复节点渲染，
 	// 供前端预览持久化（restorePreview）跳过节点树直接拉取历史版本预览。
@@ -564,18 +611,18 @@ type ModifyCommandItem struct {
 
 type GenerationModifyRequest struct {
 	GenerationID string              `json:"generation_id"`
-	Commands    []ModifyCommandItem `json:"commands"`
-	Nodes       []interface{}       `json:"nodes,omitempty"`
-	CourseName  string              `json:"course_name,omitempty"`
-	Regenerate  bool                `json:"regenerate"`
+	Commands     []ModifyCommandItem `json:"commands"`
+	Nodes        []interface{}       `json:"nodes,omitempty"`
+	CourseName   string              `json:"course_name,omitempty"`
+	Regenerate   bool                `json:"regenerate"`
 }
 
 type GenerationModifyResponse struct {
-	Status       string        `json:"status"`
-	Nodes        []interface{} `json:"nodes,omitempty"`
-	VersionNumber int         `json:"version_number,omitempty"`
-	CommandsApplied []string  `json:"commands_applied,omitempty"`
-	Errors       []string     `json:"errors,omitempty"`
+	Status          string        `json:"status"`
+	Nodes           []interface{} `json:"nodes,omitempty"`
+	VersionNumber   int           `json:"version_number,omitempty"`
+	CommandsApplied []string      `json:"commands_applied,omitempty"`
+	Errors          []string      `json:"errors,omitempty"`
 }
 
 type VersionSnapshot struct {

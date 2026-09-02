@@ -25,6 +25,7 @@ from ..schema import (
     build_enhanced_script_schema,
     normalize_text_list,
     sanitize_node_type,
+    _normalize_optional_text,
 )
 from ..core.llm import LLMClient
 
@@ -356,14 +357,14 @@ class NodeGenerator:
                 "type": sanitize_node_type(raw_type),
                 # 类型归一：str/list[dict]/dict 等脏数据统一转为 list[str]（M1-4 P5）
                 "key_points": normalize_text_list(key_pts) or normalize_text_list(core_pts),
-                "core_points": core_pts if isinstance(core_pts, list) else [],
+                "core_points": normalize_text_list(core_pts),
                 "questions": normalize_text_list(questions_raw) or normalize_text_list(interactive_raw),
                 "interactive_questions": normalize_text_list(interactive_raw) or normalize_text_list(questions_raw),
                 "segments": segments,
-                "layout_hint": (item or {}).get("layout_hint"),
-                "font_size_hint": (item or {}).get("font_size_hint"),
-                "text_alignment": (item or {}).get("text_alignment"),
-                "slide_background": (item or {}).get("slide_background"),
+                "layout_hint": _normalize_optional_text((item or {}).get("layout_hint")),
+                "font_size_hint": _normalize_optional_text((item or {}).get("font_size_hint")),
+                "text_alignment": _normalize_optional_text((item or {}).get("text_alignment")),
+                "slide_background": _normalize_optional_text((item or {}).get("slide_background")),
             })
         return normalized
 

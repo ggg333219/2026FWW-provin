@@ -105,7 +105,10 @@ class NodePatcher:
     def _handle_swap(self, nodes: list, cmd: EditCommand, valid_ids: set,
                      regenerate_fn) -> dict:
         """交换两个节点顺序"""
-        ids = cmd.params.get("node_ids") or cmd.params.get("ids") or []
+        # canonical 主名 target_node_ids（对齐 schema.py ModifyCommand / Go ModifyCommandItem），
+        # 兼容旧键 node_ids/ids（legacy，勿扩散）。
+        ids = (cmd.params.get("target_node_ids")
+               or cmd.params.get("node_ids") or cmd.params.get("ids") or [])
         if len(ids) < 2:
             return {"error": "swap 需要至少两个节点 ID"}
         id_a, id_b = ids[0], ids[1]
@@ -208,7 +211,8 @@ class NodePatcher:
     def _handle_merge(self, nodes: list, cmd: EditCommand, valid_ids: set,
                       regenerate_fn) -> dict:
         """合并多个节点"""
-        ids = cmd.params.get("node_ids") or cmd.params.get("raw_match", [])
+        ids = (cmd.params.get("target_node_ids")
+               or cmd.params.get("node_ids") or cmd.params.get("raw_match", []))
         if isinstance(ids, str):
             ids = [ids]
         if len(ids) < 2:

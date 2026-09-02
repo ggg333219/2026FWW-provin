@@ -23,6 +23,14 @@
     assert intent.is_complete  # 检查必填字段是否齐备
 """
 
+# -----------------------------------------------------------------------------
+# 唯一真值锚点（角色 A · 2026-09-02）
+# 本文件是"字段统一"的唯一真值；Go client 镜像见
+# backend/internal/service/ai_engine_client.go（TeachingNodeItem 等，json tag 只增不删）。
+# 跨层字段矩阵 / 旧别名注册表 / 状态机 / 清理决策见 docs/A0-schema统一-唯一真值-20260902.md。
+# 新增/改名对象字段：改这里 → 同步 Go 镜像 → 跑 scripts/smoke_p0_contract.py。
+# -----------------------------------------------------------------------------
+
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional

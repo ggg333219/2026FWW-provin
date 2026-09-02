@@ -69,7 +69,10 @@ func (h *ExportHandler) Status(c *gin.Context) {
 func (h *ExportHandler) Download(c *gin.Context) {
 	jobID := c.Param("job_id")
 	extension := strings.ToLower(c.Param("extension"))
-	if jobID == "" || (extension != "pptx" && extension != "docx") {
+	// 网关白名单须与 AI 引擎 /download/{job_id}.{extension} 的产物集合一致：
+	//   pptx=PPT 图文 / docx=Word 讲稿 / html=HTML5 互动导出（A12 4c），lesson_plan 复用 docx 下载。
+	// 曾漏掉 html，导致 interactive 导出经网关下载恒 400。
+	if jobID == "" || (extension != "pptx" && extension != "docx" && extension != "html") {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "导出文件参数错误"})
 		return
 	}

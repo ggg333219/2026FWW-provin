@@ -187,17 +187,18 @@ def normalize_stage2_nodes(nodes: list[dict[str, Any]] | None) -> list[dict[str,
                 # 兼容字段：key_points 优先，否则 fallback 到 core_points
                 # 类型归一：str/list[dict]/dict 等脏数据统一转为 list[str]（M1-4 P5）
                 "key_points": normalize_text_list(key_pts) or normalize_text_list(core_pts),
-                "core_points": core_pts if isinstance(core_pts, list) else [],
+                "core_points": normalize_text_list(core_pts),
                 # 兼容字段：questions 优先，否则 fallback 到 interactive_questions
                 # 类型归一：str/list[dict]/dict 等脏数据统一转为 list[str]（M1-4A P5）
                 "questions": normalize_text_list(questions_raw) or normalize_text_list(interactive_raw),
                 "interactive_questions": normalize_text_list(interactive_raw) or normalize_text_list(questions_raw),
-                # 空数组显式声明，避免 None
-                "segments": (item or {}).get("segments") or [],
-                "layout_hint": (item or {}).get("layout_hint"),
-                "font_size_hint": (item or {}).get("font_size_hint"),
-                "text_alignment": (item or {}).get("text_alignment"),
-                "slide_background": (item or {}).get("slide_background"),
+                # 空数组显式声明，避免 None；非列表段落丢弃，保持 canonical list[dict]
+                "segments": ((item or {}).get("segments") if isinstance((item or {}).get("segments"), list) else []),
+                # schema.py 定义为 Optional[str]，脏类型统一转文本，None 保持 None
+                "layout_hint": _normalize_optional_text((item or {}).get("layout_hint")),
+                "font_size_hint": _normalize_optional_text((item or {}).get("font_size_hint")),
+                "text_alignment": _normalize_optional_text((item or {}).get("text_alignment")),
+                "slide_background": _normalize_optional_text((item or {}).get("slide_background")),
             }
         )
     return result
@@ -241,14 +242,14 @@ def normalize_stage3_scripts(scripts: list[dict[str, Any]] | None, valid_node_id
                 # 兼容字段
                 # 类型归一：str/list[dict]/dict 等脏数据统一转为 list[str]（M1-4 P5）
                 "key_points": normalize_text_list(key_pts) or normalize_text_list(core_pts),
-                "core_points": core_pts if isinstance(core_pts, list) else [],
+                "core_points": normalize_text_list(core_pts),
                 "questions": normalize_text_list(questions_raw) or normalize_text_list(interactive_raw),
                 "interactive_questions": normalize_text_list(interactive_raw) or normalize_text_list(questions_raw),
                 "segments": segments,
-                "layout_hint": (item or {}).get("layout_hint"),
-                "font_size_hint": (item or {}).get("font_size_hint"),
-                "text_alignment": (item or {}).get("text_alignment"),
-                "slide_background": (item or {}).get("slide_background"),
+                "layout_hint": _normalize_optional_text((item or {}).get("layout_hint")),
+                "font_size_hint": _normalize_optional_text((item or {}).get("font_size_hint")),
+                "text_alignment": _normalize_optional_text((item or {}).get("text_alignment")),
+                "slide_background": _normalize_optional_text((item or {}).get("slide_background")),
             }
         )
     return normalized
@@ -511,6 +512,22 @@ def sanitize_node_type(raw: Any) -> str:
     """
     value = str(raw or "").strip().lower()
     return value if value in VALID_NODE_TYPES else "slide"
+
+
+def _normalize_optional_text(value: Any) -> str | None:
+    """将可选文本字段收敛为 str 或 None，避免进入 TeachingNode 时类型漂移。"""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, dict):
+        for key in ("value", "name", "text"):
+            text = value.get(key)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    return None
 
 
 def normalize_text_list(value: Any) -> list[str]:
