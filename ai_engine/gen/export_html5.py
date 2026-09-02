@@ -25,6 +25,8 @@ HTML5 互动小游戏导出模块 — S3/S4 课件生成（A12 赛题 4c/5c）
 
 import json
 import logging
+import re
+import unicodedata
 from html import escape
 from pathlib import Path
 from typing import Any, Optional
@@ -53,23 +55,38 @@ def _normalize_quiz_answer(answer: Any, options: list[str]) -> Optional[int]:
     """
     if isinstance(answer, bool) or answer is None:
         return None
+    if isinstance(answer, dict):
+        answer = next(
+            (answer.get(key) for key in ("answer", "correct_answer", "option", "value")
+             if answer.get(key) is not None),
+            None,
+        )
+    if isinstance(answer, (list, tuple)):
+        answer = answer[0] if len(answer) == 1 else None
+    if answer is None:
+        return None
     if isinstance(answer, int):
         return answer if 0 <= answer < len(options) else None
-    text = str(answer).strip()
+    if isinstance(answer, float) and answer.is_integer():
+        idx = int(answer)
+        return idx if 0 <= idx < len(options) else None
+    text = unicodedata.normalize("NFKC", str(answer)).strip()
     # 清洗常见前后缀噪声：全角句点/顿号/逗号、"答案："前缀
     text = text.strip("．.、,，:： 　")
-    if text.startswith("答案"):
-        text = text[2:].strip("．.、,，:： 　")
+    text = re.sub(r"^(?:正确\s*)?(?:答案|选项)(?:\s*(?:是|为))?\s*[:：]?\s*", "", text)
     if not text:
         return None
-    if len(text) == 1 and text.upper() in "ABCDEFGH":
-        idx = "ABCDEFGH".index(text.upper())
+    # 兼容 “B”、“B.”、“B. 选项正文”、“(B)” 等模型常见输出。
+    letter_match = re.match(r"^[\(（]?\s*([A-Ha-h])(?:\s*[\)）.．、:：]|\s|$)", text)
+    if letter_match:
+        idx = "ABCDEFGH".index(letter_match.group(1).upper())
         return idx if idx < len(options) else None
     if text.isdigit():
         idx = int(text)
         return idx if 0 <= idx < len(options) else None
     for i, opt in enumerate(options):
-        if str(opt).strip() == text:
+        option_text = unicodedata.normalize("NFKC", str(opt)).strip()
+        if option_text == text:
             return i
     logger.warning("[export_html5] quiz answer 无法识别，不强标正确答案: %r", answer)
     return None

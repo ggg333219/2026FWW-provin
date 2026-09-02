@@ -239,6 +239,29 @@ def main():
     check("T2 LLM 正常返回走 llm 路径且内容一致", ok,
           f"source={plan_llm.data_source}, title={plan_llm.course_name}")
 
+    # ---- T2b: LLM 返回核心字段但省略其他章节 → 节点数据确定性补齐 ----
+    partial = {
+        "course_name": "模型自行改写的课程名",
+        "duration_minutes": 40,
+        "teaching_objectives": [
+            {"dimension": "知识目标", "content": "理解排序算法。"},
+        ],
+        "teaching_process": [
+            {"phase": "新授", "duration_minutes": 40,
+             "teacher_activity": "讲解排序思想", "student_activity": "记录要点",
+             "design_intent": "建立概念"},
+        ],
+    }
+    mock_client.set_json_response(partial)
+    plan_partial = LessonPlanGenerator(llm_client=mock_client).generate(nodes, intent)
+    problems = plan_structure_ok(plan_partial, source="llm")
+    check("T2b LLM 缺失章节由节点数据补齐", not problems, "; ".join(problems))
+    check("T2b 教案标题与总时长服从教师意图",
+          plan_partial.course_name == "排序算法"
+          and plan_partial.duration_minutes == 45
+          and sum(p.duration_minutes for p in plan_partial.teaching_process) == 45,
+          f"title={plan_partial.course_name}, duration={plan_partial.duration_minutes}")
+
     # ---- T3: LLM 抛异常 → fallback 完整教案 ----
     plan_fb = LessonPlanGenerator(llm_client=FailingLLMClient()).generate(nodes, intent)
     problems = plan_structure_ok(plan_fb, source="fallback")

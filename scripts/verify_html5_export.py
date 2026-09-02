@@ -29,6 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 from ai_engine.gen.export_html5 import (
+    _normalize_quiz_answer,
     extract_interactive_items,
     export_interactive_html,
     render_interactive_html,
@@ -138,6 +139,20 @@ def main():
     check("T6 dict 题归一化为 quiz", len(quiz_items) == 1 and len(quiz_items[0]["questions"]) == 2)
     check("T6 answer 字母归一化", quiz_items[0]["questions"][0]["answer"] == 1)
     check("T6 answer 下标归一化", quiz_items[0]["questions"][1]["answer"] == 1)
+    robust_answers = {
+        "答案为B": 1,
+        "正确答案：Ｃ．": 2,
+        "选项 A": 0,
+        "D. 计数排序": 3,
+        "O(n log n)": 1,
+    }
+    check("T6 常见 LLM 答案格式均可识别",
+          all(_normalize_quiz_answer(raw, ["插入排序", "O(n log n)", "堆排序", "计数排序"]) == expected
+              for raw, expected in robust_answers.items()))
+    check("T6 嵌套答案字段可识别",
+          _normalize_quiz_answer({"correct_answer": "C"}, ["a", "b", "c", "d"]) == 2)
+    check("T6 无法识别答案不误标 A",
+          _normalize_quiz_answer("以上答案均可能", ["a", "b", "c", "d"]) is None)
     check("T6 knowledge_card 转闪卡", any(f["front"] == "冒泡排序" for f in flash_items))
     check("T6 纯文本题转闪卡（不编造答案）",
           sum(1 for f in flash_items if f["tags"] == ["question"]) == 2)
