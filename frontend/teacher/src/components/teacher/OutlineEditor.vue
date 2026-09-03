@@ -21,7 +21,7 @@
           v-if="outlineStore.canEdit"
           class="btn btn-sm"
           :disabled="outlineStore.reviseLoading"
-          @click="showReviseDialog = true"
+          @click="showReviseInput = true"
           title="发送指令让 AI 修改大纲"
         >
           {{ outlineStore.reviseLoading ? 'AI 修订中...' : '🤖 AI 修订' }}
@@ -248,6 +248,7 @@
     <!-- AI 修订对话框 -->
     <OutlineRevisionDialog
       :visible="showReviseDialog"
+      :loading="revisingDialogLoading"
       :change-summary="outlineStore.changeSummary"
       :pending-nodes="outlineStore.pendingRevision?.nodes || []"
       @apply="handleApplyRevision"
@@ -297,6 +298,7 @@ const outlineStore = useOutlineStore()
 const showReviseDialog = ref(false)
 const showReviseInput = ref(false)
 const reviseMessage = ref('')
+const revisingDialogLoading = ref(false) // 对话框内 AI 正在生成修订
 const newKeyPoints = ref({}) // { [node_id]: input value }
 
 const statusLabel = computed(() => ({
@@ -400,15 +402,20 @@ async function handleConfirm() {
   }
 }
 
-function handleSendRevise() {
+async function handleSendRevise() {
   const msg = reviseMessage.value.trim()
   if (!msg) return
   showReviseInput.value = false
   showReviseDialog.value = true
-  outlineStore.reviseOutline(msg).catch((err) => {
+  revisingDialogLoading.value = true
+  try {
+    await outlineStore.reviseOutline(msg)
+  } catch (err) {
     emit('error', err?.message || 'AI 修订失败')
     showReviseDialog.value = false
-  })
+  } finally {
+    revisingDialogLoading.value = false
+  }
 }
 
 function handleApplyRevision() {

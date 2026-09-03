@@ -15,7 +15,20 @@ export const teacherGenerationApi = {
   // ================================================================
 
   /** 创建生成任务 (gen/create) */
-  createGeneration: ({ session_id, course_id, title, markdown, intent, evidence_packet, template_id } = {}) =>
+  createGeneration: ({
+    session_id,
+    course_id,
+    title,
+    markdown,
+    intent,
+    evidence_packet,
+    template_id,
+    // S3 规范 3.6 参数
+    outline_id,
+    outline_version,
+    outline_confirmed,
+    generate_mode
+  } = {}) =>
     requestJson('/api/v1/gen/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -24,10 +37,11 @@ export const teacherGenerationApi = {
         course_id,
         title: title || '',
         markdown: markdown || '',
-        // S1 确认后的结构化意图直接透传（未确认时省略，后端以 title 构建默认意图）
         intent: intent || undefined,
         evidence_packet: evidence_packet || null,
-        template_id: template_id || 'default'
+        template_id: template_id || 'default',
+        // 规范 3.6：确认大纲后必须传递完整 outline 上下文
+        ...(outline_id ? { outline_id, outline_version, outline_confirmed: !!outline_confirmed, generate_mode: generate_mode || 'page_incremental' } : {})
       })
     }),
 

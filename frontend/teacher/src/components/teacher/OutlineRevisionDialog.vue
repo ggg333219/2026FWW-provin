@@ -7,6 +7,13 @@
       </div>
 
       <div class="dialog-body">
+        <!-- AI 正在生成修订结果 -->
+        <div v-if="loading" class="revise-loading">
+          <div class="loading-spinner">⏳</div>
+          <p>AI 正在生成修订方案...</p>
+        </div>
+
+        <template v-else>
         <p class="dialog-hint">AI 已根据您的要求生成修订方案，请确认后应用：</p>
 
         <ul v-if="changeSummary.length" class="change-list">
@@ -34,11 +41,12 @@
         <p v-if="!changeSummary.length && !pendingNodes.length" class="no-changes">
           修订结果为空，请重试。
         </p>
+        </template>
       </div>
 
       <div class="dialog-footer">
         <button class="btn btn-outline" @click="$emit('cancel')">放弃修订</button>
-        <button class="btn btn-primary" :disabled="!pendingNodes.length" @click="$emit('apply')">
+        <button class="btn btn-primary" :disabled="loading || !pendingNodes.length" @click="$emit('apply')">
           应用修订
         </button>
       </div>
@@ -49,6 +57,7 @@
 <script setup>
 defineProps({
   visible: { type: Boolean, default: false },
+  loading: { type: Boolean, default: false },
   changeSummary: { type: Array, default: () => [] },
   pendingNodes: { type: Array, default: () => [] }
 })
@@ -109,6 +118,16 @@ defineEmits(['apply', 'cancel'])
   font-size: 13px;
   color: #64748b;
 }
+.revise-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px 0;
+  color: #64748b;
+  font-size: 14px;
+}
+.loading-spinner { font-size: 28px; }
 .change-list {
   list-style: none;
   padding: 0;
