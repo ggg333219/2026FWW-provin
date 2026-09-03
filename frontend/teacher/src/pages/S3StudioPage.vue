@@ -112,6 +112,8 @@ onMounted(async () => {
   if (typeof window !== 'undefined') {
     generationMode.value = window.localStorage.getItem(`fuww_s2_generation_mode:${intentStore.sessionId}`) || ''
   }
+  // S2 正式流程进入后直接初始化工作台，不再要求教师手动输入课件 ID。
+  loadDemoMode()
   // 刷新/重试后按最近 gen_id 从版本快照恢复预览，保证预览内容不丢失
   const lastGenId = generationStore.restoreLastGenId()
   if (lastGenId) {
@@ -169,8 +171,9 @@ async function loadCourseContext() {
 }
 
 function loadDemoMode() {
-  courseId.value = DEMO_COURSE_ID
-  courseName.value = '演示课件'
+  courseId.value = intentStore.intentId || intentStore.sessionId || DEMO_COURSE_ID
+  courseIdInput.value = courseId.value
+  courseName.value = intentStore.intentSummary?.topic || '课件预览'
   editPage.value = 1
   totalPages.value = DEMO_TOTAL_PAGES
   const nodes = buildDemoNodes(1)
