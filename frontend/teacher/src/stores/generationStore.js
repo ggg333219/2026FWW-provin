@@ -36,18 +36,17 @@ export const useGenerationStore = defineStore('generation', {
     /** 当前页讲稿文本（S2 兼容） */
     currentScript: '',
 
-    /** 当前页结构化节点树 */
+    /** 当前页结构化节点树
+     *
+     * S3 新规范（snake_case）：
+     * { node_id, title, summary, content, script, key_points, segments, interactive_items, ... }
+     *
+     * S2 旧格式（camelCase，兼容）：
+     * { nodeId, title, summary, content, scriptText, ... }
+     *
+     * toPreviewNodes() 会自动归一，统一后端渲染器所需字段。
+     */
     currentScriptNodes: [],
-    // currentScriptNodes[i] 结构参考：
-    // {
-    //   id: string,
-    //   nodeId: string,
-    //   title: string,
-    //   summary: string,
-    //   content: string,
-    //   scriptText: string,
-    //   status: 'pending' | 'generating' | 'completed'
-    // }
 
     /** 最近一次 S3 全流程生成的 generation_id，供 S4 版本管理读取。 */
     lastGenId: '',
@@ -118,12 +117,19 @@ export const useGenerationStore = defineStore('generation', {
     },
 
     /**
-     * 创建 S3 全流程生成任务。响应统一兼容 Go 网关、Python 服务与 Mock 形态。
+     * 创建 S3 全流程生成任务。
+     *
+     * 支持新规范参数（规范 3.6）：
+     *   { outline_id, outline_version, outline_confirmed, session_id, template_id, generate_mode, ... }
+     *
+     * 响应统一兼容 Go 网关、Python 服务与 Mock 形态。
      */
     async createCoursewareGeneration(request) {
       const response = await teacherV1Api.generation.createGeneration(request)
       const task = response?.data || response || {}
-      const generationId = task.generation_id || task.gen_id || task.generationId || task.genId
+      // 优先使用规范字段名，其次兼容旧名
+      const generationId =
+        task.generation_id || task.gen_id || task.generationId || task.genId || ''
       if (generationId) this.setLastGenId(generationId)
       return task
     },

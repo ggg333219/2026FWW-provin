@@ -74,6 +74,50 @@ export const teacherGenerationApi = {
     }).then(r => r.json())
   },
 
+  // ================================================================
+  // page API（S3 单页操作，规范 3.7~3.10）
+  // ================================================================
+
+  /** GET /api/v1/generations/{generation_id} 查询生成任务状态（规范 3.7） */
+  getGeneration: (generationId) =>
+    requestJson(`/api/v1/generations/${encodeURIComponent(generationId)}`),
+
+  /** GET /api/v1/generations/{generation_id}/pages/{page_id} 查询单页（规范 3.8） */
+  getPage: (generationId, pageId) =>
+    requestJson(
+      `/api/v1/generations/${encodeURIComponent(generationId)}/pages/${encodeURIComponent(pageId)}`
+    ),
+
+  /** POST /api/v1/generations/{generation_id}/pages/{page_id}/regenerate 单页重生成（规范 3.9） */
+  regeneratePage: (generationId, pageId, { reason, mode = 'ai' } = {}) =>
+    requestJson(
+      `/api/v1/generations/${encodeURIComponent(generationId)}/pages/${encodeURIComponent(pageId)}/regenerate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason || '', mode })
+      }
+    ),
+
+  /** POST /api/v1/generations/{generation_id}/pages/{page_id}/revise AI修改页面（规范 3.10） */
+  revisePage: (generationId, pageId, { message, base_version, auto_apply = false } = {}) =>
+    requestJson(
+      `/api/v1/generations/${encodeURIComponent(generationId)}/pages/${encodeURIComponent(pageId)}/revise`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: message || '',
+          base_version: base_version != null ? base_version : 1,
+          auto_apply
+        })
+      }
+    ),
+
+  // ================================================================
+  // 兼容旧接口（保留，Phase 4 清理）
+  // ================================================================
+
   /** 获取增强讲稿（AI API 模式，已废弃，保留兼容） */
   getEnhancedScript: (params = {}) => {
     return fetch(`${AI_API_BASE}/generate-enhanced`, {
