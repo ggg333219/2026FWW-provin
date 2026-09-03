@@ -46,6 +46,9 @@ export const teacherRagApi = {
     requestJson('/api/v1/rag/evidence', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      // 证据融合包含一次 LLM 摘要，真实环境通常会超过通用的 10 秒请求上限。
+      // 与后端 AI Client 的长任务窗口保持一致，避免后端成功但前端提前 Abort。
+      timeoutMs: 120000,
       body: JSON.stringify({
         query: params.query || '',
         context: params.context || {},
