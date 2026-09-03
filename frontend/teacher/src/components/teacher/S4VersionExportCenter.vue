@@ -18,6 +18,14 @@
           <input v-model="selectedFormat" type="radio" value="both" :disabled="exportIsActive" />
           <span class="fmt-label">同时导出</span>
         </label>
+        <label>
+          <input v-model="selectedFormat" type="radio" value="lesson_plan" :disabled="exportIsActive" />
+          <span class="fmt-label">📄 Word 标准教案</span>
+        </label>
+        <label>
+          <input v-model="selectedFormat" type="radio" value="interactive" :disabled="exportIsActive" />
+          <span class="fmt-label">🎮 HTML5 互动课件</span>
+        </label>
       </div>
 
       <!-- 操作按钮 -->

@@ -1,0 +1,13 @@
+terminal-security-audit
+
+License: Apache-2.0
+Declared attribution: terminal-skills
+Declared source map: Not declared in local SKILL.md metadata
+
+Packaging change: this repository adds LICENSES/ license and attribution
+records for redistribution compliance. No upstream Skill source content is
+modified by this packaging record.
+
+No separate upstream NOTICE text is present in the local Skill directory at the
+time this record was generated. On upgrade, retain any upstream NOTICE file and
+merge its required attribution notices into this file.

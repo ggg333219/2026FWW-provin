@@ -12,7 +12,7 @@ const authStore = useAuthStore()
 
 const handleLoginSuccess = (user) => {
   authStore.login(user)
-  const redirect = router.currentRoute.value.query.redirect || '/middle'
+  const redirect = router.currentRoute.value.query.redirect || '/courseware/create/s1-intent'
   router.push(redirect)
 }
 </script>
