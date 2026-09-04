@@ -7,6 +7,8 @@ import { teacherMaterialApi } from './materialApi'
 import { teacherGenerationApi } from './generationApi'
 import { teacherVersionApi } from './versionApi'
 import { teacherRagApi } from './ragApi'
+import { teacherOutlineApi } from './outlineApi'
+import { teacherInteractiveApi } from './interactiveApi'
 
 export const teacherV1Api = {
   health: async () => {
@@ -29,5 +31,7 @@ export const teacherV1Api = {
   material: teacherMaterialApi,
   generation: teacherGenerationApi,
   version: teacherVersionApi,
-  rag: teacherRagApi
+  rag: teacherRagApi,
+  outline: teacherOutlineApi,
+  interactive: teacherInteractiveApi
 }
