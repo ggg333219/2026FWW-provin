@@ -12,6 +12,7 @@
             <router-link :to="{ name: 'S2Material' }" class="pill">S2 资料</router-link>
             <router-link :to="{ name: 'S3Studio' }" class="pill">S3 生成</router-link>
             <span class="pill active">S4 版本</span>
+            <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
           </div>
         </div>
       </div>
@@ -278,7 +279,13 @@ function formatTime(iso) {
 </script>
 
 <style scoped>
-.s4-page { padding: 20px; min-height: calc(100vh - 140px); }
+.s4-page {
+  padding: 20px;
+  min-height: calc(100vh - 140px);
+  background:
+    radial-gradient(circle at 86% -15%, rgba(175, 221, 203, .2), transparent 30%),
+    linear-gradient(180deg, #fcfefd 0%, #f7faf8 100%);
+}
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .page-header h2 { margin: 0; font-size: 22px; color: #111827; }
 .page-header p { margin: 6px 0 0; font-size: 14px; color: #607a71; }
@@ -376,4 +383,12 @@ function formatTime(iso) {
 .node-preview-card strong { display: block; font-size: 13px; color: #1e293b; margin-bottom: 2px; }
 .node-preview-card small { font-size: 11px; color: #94a3b8; text-transform: uppercase; }
 .node-preview-card p { font-size: 12px; color: #64748b; margin: 6px 0 0; line-height: 1.4; }
+  .pill.back-pill {
+    background: #e8f0ed;
+    border-color: #c6d9d0;
+    color: #3d6b60;
+  }
+  .pill.back-pill:hover {
+    background: #d6e8e0;
+  }
 </style>

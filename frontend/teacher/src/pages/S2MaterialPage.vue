@@ -13,8 +13,9 @@
           <div class="step-pills">
             <router-link :to="{ name: 'S1Intent' }" class="pill">S1 意图</router-link>
             <span class="pill active">S2 资料</span>
-            <button class="pill pill-button" @click="requestContinue">S3 生成</button>
+            <button class="pill pill-button" @click="requestContinue" :disabled="navigatingToS3">{{ navigatingToS3 ? '跳转中...' : 'S3 生成' }}</button>
             <router-link :to="{ name: 'S4Version' }" class="pill">S4 版本</router-link>
+            <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
           </div>
         </div>
       </div>
@@ -56,6 +57,7 @@ const intentStore = useIntentStore()
 intentStore.initialize()
 
 const showNoEvidenceConfirm = ref(false)
+const navigatingToS3 = ref(false)
 
 const readEvidence = () => {
   if (isEvidencePacketUsable(materialStore.s3EvidencePayload)) return materialStore.s3EvidencePayload
@@ -73,7 +75,9 @@ const writeGenerationMode = (mode) => {
 }
 
 const requestContinue = () => {
+  if (navigatingToS3.value) return
   if (isEvidencePacketUsable(readEvidence())) {
+    navigatingToS3.value = true
     writeGenerationMode('with_evidence')
     router.push({ name: 'S3Studio' })
     return
@@ -82,6 +86,7 @@ const requestContinue = () => {
 }
 
 const confirmWithoutEvidence = () => {
+  navigatingToS3.value = true
   materialStore.clearEvidencePackets()
   writeGenerationMode('without_evidence')
   router.push({ name: 'S3Studio' })
@@ -108,6 +113,9 @@ const exitMockMode = () => {
 .s2-page {
   padding: 20px;
   min-height: calc(100vh - 140px);
+  background:
+    radial-gradient(circle at 86% -15%, rgba(175, 221, 203, .2), transparent 30%),
+    linear-gradient(180deg, #fcfefd 0%, #f7faf8 100%);
 }
 
 .page-header {
@@ -277,4 +285,12 @@ const exitMockMode = () => {
     flex-direction: column;
   }
 }
+  .pill.back-pill {
+    background: #e8f0ed;
+    border-color: #c6d9d0;
+    color: #3d6b60;
+  }
+  .pill.back-pill:hover {
+    background: #d6e8e0;
+  }
 </style>

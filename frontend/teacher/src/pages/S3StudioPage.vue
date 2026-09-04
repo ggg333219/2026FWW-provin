@@ -13,6 +13,7 @@
             <router-link :to="{ name: 'S2Material' }" class="pill">S2 资料</router-link>
             <span class="pill active">S3 生成</span>
             <router-link :to="{ name: 'S4Version' }" class="pill">S4 版本</router-link>
+            <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
           </div>
         </div>
       </div>
@@ -492,6 +493,9 @@ function handleError(msg) {
   padding: 20px;
   min-height: calc(100vh - 140px);
   overflow: hidden;
+  background:
+    radial-gradient(circle at 86% -15%, rgba(175, 221, 203, .2), transparent 30%),
+    linear-gradient(180deg, #fcfefd 0%, #f7faf8 100%);
 }
 .page-header {
   display: flex;
@@ -681,4 +685,12 @@ function handleError(msg) {
   .gen-control-bar { flex-direction: column; align-items: flex-start; }
   .phase-tabs { overflow-x: auto; }
 }
+  .pill.back-pill {
+    background: #e8f0ed;
+    border-color: #c6d9d0;
+    color: #3d6b60;
+  }
+  .pill.back-pill:hover {
+    background: #d6e8e0;
+  }
 </style>

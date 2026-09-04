@@ -8,7 +8,6 @@
         <div class="middle-subtitle">教学中间页</div>
 
         <button class="middle-side-btn primary" @click="enterNewFlow">📋 新建课件</button>
-        <button class="middle-side-btn" @click="switchView('home')">课程中间页</button>
         <button class="middle-side-btn" @click="switchView('platform')">平台管理</button>
       </aside>
 
