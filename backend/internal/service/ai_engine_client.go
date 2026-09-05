@@ -44,6 +44,10 @@ type AIEngine interface {
 	GenerationCreate(ctx context.Context, req GenerationCreateRequest) (*GenerationCreateResponse, error)
 	GenerationStatus(ctx context.Context, taskID string) (*GenerationStatusResponse, error)
 
+	// ---- P1: S3 大纲 → 内容生成（独立阶段）----
+	GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error)
+	ContentStatus(ctx context.Context, contentID string) (*GenContentStatusResponse, error)
+
 	// ---- S4: 个性化 & 版本 & 导出 ----
 	GenerationModify(ctx context.Context, req GenerationModifyRequest) (*GenerationModifyResponse, error)
 	VersionHistory(ctx context.Context, genID string) (*VersionHistoryResponse, error)
@@ -52,6 +56,9 @@ type AIEngine interface {
 	VersionLock(ctx context.Context, genID string) (*VersionLockResponse, error)
 	ExportCreate(ctx context.Context, genID string, req ExportCreateRequest) (*ExportCreateResponse, error)
 	ExportStatus(ctx context.Context, jobID string) (*ExportStatusResponse, error)
+
+	// ---- S3 生成终稿：从确认内容 → 版本快照（PPT 步骤）----
+	GenerationFinalize(ctx context.Context, req GenerationFinalizeRequest) (*GenerationFinalizeResponse, error)
 }
 
 type aiEngineClient struct {
@@ -539,13 +546,18 @@ type TeachingNodeItem struct {
 }
 
 type GenerationCreateRequest struct {
-	SessionID      string          `json:"session_id"`
-	CourseID       string          `json:"course_id,omitempty"`
-	Title          string          `json:"title,omitempty"`
-	Markdown       string          `json:"markdown,omitempty"`
-	Intent         *IntentSummary  `json:"intent,omitempty"`
-	EvidencePacket *EvidencePacket `json:"evidence_packet,omitempty"`
-	TemplateID     string          `json:"template_id,omitempty"`
+	SessionID        string          `json:"session_id"`
+	CourseID         string          `json:"course_id,omitempty"`
+	Title            string          `json:"title,omitempty"`
+	Markdown         string          `json:"markdown,omitempty"`
+	Intent           *IntentSummary  `json:"intent,omitempty"`
+	EvidencePacket   *EvidencePacket `json:"evidence_packet,omitempty"`
+	TemplateID       string          `json:"template_id,omitempty"`
+	OutlineID        string          `json:"outline_id,omitempty"`
+	OutlineVersion   int             `json:"outline_version,omitempty"`
+	OutlineConfirmed bool            `json:"outline_confirmed,omitempty"`
+	OutlineNodes     []OutlineNode   `json:"outline_nodes,omitempty"`
+	GenerateMode     string          `json:"generate_mode,omitempty"`
 }
 
 type GenerationCreateResponse struct {
@@ -553,6 +565,8 @@ type GenerationCreateResponse struct {
 	GenerationID   string `json:"generation_id"`
 	Status         string `json:"status"`
 	GenerationType string `json:"generation_type,omitempty"`
+	OutlineID      string `json:"outline_id,omitempty"`
+	OutlineVersion int    `json:"outline_version,omitempty"`
 }
 
 // GenerationStatusResponse —— S3 任务状态响应。
@@ -560,14 +574,17 @@ type GenerationCreateResponse struct {
 // 进度 canonical 为 ProgressPct（0~100 百分制，前端 generationStore 优先读它）；
 // Progress 为引擎历史遗留的 0~1 小数副本，仅作前端兼容保留，禁止新逻辑读写。
 type GenerationStatusResponse struct {
-	TaskID      string             `json:"task_id"`
-	Status      string             `json:"status"`
-	Stage       string             `json:"stage,omitempty"`
-	ProgressPct float64            `json:"progress_pct"`
-	CurrentNode string             `json:"current_node,omitempty"`
-	Nodes       []TeachingNodeItem `json:"nodes,omitempty"`
-	PreviewURL  string             `json:"preview_url,omitempty"`
-	Error       string             `json:"error,omitempty"` // 失败原因纯文本（结构化 error_code/message 属 P1，暂不引入）
+	TaskID         string             `json:"task_id"`
+	GenerationID   string             `json:"generation_id,omitempty"`
+	OutlineID      string             `json:"outline_id,omitempty"`
+	OutlineVersion int                `json:"outline_version,omitempty"`
+	Status         string             `json:"status"`
+	Stage          string             `json:"stage,omitempty"`
+	ProgressPct    float64            `json:"progress_pct"`
+	CurrentNode    string             `json:"current_node,omitempty"`
+	Nodes          []TeachingNodeItem `json:"nodes,omitempty"`
+	PreviewURL     string             `json:"preview_url,omitempty"`
+	Error          string             `json:"error,omitempty"` // 失败原因纯文本（结构化 error_code/message 属 P1，暂不引入）
 	// 引擎侧前端兼容字段（progress 为 0~1 小数、stage_text 为阶段文案），透传给前端。
 	Progress  float64 `json:"progress,omitempty"`
 	StageText string  `json:"stage_text,omitempty"`
@@ -673,6 +690,88 @@ type ExportStatusResponse struct {
 	UploadStatus string `json:"upload_status,omitempty"`
 	MinioPath    string `json:"minio_path,omitempty"`
 	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+// =============================================================================
+// S3 生成终稿：从确认内容 → 版本快照（PPT 步骤）
+// =============================================================================
+
+type GenerationFinalizeRequest struct {
+	GenerationID   string             `json:"generation_id,omitempty"`
+	Nodes          []TeachingNodeItem `json:"nodes"`
+	CourseName     string             `json:"course_name,omitempty"`
+	Summary        string             `json:"summary,omitempty"`
+	OutlineID      string             `json:"outline_id,omitempty"`
+	OutlineVersion int                `json:"outline_version,omitempty"`
+}
+
+type GenerationFinalizeResponse struct {
+	GenerationID  string `json:"generation_id"`
+	VersionNumber int    `json:"version_number"`
+	Status        string `json:"status"`
+}
+
+func (c *aiEngineClient) GenerationFinalize(ctx context.Context, req GenerationFinalizeRequest) (*GenerationFinalizeResponse, error) {
+	var result GenerationFinalizeResponse
+	if err := c.postJSON(ctx, "/api/v1/gen/finalize", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// =============================================================================
+// P1: S3 大纲 → 内容生成（独立阶段）
+// =============================================================================
+
+type GenContentRequest struct {
+	Nodes            []TeachingNodeItem `json:"nodes"`
+	ContextMarkdown  string             `json:"context_markdown"`
+	CourseName       string             `json:"course_name"`
+	Mode             string             `json:"mode"`
+	Enhanced         bool               `json:"enhanced"`
+	OutlineID        string             `json:"outline_id"`
+	OutlineVersion   int                `json:"outline_version"`
+}
+
+type GenContentStatusResponse struct {
+	ContentID      string             `json:"content_id"`
+	Status         string             `json:"status"`
+	ProgressPct    float64            `json:"progress_pct"`
+	CurrentNodeID  string             `json:"current_node_id"`
+	TotalNodes     int                `json:"total_nodes"`
+	CompletedNodes int                `json:"completed_nodes"`
+	Nodes          []TeachingNodeItem `json:"nodes,omitempty"`
+	Error          string             `json:"error,omitempty"`
+}
+
+func (c *aiEngineClient) GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error) {
+	var result GenContentStatusResponse
+	if err := c.postJSON(ctx, "/gen/content", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) ContentStatus(ctx context.Context, contentID string) (*GenContentStatusResponse, error) {
+	var result GenContentStatusResponse
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.baseURL+"/gen/content/status/"+contentID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("构造内容状态请求失败: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("查询内容生成状态失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return nil, fmt.Errorf("查询内容状态返回异常: %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("解析内容状态响应失败: %w", err)
+	}
+	return &result, nil
 }
 
 // =============================================================================
@@ -891,6 +990,22 @@ func (c *aiEngineClient) KnowledgeUpload(ctx context.Context, req *KnowledgeUplo
 func (c *aiEngineClient) GenerationCreate(ctx context.Context, req GenerationCreateRequest) (*GenerationCreateResponse, error) {
 	var result GenerationCreateResponse
 	if err := c.postJSON(ctx, "/api/v1/gen/create", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) GenerateOutline(ctx context.Context, req OutlineGenerateRequest) (*OutlineGenerateResponse, error) {
+	var result OutlineGenerateResponse
+	if err := c.postJSON(ctx, "/gen/outline", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error) {
+	var result OutlineReviseAIResponse
+	if err := c.postJSON(ctx, "/gen/outline/revise", req, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

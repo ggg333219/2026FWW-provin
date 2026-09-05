@@ -122,9 +122,11 @@ func RegisterNewSkillRoutes(
 	convHandler *handler.ConversationHandler,
 	parseHandler *handler.ParseHandler,
 	knowledgeHandler *handler.KnowledgeHandler,
+	outlineHandler *handler.OutlineHandler,
 	genHandler *handler.GenerationHandler,
 	versionHandler *handler.VersionHandler,
 	exportHandler *handler.ExportHandler,
+	contentHandler *handler.ContentHandler,
 ) {
 	// ---- S1: 意图理解 ----
 	intent := v1.Group("/intent")
@@ -153,6 +155,16 @@ func RegisterNewSkillRoutes(
 		knowledge.POST("/upload", knowledgeHandler.Upload)
 	}
 
+	// ---- S3: 教师确认前的大纲草稿 ----
+	outlines := v1.Group("/outlines")
+	{
+		outlines.POST("", outlineHandler.Create)
+		outlines.GET("/:outline_id", outlineHandler.Get)
+		outlines.PUT("/:outline_id", outlineHandler.Save)
+		outlines.POST("/:outline_id/revise", outlineHandler.Revise)
+		outlines.POST("/:outline_id/confirm", outlineHandler.Confirm)
+	}
+
 	// ---- S3: 课件生成 ----
 	gen := v1.Group("/gen")
 	{
@@ -161,6 +173,15 @@ func RegisterNewSkillRoutes(
 		gen.POST("/preview", genHandler.PreviewHTML)
 		gen.GET("/preview/:gen_id", genHandler.Preview)
 		gen.POST("/modify", genHandler.Modify)
+		gen.POST("/finalize", genHandler.Finalize)
+	}
+
+	// ---- P1: S3 大纲 → 内容生成（独立阶段）----
+	content := v1.Group("/gen")
+	{
+		content.POST("/content", contentHandler.Create)
+		content.GET("/content/status/:content_id", contentHandler.Status)
+		content.POST("/content/modify", contentHandler.Modify)
 	}
 
 	// ---- S4: 版本管理 ----

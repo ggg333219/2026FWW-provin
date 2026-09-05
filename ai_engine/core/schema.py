@@ -438,6 +438,8 @@ class GenerationTask(BaseModel):
     task_id: str = ""
     session_id: str = ""
     generation_id: str = ""
+    outline_id: str = ""
+    outline_version: int = 0
     status: GenerationStatus = GenerationStatus.PENDING
     stage: GenerationStage = GenerationStage.INTENT_LOCKED
     progress_pct: float = 0.0
@@ -603,6 +605,11 @@ class GenerationCreateRequest(BaseModel):
     intent: IntentSummary = Field(default_factory=IntentSummary)
     evidence_packet: Optional[EvidencePacket] = None
     template_id: str = "default"
+    outline_id: str = ""
+    outline_version: int = 0
+    outline_confirmed: bool = False
+    outline_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    generate_mode: str = "page_incremental"
 
 
 class GenerationCreateResponse(BaseModel):
@@ -610,10 +617,15 @@ class GenerationCreateResponse(BaseModel):
     generation_id: str = ""
     status: GenerationStatus = GenerationStatus.PENDING
     generation_type: str = "ppt"
+    outline_id: str = ""
+    outline_version: int = 0
 
 
 class GenerationStatusResponse(BaseModel):
     task_id: str = ""
+    generation_id: str = ""
+    outline_id: str = ""
+    outline_version: int = 0
     status: GenerationStatus = GenerationStatus.PENDING
     stage: GenerationStage = GenerationStage.INTENT_LOCKED
     progress_pct: float = 0.0

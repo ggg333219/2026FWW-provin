@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -28,6 +29,7 @@ const (
 	difySceneGenerationStatus  = "generation_status"
 	difySceneGenerationPreview = "generation_preview"
 	difySceneGenerationModify  = "generation_modify"
+	difySceneGenerationFinalize = "generation_finalize"
 	difySceneVersionHistory    = "version_history"
 	difySceneVersionLoad       = "version_load"
 	difySceneVersionRollback   = "version_rollback"
@@ -370,6 +372,26 @@ func (c *DifyClient) GenerationModify(ctx context.Context, req GenerationModifyR
 	return &out, nil
 }
 
+func (c *DifyClient) GenerationFinalize(ctx context.Context, req GenerationFinalizeRequest) (*GenerationFinalizeResponse, error) {
+	var out GenerationFinalizeResponse
+	inputs := map[string]any{"generation_id": req.GenerationID, "request": req}
+	engine, hasFallback := c.fallbackEngine()
+	var fallback func() error
+	if hasFallback {
+		fallback = func() error {
+			result, err := engine.GenerationFinalize(ctx, req)
+			if err == nil {
+				out = *result
+			}
+			return err
+		}
+	}
+	if err := c.runDifyScene(ctx, difySceneGenerationFinalize, inputs, &out, fallback); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *DifyClient) VersionHistory(ctx context.Context, genID string) (*VersionHistoryResponse, error) {
 	var out VersionHistoryResponse
 	engine, hasFallback := c.fallbackEngine()
@@ -484,6 +506,23 @@ func (c *DifyClient) ExportStatus(ctx context.Context, jobID string) (*ExportSta
 		return nil, err
 	}
 	return &out, nil
+}
+
+// P1: 内容生成阶段 — 委托给 fallback engine（aiEngineClient）
+func (c *DifyClient) GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error) {
+	engine, hasFallback := c.fallbackEngine()
+	if !hasFallback {
+		return nil, errors.New("DifyClient 不支持内容生成，需要 AI Engine fallback")
+	}
+	return engine.GenerateContent(ctx, req)
+}
+
+func (c *DifyClient) ContentStatus(ctx context.Context, contentID string) (*GenContentStatusResponse, error) {
+	engine, hasFallback := c.fallbackEngine()
+	if !hasFallback {
+		return nil, errors.New("DifyClient 不支持内容状态查询，需要 AI Engine fallback")
+	}
+	return engine.ContentStatus(ctx, contentID)
 }
 
 var _ AIEngine = (*DifyClient)(nil)

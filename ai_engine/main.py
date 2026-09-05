@@ -40,7 +40,8 @@ from ai_engine.rag.router import _get_retriever, _reranker, _synthesizer
 from ai_engine.core.schema import (
     GenerationCreateRequest, GenerationCreateResponse,
     GenerationStatusResponse, GenerationStatus, GenerationStage,
-    GenerationTask, ExportRequest, ExportFormat,
+    GenerationTask, TeachingNode, IntentSummary,
+    ExportRequest, ExportFormat,
     ExportStatusResponse, ExportStatus, ExportJob,
     RollbackRequest,
 )
@@ -603,6 +604,12 @@ class GenOutlineRequest(BaseModel):
     course_name: str | None = None
 
 
+class GenOutlineReviseRequest(BaseModel):
+    """根据教师指令生成大纲修订候选，不负责保存或确认。"""
+    nodes: list[dict[str, Any]]
+    message: str
+
+
 class GenNodesRequest(BaseModel):
     """生成节点讲稿请求"""
     nodes: list[dict[str, Any]]
@@ -661,6 +668,15 @@ async def generate_outline(req: GenOutlineRequest):
         raise _llm_endpoint_error(e, "大纲构建失败")
 
 
+@app.post("/gen/outline/revise")
+async def revise_outline(req: GenOutlineReviseRequest):
+    """[S3] 仅计算大纲修订候选；版本和确认态仍由 Go 后端管理。"""
+    try:
+        return await asyncio.to_thread(OutlineBuilder().revise, req.nodes, req.message)
+    except Exception as e:
+        raise _llm_endpoint_error(e, "大纲修订失败")
+
+
 @app.post("/gen/nodes")
 async def generate_nodes(req: GenNodesRequest):
     """[S3] 逐节点生成讲稿"""
@@ -673,6 +689,212 @@ async def generate_nodes(req: GenNodesRequest):
         return result
     except Exception as e:
         raise _llm_endpoint_error(e, "节点生成失败")
+
+
+class GenContentRequest(BaseModel):
+    """生成节点内容请求（P1：大纲确认后的内容生成阶段）"""
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    """大纲节点列表（已确认的大纲节点）"""
+    context_markdown: str = ""
+    course_name: str = "课件"
+    mode: str = "llm"
+    enhanced: bool = False
+    outline_id: str = ""
+    outline_version: int = 0
+
+
+class GenContentStatusResponse(BaseModel):
+    """内容生成状态响应"""
+    content_id: str = ""
+    status: str = "pending"  # pending / generating / done / failed
+    progress_pct: float = 0.0
+    current_node_id: str = ""
+    total_nodes: int = 0
+    completed_nodes: int = 0
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+# — P1: S3 大纲 → 内容生成（独立阶段，区别于全流程 gen/create）—
+
+import asyncio
+import threading
+import uuid
+
+# 进程内内容生成任务存储（内存层）
+_content_tasks: dict[str, dict[str, Any]] = {}
+_content_tasks_lock = threading.Lock()
+
+
+def _persist_content_task_sync(content_id: str, data: dict) -> None:
+    """在同步 daemon 线程中持久化内容生成任务快照。"""
+    try:
+        if getattr(_task_store, "is_redis_available", False):
+            import asyncio as _asyncio
+            try:
+                _asyncio.run(_task_store.save_task(f"content:{content_id}", data))
+            except Exception:
+                pass
+        _task_store._mem.save_task(f"content:{content_id}", data)
+    except Exception:
+        pass
+
+
+@app.post("/gen/content", response_model=GenContentStatusResponse)
+async def generate_content(req: GenContentRequest):
+    """[S3 P1] 大纲确认后的内容生成：逐节点生成讲稿内容。
+
+    对应 Go 端：ContentHandler.Create → AIEngine.GenerateContent
+    与 /api/v1/gen/create 的区别：
+      - /gen/create 是全流程（outline → nodes → PPT）
+      - /gen/content 仅生成节点讲稿内容（大纲 → 内容），供教师确认后再生成 PPT
+    """
+    if not req.nodes:
+        raise HTTPException(status_code=400, detail="nodes 不能为空")
+
+    content_id = f"content_{uuid.uuid4().hex[:12]}"
+    now = datetime.utcnow().isoformat() + "Z"
+
+    task_data = {
+        "content_id": content_id,
+        "status": "generating",
+        "progress_pct": 0.0,
+        "current_node_id": "",
+        "total_nodes": len(req.nodes),
+        "completed_nodes": 0,
+        "nodes": [],
+        "error": None,
+        "outline_id": req.outline_id,
+        "outline_version": req.outline_version,
+        "mode": req.mode,
+        "enhanced": req.enhanced,
+        "course_name": req.course_name,
+        "created_at": now,
+    }
+
+    with _content_tasks_lock:
+        _content_tasks[content_id] = task_data
+    _persist_content_task_sync(content_id, task_data)
+
+    # 后台逐节点生成内容
+    thread_args = (content_id, req)
+    threading.Thread(target=_run_content_pipeline, args=thread_args, daemon=True).start()
+
+    return GenContentStatusResponse(
+        content_id=content_id,
+        status="generating",
+        progress_pct=0.0,
+        total_nodes=len(req.nodes),
+        completed_nodes=0,
+    )
+
+
+def _run_content_pipeline(content_id: str, req: GenContentRequest):
+    """后台内容生成管道：逐节点生成讲稿（同步，daemon 线程）"""
+    with _content_tasks_lock:
+        task = _content_tasks.get(content_id)
+        if not task:
+            return
+
+    try:
+        generator = NodeGenerator()
+        nodes = req.nodes
+        total = len(nodes)
+        completed = []
+        errors = []
+
+        for idx, node in enumerate(nodes):
+            try:
+                task["current_node_id"] = node.get("node_id", "")
+                pct = ((idx) / total) * 100.0 if total > 0 else 0.0
+                task["progress_pct"] = pct
+                with _content_tasks_lock:
+                    _content_tasks[content_id] = task
+                _persist_content_task_sync(content_id, task)
+
+                if req.enhanced:
+                    result = generator.generate_enhanced(nodes, req.context_markdown, req.course_name)
+                    script_data = next(
+                        (s for s in result.get("scripts", []) if s.get("node_id") == node.get("node_id")),
+                        {"script": "", "segments": []},
+                    )
+                else:
+                    script_data = generator.generate_single(node, req.course_name)
+
+                merged = {**node, **script_data}
+                completed.append(merged)
+                task["completed_nodes"] = idx + 1
+                task["nodes"] = list(completed)
+                with _content_tasks_lock:
+                    _content_tasks[content_id] = task
+                _persist_content_task_sync(content_id, task)
+
+            except Exception as node_err:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "[Content Pipeline] node %s error: %s", node.get("node_id"), str(node_err)
+                )
+                errors.append({"node_id": node.get("node_id"), "error": str(node_err)})
+                completed.append({**node, "script": "", "segments": [], "error": str(node_err)})
+                task["completed_nodes"] = idx + 1
+                task["nodes"] = list(completed)
+                with _content_tasks_lock:
+                    _content_tasks[content_id] = task
+                _persist_content_task_sync(content_id, task)
+
+        # 完成
+        task["status"] = "done"
+        task["progress_pct"] = 100.0
+        task["current_node_id"] = ""
+        if errors:
+            task["error"] = f"{len(errors)} 个节点生成失败"
+        with _content_tasks_lock:
+            _content_tasks[content_id] = task
+        _persist_content_task_sync(content_id, task)
+
+    except Exception as e:
+        import logging, traceback
+        logging.getLogger(__name__).error(
+            "[Content Pipeline ERROR] content_id=%s error=%s\n%s",
+            content_id, str(e), traceback.format_exc()
+        )
+        task["status"] = "failed"
+        task["error"] = str(e)
+        with _content_tasks_lock:
+            _content_tasks[content_id] = task
+        _persist_content_task_sync(content_id, task)
+
+
+@app.get("/gen/content/status/{content_id}", response_model=GenContentStatusResponse)
+async def content_status(content_id: str):
+    """[S3 P1] 查询内容生成任务状态。
+
+    对应 Go 端：ContentHandler.Status → AIEngine.ContentStatus
+    """
+    with _content_tasks_lock:
+        task = _content_tasks.get(content_id)
+
+    # Redis 回退
+    if not task:
+        redis_data = await _task_store.load_task(f"content:{content_id}")
+        if redis_data:
+            task = redis_data
+            with _content_tasks_lock:
+                _content_tasks[content_id] = task
+
+    if not task:
+        raise HTTPException(status_code=404, detail="内容生成任务不存在")
+
+    return GenContentStatusResponse(
+        content_id=task.get("content_id", content_id),
+        status=task.get("status", "pending"),
+        progress_pct=task.get("progress_pct", 0.0),
+        current_node_id=task.get("current_node_id", ""),
+        total_nodes=task.get("total_nodes", 0),
+        completed_nodes=task.get("completed_nodes", 0),
+        nodes=task.get("nodes", []),
+        error=task.get("error"),
+    )
 
 
 @app.post("/gen/node/single")
@@ -743,6 +965,84 @@ async def generate_interactive(req: InteractiveRequest):
         raise _llm_endpoint_error(e, "互动内容生成失败")
 
 
+# — S3 生成终稿（从确认内容 → 版本快照 / PPT）—
+
+class GenFinalizeRequest(BaseModel):
+    """生成终稿请求：从教师确认的内容节点创建版本快照。"""
+    generation_id: str | None = None
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    course_name: str = "课件"
+    summary: str = "教师确认终稿"
+    outline_id: str = ""
+    outline_version: int = 0
+
+
+class GenFinalizeResponse(BaseModel):
+    """生成终稿响应"""
+    generation_id: str
+    version_number: int
+    status: str
+
+
+@app.post("/api/v1/gen/finalize", response_model=GenFinalizeResponse)
+async def gen_finalize(req: GenFinalizeRequest):
+    """[S3] 生成终稿：从确认的内容节点创建版本快照。
+
+    对应 Go 端：GenerationHandler.Finalize → AIEngine.GenerationFinalize
+
+    流程：
+      1. 接收确认后的内容节点
+      2. 创建 generation 任务（状态 done）
+      3. 保存版本快照（PPT 步骤）
+      4. 返回 generation_id 和 version_number
+
+    与 /api/v1/gen/create 的区别：
+      - /gen/create 是全流程（outline → nodes → PPT），含 LLM 生成
+      - /gen/finalize 仅做版本快照，节点内容由前端/后端确认后直接传入
+    """
+    if not req.nodes:
+        raise HTTPException(status_code=400, detail="nodes 不能为空")
+
+    gen_id = req.generation_id or f"course_{uuid.uuid4().hex[:12]}"
+
+    # 创建已完成 generation 任务
+    task = GenerationTask(
+        task_id=f"gen_{uuid.uuid4().hex[:12]}",
+        session_id=gen_id,
+        generation_id=gen_id,
+        outline_id=req.outline_id,
+        outline_version=req.outline_version,
+        status=GenerationStatus.DONE,
+        stage=GenerationStage.DONE,
+        progress_pct=100.0,
+        intent=IntentSummary(topic=req.course_name),
+        nodes=[TeachingNode.model_validate(node) for node in req.nodes],
+        created_at=datetime.now(),
+    )
+
+    with _gen_tasks_lock:
+        _gen_tasks[task.task_id] = task
+    await _persist_generation_task(task)
+
+    # 保存版本快照
+    vm = get_version_manager()
+    snapshot = vm.save_snapshot(
+        generation_id=gen_id,
+        nodes=req.nodes,
+        summary=req.summary,
+        metadata={
+            "outline_id": req.outline_id,
+            "outline_version": req.outline_version,
+        },
+    )
+
+    return GenFinalizeResponse(
+        generation_id=gen_id,
+        version_number=snapshot.version_number,
+        status="done",
+    )
+
+
 # — S4 个性化满足接口 —
 
 @app.post("/api/v1/gen/preview")
@@ -788,18 +1088,37 @@ async def render_preview(req: PreviewRequest):
 
 @app.post("/api/v1/gen/modify")
 async def modify_nodes(req: ModifyRequest):
-    """[S4] 修改命令：应用编辑命令到节点树"""
+    """[S4] 修改命令：应用编辑命令到节点树
+
+    支持两种数据源：
+      1. generation_id 以 "gen_" 开头 → 从版本快照加载（原有行为）
+      2. generation_id 以 "content_" 开头 → 从内容任务加载（新增：支持内容修改）
+      3. 直接传 nodes → 内联节点（原有行为）
+    """
     parser = CommandParser()
     patcher = NodePatcher()
 
     # 版本管理页面只持有 generation_id；Studio 可以直接提交当前节点树。
-    # 两种调用都统一为同一条修改链路，避免前端重复读取快照。
+    # 新增：内容修改场景下 generation_id 以 "content_" 开头，从 _content_tasks 加载。
     nodes = req.nodes
+    is_content_task = False
     if not nodes and req.generation_id:
-        snapshot = get_version_manager().load_version(req.generation_id)
-        if not snapshot:
-            raise HTTPException(status_code=404, detail="版本不存在")
-        nodes = [node.model_dump() if hasattr(node, "model_dump") else node for node in snapshot.nodes_snapshot]
+        if req.generation_id.startswith("content_"):
+            # 从内容任务加载节点（支持内容修改）
+            with _content_tasks_lock:
+                content_task = _content_tasks.get(req.generation_id)
+            if not content_task:
+                raise HTTPException(status_code=404, detail="内容任务不存在")
+            nodes = content_task.get("nodes", [])
+            is_content_task = True
+            if not nodes:
+                raise HTTPException(status_code=400, detail="内容任务无节点数据")
+        else:
+            # 从版本快照加载（原有行为）
+            snapshot = get_version_manager().load_version(req.generation_id)
+            if not snapshot:
+                raise HTTPException(status_code=404, detail="版本不存在")
+            nodes = [node.model_dump() if hasattr(node, "model_dump") else node for node in snapshot.nodes_snapshot]
     if not nodes:
         raise HTTPException(status_code=400, detail="nodes 或 generation_id 至少提供一个")
 
@@ -823,11 +1142,18 @@ async def modify_nodes(req: ModifyRequest):
     try:
         result = await asyncio.to_thread(patcher.apply, nodes, parse_result.commands, regenerate_fn)
     except Exception as e:
-        # regenerate=True 时 patcher 内部会调用 LLM 重生成节点，需兜底超时/网络异常
         raise _llm_endpoint_error(e, "修改命令执行失败")
 
+    # 保存修改结果
     version_number = None
-    if req.generation_id and not result.errors:
+    if is_content_task and req.generation_id and not result.errors:
+        # 内容任务：将修改后的节点写回 _content_tasks
+        with _content_tasks_lock:
+            if req.generation_id in _content_tasks:
+                _content_tasks[req.generation_id]["nodes"] = result.nodes
+                _persist_content_task_sync(req.generation_id, _content_tasks[req.generation_id])
+    elif req.generation_id and not result.errors and not is_content_task:
+        # 版本快照：保存新版本（原有行为）
         version = get_version_manager().save_snapshot(
             generation_id=req.generation_id,
             nodes=result.nodes,
@@ -835,8 +1161,7 @@ async def modify_nodes(req: ModifyRequest):
         )
         version_number = version.version_number
 
-        # ── 内存数据同步：磁盘快照更新后，刷新进程内 _gen_tasks 中的任务数据 ──
-        # 解决前端轮询返回旧数据、数据状态不一致的核心阻断 BUG
+        # 内存数据同步
         if req.generation_id:
             vm = get_version_manager()
             latest = vm.load_version(req.generation_id)
@@ -845,7 +1170,6 @@ async def modify_nodes(req: ModifyRequest):
                     n.model_dump() if hasattr(n, "model_dump") else n
                     for n in latest.nodes_snapshot
                 ]
-                # 遍历内存任务，找到对应的 generation_id 并同步更新
                 for tid, task in _gen_tasks.items():
                     if task.generation_id == req.generation_id:
                         task.nodes = refreshed_nodes
@@ -1053,6 +1377,14 @@ async def gen_create(req: GenerationCreateRequest):
 
     对应 Go 端：GenerationHandler.Create → AIEngine.GenerationCreate
     """
+    if req.outline_id:
+        if not req.outline_confirmed:
+            raise HTTPException(status_code=409, detail="大纲尚未确认")
+        if req.outline_version <= 0:
+            raise HTTPException(status_code=409, detail="大纲版本无效")
+        if not req.outline_nodes:
+            raise HTTPException(status_code=409, detail="已确认大纲缺少节点")
+
     task_id = f"gen_{uuid.uuid4().hex[:12]}"
     gen_id = f"course_{uuid.uuid4().hex[:12]}"
 
@@ -1068,6 +1400,8 @@ async def gen_create(req: GenerationCreateRequest):
         task_id=task_id,
         session_id=req.session_id or req.course_id,
         generation_id=gen_id,
+        outline_id=req.outline_id,
+        outline_version=req.outline_version,
         status=GenerationStatus.PENDING,
         stage=GenerationStage.INTENT_LOCKED,
         progress_pct=0.0,
@@ -1091,6 +1425,8 @@ async def gen_create(req: GenerationCreateRequest):
         generation_id=gen_id,
         status=GenerationStatus.PENDING,
         generation_type="ppt" if not req.intent.output_format else (req.intent.output_format[0] if req.intent.output_format else "ppt"),
+        outline_id=req.outline_id,
+        outline_version=req.outline_version,
     )
 
 
@@ -1172,15 +1508,28 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         task.stage = GenerationStage.STRUCTURING
         task.progress_pct = 30.0
         _persist_task_sync(task)
-        builder = OutlineBuilder()
-        # 有 markdown 时从 markdown 构建节点树（利用已有课件内容），否则从 intent 构建
-        if req.markdown:
-            outline = builder.build_from_markdown(req.markdown, req.intent.topic or "课件")
+        if req.outline_id:
+            # 新流程：只使用 Go 已确认并注入的指定版本大纲，禁止重新生成覆盖。
+            nodes = []
+            for raw_node in req.outline_nodes:
+                node = dict(raw_node)
+                node_type = str(node.get("node_type") or node.get("type") or "slide")
+                # 前端大纲词汇只在 AI 输入边界映射；Go 保存的教师大纲保持原值。
+                if node_type in {"content", "summary"}:
+                    node_type = "slide"
+                node["node_type"] = node_type
+                node["type"] = node_type
+                nodes.append(node)
         else:
-            intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
-            outline = builder.build(intent_dict, evidence_dict)
-        nodes = outline.get("nodes", [])
-        task.nodes = nodes
+            # 兼容旧调用：未携带 outline_id 时仍执行原有一键生成流程。
+            builder = OutlineBuilder()
+            if req.markdown:
+                outline = builder.build_from_markdown(req.markdown, req.intent.topic or "课件")
+            else:
+                intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
+                outline = builder.build(intent_dict, evidence_dict)
+            nodes = outline.get("nodes", [])
+        task.nodes = [TeachingNode.model_validate(node) for node in nodes]
         task.progress_pct = 50.0
 
         # Stage 4: 讲稿生成（增强版）
@@ -1239,7 +1588,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             vr = validator.validate(n)
             n = validator.compute_scaled_font(n, vr)
             validated_nodes.append(n)
-        task.nodes = validated_nodes
+        task.nodes = [TeachingNode.model_validate(node) for node in validated_nodes]
         merged_nodes = validated_nodes
 
         # Stage 6: 保存版本快照
@@ -1251,6 +1600,10 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             generation_id=task.generation_id,
             nodes=merged_nodes,
             summary="初稿",
+            metadata={
+                "outline_id": req.outline_id,
+                "outline_version": req.outline_version,
+            },
         )
 
         # 完成
@@ -1310,6 +1663,9 @@ async def gen_status(task_id: str):
 
     return GenerationStatusResponse(
         task_id=task.task_id,
+        generation_id=task.generation_id,
+        outline_id=task.outline_id,
+        outline_version=task.outline_version,
         status=task.status,
         stage=task.stage,
         progress_pct=task.progress_pct,

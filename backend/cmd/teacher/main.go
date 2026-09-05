@@ -15,9 +15,9 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
+	"smart-teaching-backend/internal/database/sqlmigrate"
 	"smart-teaching-backend/internal/handler"
 	"smart-teaching-backend/internal/model"
-	"smart-teaching-backend/internal/database/sqlmigrate"
 	"smart-teaching-backend/internal/router"
 	"smart-teaching-backend/internal/service"
 	"smart-teaching-backend/pkg/config"
@@ -127,9 +127,12 @@ func main() {
 	convHandler := handler.NewConversationHandler(aiClient)
 	parseHandler := handler.NewParseHandler(aiClient)
 	knowledgeHandler := handler.NewKnowledgeHandler(aiClient)
-	genHandler := handler.NewGenerationHandler(aiClient)
+	outlineService := service.NewOutlineService(aiClient)
+	outlineHandler := handler.NewOutlineHandler(outlineService)
+	genHandler := handler.NewGenerationHandler(aiClient, outlineService)
 	versionHandler := handler.NewVersionHandler(aiClient)
 	exportHandler := handler.NewExportHandler(aiClient)
+	contentHandler := handler.NewContentHandler(aiClient)
 
 	r := newBaseEngine(cfg.Server.Mode)
 
@@ -145,8 +148,8 @@ func main() {
 	// 4 Skill + KB 新路由（v1 子路由）
 	skillV1 := api.Group("/v1")
 	router.RegisterNewSkillRoutes(skillV1,
-		convHandler, parseHandler, knowledgeHandler,
-		genHandler, versionHandler, exportHandler,
+		convHandler, parseHandler, knowledgeHandler, outlineHandler,
+		genHandler, versionHandler, exportHandler, contentHandler,
 	)
 
 	applogger.Info("教师端服务运行中", zap.Int("port", 8082))
@@ -193,9 +196,12 @@ func newBaseEngine(mode string) *gin.Engine {
 func runS1Standalone(mode string, aiClient service.AIEngine) {
 	r := newBaseEngine(mode)
 	convHandler := handler.NewConversationHandler(aiClient)
-	genHandler := handler.NewGenerationHandler(aiClient)
+	outlineService := service.NewOutlineService(aiClient)
+	outlineHandler := handler.NewOutlineHandler(outlineService)
+	genHandler := handler.NewGenerationHandler(aiClient, outlineService)
 	versionHandler := handler.NewVersionHandler(aiClient)
 	exportHandler := handler.NewExportHandler(aiClient)
+	contentHandler := handler.NewContentHandler(aiClient)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "UP", "mode": "s1-standalone"})
@@ -208,6 +214,15 @@ func runS1Standalone(mode string, aiClient service.AIEngine) {
 		intent.POST("/confirm", convHandler.ConfirmIntent)
 	}
 
+	outlines := r.Group("/api/v1/outlines")
+	{
+		outlines.POST("", outlineHandler.Create)
+		outlines.GET("/:outline_id", outlineHandler.Get)
+		outlines.PUT("/:outline_id", outlineHandler.Save)
+		outlines.POST("/:outline_id/revise", outlineHandler.Revise)
+		outlines.POST("/:outline_id/confirm", outlineHandler.Confirm)
+	}
+
 	// S3: 课件生成
 	gen := r.Group("/api/v1/gen")
 	{
@@ -215,8 +230,15 @@ func runS1Standalone(mode string, aiClient service.AIEngine) {
 		gen.GET("/status/:task_id", genHandler.Status)
 		gen.POST("/preview", genHandler.PreviewHTML)
 		gen.GET("/preview/:gen_id", genHandler.Preview)
-		// S4 版本页修改命令走 /api/v1/gen/modify，轻量模式下同样放行（仅依赖 AI Client）。
 		gen.POST("/modify", genHandler.Modify)
+	}
+
+	// P1: S3 大纲 → 内容生成
+	genContent := r.Group("/api/v1/gen")
+	{
+		genContent.POST("/content", contentHandler.Create)
+		genContent.GET("/content/status/:content_id", contentHandler.Status)
+		genContent.POST("/content/modify", contentHandler.Modify)
 	}
 
 	// S4: 版本管理

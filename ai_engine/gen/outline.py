@@ -77,6 +77,38 @@ class OutlineBuilder:
         except Exception:
             return {"nodes": fallback["nodes"], "used_fallback": True}
 
+    def revise(self, nodes: list[dict[str, Any]], message: str) -> dict[str, Any]:
+        """按教师指令生成修订候选；既有节点 ID 由服务边界强制保持稳定。"""
+        system_prompt = (
+            "你是教学大纲修改助手。只修改教师指令涉及的内容，输出完整 nodes 数组；"
+            "不得生成讲稿正文。尽量保持节点顺序和 node_id。"
+        )
+        user_prompt = (
+            f"当前大纲：\n{json.dumps(nodes, ensure_ascii=False)}\n\n"
+            f"教师修改指令：{message}"
+        )
+        result = self._get_llm().chat_with_schema(
+            system_prompt,
+            user_prompt,
+            build_stage2_node_tree_schema(),
+            temperature=self.config.temperature,
+        )
+        revised = normalize_stage2_nodes(result.get("nodes") or [])
+        if not revised:
+            revised = normalize_stage2_nodes(nodes)
+
+        used_ids: set[str] = set()
+        for index, node in enumerate(revised):
+            if index < len(nodes) and nodes[index].get("node_id"):
+                node["node_id"] = str(nodes[index]["node_id"])
+            candidate = str(node.get("node_id") or f"node_{index + 1:03d}")
+            while candidate in used_ids:
+                candidate = f"node_{index + 1:03d}_{len(used_ids) + 1}"
+            node["node_id"] = candidate
+            used_ids.add(candidate)
+
+        return {"nodes": revised, "change_summary": [message.strip() or "已按教师指令修订大纲"]}
+
     # ── LLM 节点树生成 ──
 
     def _run_node_tree_generation(self, markdown: str, key_points: list[str]) -> list[dict[str, Any]]:
