@@ -81,4 +81,5 @@ data/exports/
 scripts/tmp_testvideo/
 
 ./.claude/
+.claude/
 lark_auth_qr.png
