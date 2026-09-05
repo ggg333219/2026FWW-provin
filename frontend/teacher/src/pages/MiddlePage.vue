@@ -7,7 +7,7 @@
         <div class="middle-username">{{ authStore.username || '教师' }}</div>
         <div class="middle-subtitle">教学中间页</div>
 
-        <button class="middle-side-btn" @click="switchView('home')">课程中间页</button>
+        <button class="middle-side-btn primary" @click="enterNewFlow">📋 新建课件</button>
         <button class="middle-side-btn" @click="switchView('platform')">平台管理</button>
       </aside>
 
@@ -108,6 +108,10 @@ const openTile = (tile) => {
   router.push({ name: 'Workspace', query: { courseId: tile.id } })
 }
 
+const enterNewFlow = () => {
+  router.push({ name: 'S1Intent' })
+}
+
 onMounted(async () => {
   await workspaceStore.loadPlatformOverview()
 })
@@ -176,6 +180,15 @@ onMounted(async () => {
 .middle-side-btn:hover {
   border-color: #8fbcae;
   background: #f4fbf7;
+}
+.middle-side-btn.primary {
+  background: #2f605a;
+  color: #fff;
+  border-color: #2f605a;
+}
+.middle-side-btn.primary:hover {
+  background: #3d7a70;
+  border-color: #3d7a70;
 }
 
 .middle-main-panel {

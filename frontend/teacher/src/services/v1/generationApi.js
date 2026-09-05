@@ -15,7 +15,20 @@ export const teacherGenerationApi = {
   // ================================================================
 
   /** 创建生成任务 (gen/create) */
-  createGeneration: ({ session_id, course_id, title, markdown, intent, evidence_packet, template_id } = {}) =>
+  createGeneration: ({
+    session_id,
+    course_id,
+    title,
+    markdown,
+    intent,
+    evidence_packet,
+    template_id,
+    // S3 规范 3.6 参数
+    outline_id,
+    outline_version,
+    outline_confirmed,
+    generate_mode
+  } = {}) =>
     requestJson('/api/v1/gen/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -24,10 +37,11 @@ export const teacherGenerationApi = {
         course_id,
         title: title || '',
         markdown: markdown || '',
-        // S1 确认后的结构化意图直接透传（未确认时省略，后端以 title 构建默认意图）
         intent: intent || undefined,
         evidence_packet: evidence_packet || null,
-        template_id: template_id || 'default'
+        template_id: template_id || 'default',
+        // 规范 3.6：确认大纲后必须传递完整 outline 上下文
+        ...(outline_id ? { outline_id, outline_version, outline_confirmed: !!outline_confirmed, generate_mode: generate_mode || 'page_incremental' } : {})
       })
     }),
 
@@ -73,6 +87,50 @@ export const teacherGenerationApi = {
       body: JSON.stringify({ intent, evidence_packet, nodes, template_id, palette })
     }).then(r => r.json())
   },
+
+  // ================================================================
+  // page API（S3 单页操作，规范 3.7~3.10）
+  // ================================================================
+
+  /** GET /api/v1/generations/{generation_id} 查询生成任务状态（规范 3.7） */
+  getGeneration: (generationId) =>
+    requestJson(`/api/v1/generations/${encodeURIComponent(generationId)}`),
+
+  /** GET /api/v1/generations/{generation_id}/pages/{page_id} 查询单页（规范 3.8） */
+  getPage: (generationId, pageId) =>
+    requestJson(
+      `/api/v1/generations/${encodeURIComponent(generationId)}/pages/${encodeURIComponent(pageId)}`
+    ),
+
+  /** POST /api/v1/generations/{generation_id}/pages/{page_id}/regenerate 单页重生成（规范 3.9） */
+  regeneratePage: (generationId, pageId, { reason, mode = 'ai' } = {}) =>
+    requestJson(
+      `/api/v1/generations/${encodeURIComponent(generationId)}/pages/${encodeURIComponent(pageId)}/regenerate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason || '', mode })
+      }
+    ),
+
+  /** POST /api/v1/generations/{generation_id}/pages/{page_id}/revise AI修改页面（规范 3.10） */
+  revisePage: (generationId, pageId, { message, base_version, auto_apply = false } = {}) =>
+    requestJson(
+      `/api/v1/generations/${encodeURIComponent(generationId)}/pages/${encodeURIComponent(pageId)}/revise`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: message || '',
+          base_version: base_version != null ? base_version : 1,
+          auto_apply
+        })
+      }
+    ),
+
+  // ================================================================
+  // 兼容旧接口（保留，Phase 4 清理）
+  // ================================================================
 
   /** 获取增强讲稿（AI API 模式，已废弃，保留兼容） */
   getEnhancedScript: (params = {}) => {
