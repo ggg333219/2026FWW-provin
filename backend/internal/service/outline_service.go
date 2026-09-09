@@ -75,6 +75,9 @@ type OutlineStore interface {
 	GetVersion(ctx context.Context, outlineID string, version int) (*Outline, error)
 	// SaveVersion 以新的 outline_version 追加一个版本（旧版本保留，不可覆盖）。
 	SaveVersion(ctx context.Context, o *Outline) error
+	// SaveVersionSupersede 原子地：若 oldVersion 存在且为 confirmed 则置 superseded，再插入 newOutline。
+	// 杜绝"旧版已 supersede 但新版插入失败"的中间态（SaveOutlineVersion 修订 confirmed 版本时使用）。
+	SaveVersionSupersede(ctx context.Context, oldVersion int, newOutline *Outline) error
 	// UpdateStatus 更新某版本的状态（draft→confirmed / superseded）。
 	UpdateStatus(ctx context.Context, outlineID string, version int, status string, confirmedAt *time.Time) error
 	// ListVersions 列出全部版本（按 version 升序）。
@@ -139,6 +142,30 @@ func (s *memOutlineStore) SaveVersion(_ context.Context, o *Outline) error {
 	}
 	cp := cloneOutline(o)
 	s.byID[o.OutlineID] = append(chain, cp)
+	return nil
+}
+
+func (s *memOutlineStore) SaveVersionSupersede(_ context.Context, oldVersion int, newOutline *Outline) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	chain := s.byID[newOutline.OutlineID]
+	if len(chain) == 0 {
+		return ErrOutlineNotFound
+	}
+	latest := chain[len(chain)-1]
+	if latest.OutlineVersion != oldVersion {
+		return fmt.Errorf("%w: 当前版本为 %d", ErrOutlineVersionConflict, latest.OutlineVersion)
+	}
+	// 原子：先置旧版 superseded，再追加新版本（同一把锁内，无中间态）
+	if latest.Status == OutlineStatusConfirmed {
+		latest.Status = OutlineStatusSuperseded
+	}
+	if newOutline.OutlineVersion <= oldVersion {
+		return fmt.Errorf("%w: 新版本 %d 必须大于当前版本 %d",
+			ErrOutlineVersionConflict, newOutline.OutlineVersion, oldVersion)
+	}
+	cp := cloneOutline(newOutline)
+	s.byID[newOutline.OutlineID] = append(chain, cp)
 	return nil
 }
 
@@ -272,6 +299,49 @@ func (s *gormOutlineStore) SaveVersion(ctx context.Context, o *Outline) error {
 	return nil
 }
 
+func (s *gormOutlineStore) SaveVersionSupersede(ctx context.Context, oldVersion int, newOutline *Outline) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var old outlineVersionRow
+		if err := tx.Where("outline_id = ? AND outline_version = ?", newOutline.OutlineID, oldVersion).
+			First(&old).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrOutlineNotFound
+			}
+			return fmt.Errorf("读取当前大纲失败: %w", err)
+		}
+		// 乐观并发：当前链上最新版本必须是 oldVersion
+		var currentMax int
+		if err := tx.Model(&outlineVersionRow{}).
+			Where("outline_id = ?", newOutline.OutlineID).
+			Select("COALESCE(MAX(outline_version), 0)").Scan(&currentMax).Error; err != nil {
+			return fmt.Errorf("读取当前版本失败: %w", err)
+		}
+		if currentMax != oldVersion {
+			return fmt.Errorf("%w: 当前版本为 %d", ErrOutlineVersionConflict, currentMax)
+		}
+		if newOutline.OutlineVersion <= oldVersion {
+			return fmt.Errorf("%w: 新版本 %d 必须大于当前版本 %d",
+				ErrOutlineVersionConflict, newOutline.OutlineVersion, oldVersion)
+		}
+		// 同一事务内：先置旧版 superseded，再插入新版本
+		if old.Status == OutlineStatusConfirmed {
+			if err := tx.Model(&outlineVersionRow{}).
+				Where("outline_id = ? AND outline_version = ?", newOutline.OutlineID, oldVersion).
+				Update("status", OutlineStatusSuperseded).Error; err != nil {
+				return fmt.Errorf("置 superseded 失败: %w", err)
+			}
+		}
+		row, err := marshalOutlineRow(newOutline)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(row).Error; err != nil {
+			return fmt.Errorf("保存大纲版本失败: %w", err)
+		}
+		return nil
+	})
+}
+
 func (s *gormOutlineStore) UpdateStatus(ctx context.Context, outlineID string, version int, status string, confirmedAt *time.Time) error {
 	updates := map[string]any{"status": status, "updated_at": time.Now()}
 	if confirmedAt != nil {
@@ -400,6 +470,10 @@ func (s *OutlineService) CreateOutline(ctx context.Context, req OutlineGenerateR
 	}
 	outlineID := "outline_" + uuid.NewString()[:12]
 	now := time.Now()
+	nodes := normalizeOutlineNodes(resp.Nodes)
+	if err := validateOutlineNodes(nodes); err != nil {
+		return nil, fmt.Errorf("%w: AI 生成大纲无效: %v", ErrInvalidOutline, err)
+	}
 	outline := &Outline{
 		OutlineID:      outlineID,
 		OutlineVersion: 0, // Create 时 store 置为 1
@@ -407,7 +481,7 @@ func (s *OutlineService) CreateOutline(ctx context.Context, req OutlineGenerateR
 		IntentID:       req.IntentID,
 		Title:          title,
 		Status:         OutlineStatusDraft,
-		Nodes:          normalizeOutlineNodes(resp.Nodes),
+		Nodes:          nodes,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -456,21 +530,34 @@ func (s *OutlineService) SaveOutlineVersion(ctx context.Context, outlineID strin
 		UpdatedAt:      now,
 	}
 	if current.Status == OutlineStatusConfirmed {
-		// 确认大纲被修改 → 旧版本 superseded（规范 §2.3）
-		_ = s.store.UpdateStatus(ctx, outlineID, current.OutlineVersion, OutlineStatusSuperseded, current.ConfirmedAt)
-	}
-	if err := s.store.SaveVersion(ctx, newVersion); err != nil {
-		return nil, err
+		// 确认大纲被修改 → 旧版本 superseded + 新版本插入在同一原子内（规范 §2.3）。
+		if err := s.store.SaveVersionSupersede(ctx, current.OutlineVersion, newVersion); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := s.store.SaveVersion(ctx, newVersion); err != nil {
+			return nil, err
+		}
 	}
 	return newVersion, nil
 }
 
-// ReviseOutline AI 修订（POST /outlines/:id/revise）。auto_apply=false 时返回待确认候选，不落库。
-// 若 auto_apply=true，则把修订结果作为新版本保存。
+// ReviseOutline AI 修订（POST /outlines/:id/revise）。
+// 修订候选总是落库为新 draft 版本（前端 applyRevision 采纳后本地版本号与后端链一致，
+// 后续 save/confirm 不再 409/404；放弃修订只是留下未确认 draft，规范容忍多余草稿版本）。
+// auto_apply 仅作响应标记保留（false=待确认候选，true=正式应用），不再决定是否落库。
 func (s *OutlineService) ReviseOutline(ctx context.Context, outlineID string, message string, baseVersion int, autoApply bool) (*Outline, error) {
 	base, err := s.store.GetVersion(ctx, outlineID, baseVersion)
 	if err != nil {
 		return nil, err
+	}
+	// 确保修订基于当前链上最新版本（base_version 冲突检测）
+	latest, err := s.store.GetLatest(ctx, outlineID)
+	if err != nil {
+		return nil, err
+	}
+	if latest.OutlineVersion != baseVersion {
+		return nil, fmt.Errorf("%w: 当前版本为 %d", ErrOutlineVersionConflict, latest.OutlineVersion)
 	}
 	resp, err := s.aiClient.ReviseOutline(ctx, OutlineReviseAIRequest{
 		Nodes:   base.Nodes,
@@ -479,6 +566,10 @@ func (s *OutlineService) ReviseOutline(ctx context.Context, outlineID string, me
 	if err != nil {
 		return nil, err
 	}
+	nodes := normalizeOutlineNodes(resp.Nodes)
+	if err := validateOutlineNodes(nodes); err != nil {
+		return nil, fmt.Errorf("%w: AI 修订产出无效节点: %v", ErrInvalidOutline, err)
+	}
 	revised := &Outline{
 		OutlineID:      outlineID,
 		OutlineVersion: base.OutlineVersion + 1,
@@ -486,16 +577,23 @@ func (s *OutlineService) ReviseOutline(ctx context.Context, outlineID string, me
 		IntentID:       base.IntentID,
 		Title:          base.Title,
 		Status:         OutlineStatusDraft,
-		Nodes:          normalizeOutlineNodes(resp.Nodes),
+		Nodes:          nodes,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
-	if !autoApply {
-		// 待确认候选：version 预置为下一个号但未落库，由后续 PUT base_version=候选号 提交
-		return revised, nil
+	if base.Status == OutlineStatusConfirmed {
+		// 修订 confirmed 大纲：旧版 superseded + 新版插入原子完成
+		if err := s.store.SaveVersionSupersede(ctx, base.OutlineVersion, revised); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := s.store.SaveVersion(ctx, revised); err != nil {
+			return nil, err
+		}
 	}
-	if err := s.store.SaveVersion(ctx, revised); err != nil {
-		return nil, err
+	if !autoApply {
+		// 语义兼容：标记为待确认候选（仍是合法落库的 draft 版本）
+		revised.Status = OutlineStatusDraft
 	}
 	return revised, nil
 }

@@ -116,15 +116,13 @@ func TestGetConfirmedRejectsDraft(t *testing.T) {
 	}
 }
 
-// TestConfirmEmptyNodesRejected —— 空节点大纲确认必须失败（规范 §3.5 节点数>0）。
-func TestConfirmEmptyNodesRejected(t *testing.T) {
+// TestCreateOutlineEmptyNodesRejected —— 空节点大纲创建必须失败（HIGH-3：坏节点不进版本链）。
+func TestCreateOutlineEmptyNodesRejected(t *testing.T) {
 	svc := newTestService()
 	svc.aiClient = &fakeOutlineAI{generateResp: &OutlineGenerateResponse{Nodes: []OutlineNode{}}}
-	outline := mustCreateOutline(t, svc, "session_1")
-
-	_, err := svc.ConfirmOutline(context.Background(), outline.OutlineID, 1)
+	_, err := svc.CreateOutline(context.Background(), OutlineGenerateRequest{SessionID: "session_1"})
 	if !errors.Is(err, ErrInvalidOutline) {
-		t.Fatalf("空节点确认应返回 ErrInvalidOutline, 实际 %v", err)
+		t.Fatalf("空节点创建应返回 ErrInvalidOutline, 实际 %v", err)
 	}
 }
 
@@ -202,8 +200,10 @@ func TestSaveVersionOrderGapRejected(t *testing.T) {
 	}
 }
 
-// TestReviseAutoApplyFalseNoPersist —— auto_apply=false：返回候选版本（version+1），不落库。
-func TestReviseAutoApplyFalseNoPersist(t *testing.T) {
+// TestReviseCandidatePersists —— 修订候选(auto_apply=false)落库为 v2 draft。
+// 修复 HIGH-1：候选不落库会导致前端 applyRevision 采纳后本地版本号与后端链脱节，
+// 后续 save(base_version=候选号)→409 / confirm(候选号)→404。候选必须持久化。
+func TestReviseCandidatePersists(t *testing.T) {
 	svc := newTestService()
 	outline := mustCreateOutline(t, svc, "session_1")
 
@@ -218,13 +218,22 @@ func TestReviseAutoApplyFalseNoPersist(t *testing.T) {
 		t.Fatalf("修订候选应为 draft, 实际 %s", candidate.Status)
 	}
 
-	// 未落库：版本链仍只有 v1
+	// 候选已落库：链上最新为 v2，前端 applyRevision 采纳后 save/confirm 可用
 	latest, err := svc.GetOutline(context.Background(), outline.OutlineID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if latest.OutlineVersion != 1 {
-		t.Fatalf("auto_apply=false 不应落库, 最新应仍为 v1, 实际 %d", latest.OutlineVersion)
+	if latest.OutlineVersion != 2 {
+		t.Fatalf("修订候选应落库为 v2, 实际 %d", latest.OutlineVersion)
+	}
+
+	// 采纳路径闭合：确认候选 v2 成功（修复前 → 404）
+	confirmed, err := svc.ConfirmOutline(context.Background(), outline.OutlineID, 2)
+	if err != nil {
+		t.Fatalf("采纳修订后确认候选 v2 应成功, 实际 %v", err)
+	}
+	if confirmed.Status != OutlineStatusConfirmed {
+		t.Fatalf("候选 v2 确认后应为 confirmed, 实际 %s", confirmed.Status)
 	}
 }
 
