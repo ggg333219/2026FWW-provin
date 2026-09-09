@@ -27,6 +27,8 @@ const (
 	difySceneKnowledgeUpload   = "knowledge_upload"
 	difySceneGenerationCreate  = "generation_create"
 	difySceneGenerationStatus  = "generation_status"
+	difySceneGenerateOutline   = "generate_outline"
+	difySceneReviseOutline     = "revise_outline"
 	difySceneGenerationPreview = "generation_preview"
 	difySceneGenerationModify  = "generation_modify"
 	difySceneGenerationFinalize = "generation_finalize"
@@ -319,6 +321,46 @@ func (c *DifyClient) GenerationStatus(ctx context.Context, taskID string) (*Gene
 			}
 		}
 		out.Nodes = validNodes
+	}
+	return &out, nil
+}
+
+// GenerateOutline 走 Dify 场景；Dify 未配置时降级到本地 AI Engine。
+func (c *DifyClient) GenerateOutline(ctx context.Context, req OutlineGenerateRequest) (*OutlineGenerateResponse, error) {
+	var out OutlineGenerateResponse
+	engine, hasFallback := c.fallbackEngine()
+	var fallback func() error
+	if hasFallback {
+		fallback = func() error {
+			result, err := engine.GenerateOutline(ctx, req)
+			if err == nil {
+				out = *result
+			}
+			return err
+		}
+	}
+	if err := c.runDifyScene(ctx, difySceneGenerateOutline, req, &out, fallback); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ReviseOutline 走 Dify 场景；Dify 未配置时降级到本地 AI Engine。
+func (c *DifyClient) ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error) {
+	var out OutlineReviseAIResponse
+	engine, hasFallback := c.fallbackEngine()
+	var fallback func() error
+	if hasFallback {
+		fallback = func() error {
+			result, err := engine.ReviseOutline(ctx, req)
+			if err == nil {
+				out = *result
+			}
+			return err
+		}
+	}
+	if err := c.runDifyScene(ctx, difySceneReviseOutline, req, &out, fallback); err != nil {
+		return nil, err
 	}
 	return &out, nil
 }

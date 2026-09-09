@@ -44,6 +44,10 @@ type AIEngine interface {
 	GenerationCreate(ctx context.Context, req GenerationCreateRequest) (*GenerationCreateResponse, error)
 	GenerationStatus(ctx context.Context, taskID string) (*GenerationStatusResponse, error)
 
+	// ---- S3: 大纲构建与 AI 修订（Python 无状态端点 /gen/outline、/gen/outline/revise）----
+	GenerateOutline(ctx context.Context, req OutlineGenerateRequest) (*OutlineGenerateResponse, error)
+	ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error)
+
 	// ---- P1: S3 大纲 → 内容生成（独立阶段）----
 	GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error)
 	ContentStatus(ctx context.Context, contentID string) (*GenContentStatusResponse, error)
@@ -505,6 +509,68 @@ const (
 	ExportStatusDone      = "done"
 	ExportStatusFailed    = "failed"
 )
+
+// =============================================================================
+// S3: 大纲（Outline）领域 —— Go 网关侧 DTO。
+// 字段契约来源：
+//   1) 《文档/S3数据与接口规范.md》v1.0 §2.1 OutlineNode / §2.3 Outline；
+//   2) ai_engine/main.py:657 /gen/outline（GenOutlineRequest）与 :671 /gen/outline/revise；
+//   3) 前端 frontend/teacher/src/services/v1/outlineApi.js + stores/outlineStore.js。
+// Python AI Engine 侧无大纲状态持久化（main.py:673 docstring："版本和确认态仍由 Go 后端管理"），
+// 大纲草稿/确认/版本链的持久化是 Go OutlineService 的职责（见 outline_service.go）。
+// =============================================================================
+
+// OutlineInteractivePlan —— 大纲节点的互动规划（规范 §2.2）。仅声明规划，不承载题目。
+type OutlineInteractivePlan struct {
+	Enabled        bool   `json:"enabled"`
+	Kind           string `json:"kind"` // quiz | flashcard | poll | game
+	DurationMin    int    `json:"duration_minutes"`
+	QuestionCount  int    `json:"question_count,omitempty"`
+	AutoGrading    bool   `json:"auto_grading,omitempty"`
+	Delivery       string `json:"delivery"` // html5_link | ppt_native | standalone_html
+}
+
+// OutlineNode —— 大纲节点（规范 §2.1）。只描述"准备讲什么"，不含完整讲稿正文。
+// 禁止字段：script / segments / interactive_items（规范 §2.1 明确禁止）。
+type OutlineNode struct {
+	NodeID               string                 `json:"node_id"`
+	Order                int                    `json:"order"` // 从 1 开始连续编号
+	Title                string                 `json:"title"`
+	Summary              string                 `json:"summary"`
+	NodeType             string                 `json:"node_type"` // content | section | quiz | interactive | summary
+	KeyPoints            []string               `json:"key_points"`
+	EstimatedDurationMin float64                `json:"estimated_duration_minutes"` // 单位统一为分钟
+	SourceChunkIDs       []string               `json:"source_chunk_ids,omitempty"`
+	InteractivePlan      *OutlineInteractivePlan `json:"interactive_plan,omitempty"`
+}
+
+// OutlineGenerateRequest —— POST /gen/outline 请求（Python GenOutlineRequest 镜像）。
+type OutlineGenerateRequest struct {
+	SessionID     string          `json:"session_id,omitempty"`
+	IntentID      string          `json:"intent_id,omitempty"`
+	Intent        *IntentSummary  `json:"intent,omitempty"`
+	EvidencePacket *EvidencePacket `json:"evidence_packet,omitempty"`
+	Markdown      string          `json:"markdown,omitempty"`
+	CourseName    string          `json:"course_name,omitempty"`
+}
+
+// OutlineGenerateResponse —— POST /gen/outline 响应（Python 返回裸 {"nodes": [...], "used_fallback": ...}）。
+type OutlineGenerateResponse struct {
+	Nodes         []OutlineNode `json:"nodes"`
+	UsedFallback  bool          `json:"used_fallback,omitempty"`
+}
+
+// OutlineReviseAIRequest —— POST /gen/outline/revise 请求（Python GenOutlineReviseRequest 镜像）。
+type OutlineReviseAIRequest struct {
+	Nodes    []OutlineNode `json:"nodes"`
+	Message  string        `json:"message"`
+}
+
+// OutlineReviseAIResponse —— POST /gen/outline/revise 响应（Python 返回 {"nodes", "change_summary"}）。
+type OutlineReviseAIResponse struct {
+	Nodes         []OutlineNode `json:"nodes"`
+	ChangeSummary []string      `json:"change_summary,omitempty"`
+}
 
 // TeachingNodeItem —— 引擎 TeachingNode 的 Go 镜像（字段=ai_engine/core/schema.py）。
 // 字段只增不删：node 由 S3 生成 → S4 版本快照 / 导出 / 前端渲染全链路共用本结构。

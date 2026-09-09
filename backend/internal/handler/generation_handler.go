@@ -37,7 +37,7 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "必须使用后端已确认的大纲版本生成课件"})
 			return
 		}
-		outline, err := h.outlineService.GetConfirmed(req.OutlineID, req.OutlineVersion)
+		outline, err := h.outlineService.GetConfirmed(c.Request.Context(), req.OutlineID, req.OutlineVersion)
 		if err != nil {
 			status := http.StatusConflict
 			if errors.Is(err, service.ErrOutlineNotFound) {

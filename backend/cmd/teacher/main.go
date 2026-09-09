@@ -127,7 +127,11 @@ func main() {
 	convHandler := handler.NewConversationHandler(aiClient)
 	parseHandler := handler.NewParseHandler(aiClient)
 	knowledgeHandler := handler.NewKnowledgeHandler(aiClient)
-	outlineService := service.NewOutlineService(aiClient)
+	// S3 大纲：db 就绪的完整模式走 Postgres 持久化（OutlineService 属跨重启状态管理）。
+	if err := service.AutoMigrateOutline(db); err != nil {
+		applogger.Warn("outline_versions 表迁移失败", zap.Error(err))
+	}
+	outlineService := service.NewOutlineServiceWithDB(aiClient, db)
 	outlineHandler := handler.NewOutlineHandler(outlineService)
 	genHandler := handler.NewGenerationHandler(aiClient, outlineService)
 	versionHandler := handler.NewVersionHandler(aiClient)
