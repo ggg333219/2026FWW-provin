@@ -52,6 +52,11 @@ ai_engine/parse/test4.mp4
 # Config files
 .env
 .env.local
+
+.env.*
+!.env.example
+!*.env.example
+
 backend/.env
 backend/.env.local
 backend/config/config.yaml
