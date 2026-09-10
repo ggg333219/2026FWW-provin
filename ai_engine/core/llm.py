@@ -146,22 +146,41 @@ def resolve_llm_base_url(model: str) -> tuple[str, str]:
     return DEFAULT_COMPAT_BASE_URL, reason
 
 
-def extract_json(text: str) -> dict[str, Any]:
+def extract_json(text: str) -> Any:
     """
     从 LLM 返回文本中提取并解析 JSON。
 
     处理 ```json ... ``` 包裹、前后空白、多段文本含多个 JSON 等情况。
     与旧版 QAResponder._extract_json 兼容，增强为独立函数。
+
+    同时容忍根节点为数组：chat_with_schema 降级链的②③级（json_object /
+    纯 prompt 约束）不强制根为 object，模型可能直接返回裸数组
+    （如 nodes / scripts 列表）。旧实现只找 {} 区间，裸数组会直接抛
+    ValueError，导致三级降级链全部失败——即使每级其实都拿到了可用内容。
+    根形状按最先出现的括号判定，解析失败再退回另一种，保持原有
+    “优先取 {}” 的行为不变。
     """
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.strip("`")
         cleaned = cleaned.replace("json\n", "", 1).replace("json", "", 1).strip()
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"模型返回内容中未找到有效 JSON: {text[:200]}")
-    return json.loads(cleaned[start : end + 1])
+
+    first_obj, first_arr = cleaned.find("{"), cleaned.find("[")
+    if first_arr != -1 and (first_obj == -1 or first_arr < first_obj):
+        candidates = (("[", "]"), ("{", "}"))
+    else:
+        candidates = (("{", "}"), ("[", "]"))
+
+    for open_ch, close_ch in candidates:
+        start, end = cleaned.find(open_ch), cleaned.rfind(close_ch)
+        if start == -1 or end <= start:
+            continue
+        try:
+            return json.loads(cleaned[start : end + 1])
+        except json.JSONDecodeError:
+            continue
+
+    raise ValueError(f"模型返回内容中未找到有效 JSON: {text[:200]}")
 
 
 # ---- LLM 客户端 ----
@@ -379,7 +398,7 @@ class LLMClient:
         *,
         temperature: Optional[float] = None,
         model: Optional[str] = None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """
         带 JSON Schema 的结构化输出调用（显式版本，带三级降级链）。
 

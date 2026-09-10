@@ -29,10 +29,10 @@ except ImportError:
     from qa import resolve_llm_base_url
 
 try:
-    from .core.llm import resolve_llm_timeout
+    from .core.llm import extract_json, resolve_llm_timeout
     from .core.config import resolve_llm_gen_chunk_size, resolve_llm_gen_max_workers
 except ImportError:  # 直接以脚本方式运行时的回退导入
-    from core.llm import resolve_llm_timeout
+    from core.llm import extract_json, resolve_llm_timeout
     from core.config import resolve_llm_gen_chunk_size, resolve_llm_gen_max_workers
 
 try:
@@ -42,6 +42,8 @@ try:
         build_stage2_node_tree_schema,
         build_stage3_script_schema,
         build_enhanced_script_schema,
+        extract_list_payload,
+        extract_nodes_payload,
         normalize_stage2_nodes,
         normalize_stage3_scripts,
     )
@@ -52,6 +54,8 @@ except ImportError:
         build_stage2_node_tree_schema,
         build_stage3_script_schema,
         build_enhanced_script_schema,
+        extract_list_payload,
+        extract_nodes_payload,
         normalize_stage2_nodes,
         normalize_stage3_scripts,
     )
@@ -382,7 +386,7 @@ class LessonGenerator:
         )
         raw = self._request_llm_payload(client, system_prompt, user_prompt)
         data = self._extract_json(raw)
-        scripts = data if isinstance(data, list) else data.get("scripts") or []
+        scripts = extract_list_payload(data, "scripts")
         valid_ids = set(chunk_ids)
         valid_list = sorted(valid_ids)
         for idx, script in enumerate(scripts):
@@ -809,16 +813,14 @@ class LessonGenerator:
         return segments
 
     @staticmethod
-    def _extract_json(text: str) -> dict[str, Any]:
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```(?:json)?", "", cleaned, count=1).strip()
-            cleaned = re.sub(r"```$", "", cleaned).strip()
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError("模型返回内容中未找到有效 JSON")
-        return json.loads(cleaned[start : end + 1])
+    def _extract_json(text: str) -> Any:
+        """兼容旧调用点：委托给 core.llm.extract_json。
+
+        旧实现在此复制了一份「只认 {} 区间」的解析逻辑，模型返回裸数组
+        （nodes / scripts 列表）时会抛 ValueError，整段生成退化成兜底内容。
+        统一走共享实现，根为数组时同样可解析。
+        """
+        return extract_json(text)
 
     def _run_stage1_markdown_understanding(self, client: Any, markdown: str) -> dict[str, Any]:
         system_prompt = (
@@ -853,7 +855,7 @@ class LessonGenerator:
         )
         raw = self._request_llm_payload(client, system_prompt, user_prompt, json_schema=build_stage2_node_tree_schema())
         data = self._extract_json(raw)
-        return normalize_stage2_nodes(data.get("nodes") or [])
+        return normalize_stage2_nodes(extract_nodes_payload(data))
 
     def _run_stage3_scripts(
         self,
@@ -877,7 +879,7 @@ class LessonGenerator:
         raw = self._request_llm_payload(client, system_prompt, user_prompt, json_schema=build_stage3_script_schema())
         data = self._extract_json(raw)
         node_ids = {item["node_id"] for item in nodes}
-        return normalize_stage3_scripts(data.get("scripts") or [], node_ids)
+        return normalize_stage3_scripts(extract_list_payload(data, "scripts"), node_ids)
 
     def _fallback_pipeline(self, markdown: str) -> dict[str, Any]:
         lines = [line.strip() for line in (markdown or "").splitlines() if line.strip()]
