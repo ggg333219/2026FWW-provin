@@ -153,9 +153,11 @@
               </template>
             </div>
 
-            <!-- 互动规划（仅 interactive / quiz 类型显示） -->
+            <!-- 互动规划（仅 interactive / quiz 类型且有 plan 时显示）
+                 注意：必须判 interactive_plan 非空——后端/LLM 产出的交互节点该字段常为 null，
+                 直接访问 interactive_plan.x 会抛错并中断整个节点列表渲染。 -->
             <div
-              v-if="(node.node_type === 'interactive' || node.node_type === 'quiz') && outlineStore.canEdit"
+              v-if="(node.node_type === 'interactive' || node.node_type === 'quiz') && node.interactive_plan && outlineStore.canEdit"
               class="node-interactive-plan"
             >
               <details>

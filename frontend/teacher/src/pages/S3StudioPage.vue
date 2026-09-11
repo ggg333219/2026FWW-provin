@@ -341,6 +341,9 @@ const interactiveNodes = computed(() =>
 );
 
 onMounted(async () => {
+  // 恢复 S1 会话/意图（刷新或直接进入 S3 时 store 内存为空，
+  // 不恢复会导致 sessionId 缺失 → AI 生成大纲被 "缺少 session_id" 拦截）
+  intentStore.initialize();
   if (typeof window !== "undefined") {
     generationMode.value =
       window.localStorage.getItem(
