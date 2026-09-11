@@ -11,6 +11,11 @@ import { requestJson } from './request'
  * 大纲状态机：
  *   draft → confirming → confirmed → superseded（确认后不得原地覆盖）
  */
+// 大纲创建/修订内部要等 LLM 返回节点树，耗时远高于普通 JSON 接口。
+// request.js 默认超时只有 10s，实测 LLM 路径耗时 9.4s~15.4s，
+// 超时抛出的 AbortError 不会走 mock 回退，前端表现为「点了没反应」。
+const OUTLINE_LLM_TIMEOUT_MS = 90000
+
 export const teacherOutlineApi = {
   /**
    * POST /api/v1/outlines
@@ -20,6 +25,7 @@ export const teacherOutlineApi = {
     requestJson('/api/v1/outlines', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      timeoutMs: OUTLINE_LLM_TIMEOUT_MS,
       body: JSON.stringify({
         session_id: session_id || '',
         intent_id: intent_id || '',
@@ -69,6 +75,7 @@ export const teacherOutlineApi = {
     requestJson(`/api/v1/outlines/${encodeURIComponent(outlineId)}/revise`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      timeoutMs: OUTLINE_LLM_TIMEOUT_MS,
       body: JSON.stringify({
         message: message || '',
         base_version: base_version != null ? base_version : 1,

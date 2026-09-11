@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 from ..schema import (
     build_stage3_script_schema,
+    extract_list_payload,
     normalize_stage3_scripts,
     build_enhanced_script_schema,
     normalize_text_list,
@@ -190,7 +191,7 @@ class NodeGenerator:
             temperature=self.config.temperature,
         )
         node_ids = {n["node_id"] for n in nodes}
-        return normalize_stage3_scripts(result.get("scripts") or [], node_ids)
+        return normalize_stage3_scripts(extract_list_payload(result, "scripts"), node_ids)
 
     def _run_enhanced_batch(self, markdown: str,
                             nodes: list[dict], course_name: str | None) -> list[dict]:
@@ -216,7 +217,7 @@ class NodeGenerator:
             build_enhanced_script_schema(),
             temperature=self.config.temperature,
         )
-        scripts = result if isinstance(result, list) else result.get("scripts") or []
+        scripts = extract_list_payload(result, "scripts")
         valid_ids = {n["node_id"] for n in nodes}
         valid_list = sorted(valid_ids)
         for idx, script in enumerate(scripts):

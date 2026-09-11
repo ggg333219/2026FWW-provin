@@ -417,6 +417,7 @@ async function handleStartGeneration() {
     const task = resp?.data || resp || {};
     const taskId = task.task_id || task.generation_id;
     if (!taskId) throw new Error("未返回生成任务 ID");
+    generationStore.setLastTaskId(taskId);
 
     // 记录 generation_id
     const genId = task.generation_id || taskId;
@@ -453,13 +454,17 @@ async function handleStartGeneration() {
 
 // 加载生成状态
 async function loadGenerationStatus() {
-  if (!generationStore.lastGenId) return;
+  const taskId = generationStore.lastTaskId || generationStore.restoreLastTaskId();
+  if (!taskId) return;
   try {
-    const resp = await teacherV1Api.generation.getGeneration(
-      generationStore.lastGenId,
-    );
+    const resp = await teacherV1Api.generation.getGenerationStatus(taskId);
     const data = resp?.data || resp || {};
-    generationPages.value = data.pages || [];
+    generationPages.value = (Array.isArray(data.nodes) ? data.nodes : []).map((node, index) => ({
+      ...node,
+      page_id: node.page_id || node.node_id || `page_${index + 1}`,
+      page_order: Number(node.page_order || node.order || index + 1),
+      status: node.status || 'completed'
+    }));
   } catch (err) {
     console.warn("[S3StudioPage] 加载生成状态失败", err);
   }

@@ -4,11 +4,18 @@ import { useGenerationStore } from './generationStore'
 
 function createStorage() {
   const values = new Map()
-  return {
+  const storage = {
     getItem: (key) => values.get(key) || null,
-    setItem: (key, value) => values.set(key, String(value)),
-    removeItem: (key) => values.delete(key)
+    setItem: (key, value) => {
+      values.set(key, String(value))
+      Object.defineProperty(storage, key, { value: String(value), enumerable: true, configurable: true, writable: true })
+    },
+    removeItem: (key) => {
+      values.delete(key)
+      delete storage[key]
+    }
   }
+  return storage
 }
 
 beforeEach(() => {
@@ -27,6 +34,14 @@ describe('generationStore S3 到 S4 generation_id 透传', () => {
     expect(window.localStorage.getItem('fuww_last_gen_id')).toBe('gen_abc123')
   })
 
+  it('保存生成任务 task_id 供状态接口查询', () => {
+    const store = useGenerationStore()
+
+    expect(store.setLastTaskId(' task_abc123 ')).toBe('task_abc123')
+    expect(store.lastTaskId).toBe('task_abc123')
+    expect(window.localStorage.getItem('fuww_last_task_id')).toBe('task_abc123')
+  })
+
   it('新 Store 可在刷新后从 localStorage 恢复生成 ID', () => {
     window.localStorage.setItem('fuww_last_gen_id', 'gen_restored')
     const store = useGenerationStore()
@@ -42,6 +57,26 @@ describe('generationStore S3 到 S4 generation_id 透传', () => {
     expect(store.setLastGenId('')).toBe('')
     expect(store.lastGenId).toBe('gen_kept')
     expect(window.localStorage.getItem('fuww_last_gen_id')).toBe('gen_kept')
+  })
+
+  it('reset 清空 S3 状态、生成 ID 和所有预览缓存', () => {
+    const store = useGenerationStore()
+    store.setNodes([{ node_id: 'n1', title: '旧课件' }])
+    store.setLastGenId('gen_old')
+    store.previewHtml = '<html>旧预览</html>'
+    window.localStorage.setItem('fuww_preview_cache:draft', 'draft-cache')
+    window.localStorage.setItem('fuww_preview_cache:gen_old', 'gen-cache')
+
+    store.reset()
+
+    expect(store.currentScriptNodes).toEqual([])
+    expect(store.lastGenId).toBe('')
+    expect(store.lastTaskId).toBe('')
+    expect(store.previewHtml).toBe('')
+    expect(window.localStorage.getItem('fuww_last_gen_id')).toBeNull()
+    expect(window.localStorage.getItem('fuww_last_task_id')).toBeNull()
+    expect(window.localStorage.getItem('fuww_preview_cache:draft')).toBeNull()
+    expect(window.localStorage.getItem('fuww_preview_cache:gen_old')).toBeNull()
   })
 
   it('全流程生成任务返回真实 ID，并在完成后回填节点', async () => {
