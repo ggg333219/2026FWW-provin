@@ -276,3 +276,86 @@ func TestGetOutlineVersionNotFound(t *testing.T) {
 		t.Fatalf("不存在大纲应返回 ErrOutlineNotFound, 实际 %v", err)
 	}
 }
+
+// TestCreateOutlineEngineStyleNodes —— 回归（4840ee5 引入的 422 缺陷）：
+// Python /gen/outline 返回的引擎风格节点（node_type=slide、无 estimated_duration_minutes）
+// 必须能创建为草稿；此前草稿校验误用确认严格校验导致必然 422，阻断整条大纲链路。
+// 空占位节点（title/summary/key_points 全空）会被归一阶段滤除。
+func TestCreateOutlineEngineStyleNodes(t *testing.T) {
+	svc := newTestService()
+	svc.aiClient = &fakeOutlineAI{generateResp: &OutlineGenerateResponse{Nodes: []OutlineNode{
+		{NodeID: "node_001", NodeType: "slide", Title: "", Summary: ""}, // 空占位 → 应被滤除
+		{NodeID: "node_002", NodeType: "slide", Title: "排序", Summary: "讲解"},
+	}}}
+	outline, err := svc.CreateOutline(context.Background(), OutlineGenerateRequest{SessionID: "s1"})
+	if err != nil {
+		t.Fatalf("引擎风格节点应能创建草稿, 实际 %v", err)
+	}
+	if outline.OutlineVersion != 1 || outline.Status != OutlineStatusDraft {
+		t.Fatalf("应创建 v1 draft, 实际 v%d/%s", outline.OutlineVersion, outline.Status)
+	}
+	// 空占位节点被滤除，只剩有内容的节点
+	if len(outline.Nodes) != 1 {
+		t.Fatalf("空占位节点应被滤除, 期望剩 1 个, 实际 %d", len(outline.Nodes))
+	}
+	if outline.Nodes[0].NodeType != "slide" {
+		t.Fatalf("slide 枚举应保留, 实际 %s", outline.Nodes[0].NodeType)
+	}
+	if outline.Nodes[0].EstimatedDurationMin <= 0 {
+		t.Fatalf("时长应补默认值, 实际 %v", outline.Nodes[0].EstimatedDurationMin)
+	}
+}
+
+// TestConfirmRejectsIncompleteNode —— 草稿宽松但确认仍严格：
+// 标题空 / 时长缺失的节点不允许确认（规范 §3.5）。
+func TestConfirmRejectsIncompleteNode(t *testing.T) {
+	svc := newTestService()
+	svc.aiClient = &fakeOutlineAI{generateResp: &OutlineGenerateResponse{Nodes: []OutlineNode{
+		{NodeID: "node_001", NodeType: "slide", Title: "", Summary: ""}, // 标题空
+	}}}
+	outline, err := svc.CreateOutline(context.Background(), OutlineGenerateRequest{SessionID: "s1"})
+	if err != nil {
+		t.Fatalf("创建草稿应成功: %v", err)
+	}
+	if _, err := svc.ConfirmOutline(context.Background(), outline.OutlineID, 1); !errors.Is(err, ErrInvalidOutline) {
+		t.Fatalf("标题空节点确认应被拒(ErrInvalidOutline), 实际 %v", err)
+	}
+}
+
+// TestSaveDraftWithPlaceholderNode —— 手动新增的空占位节点保存时被滤除，
+// 有内容的节点正常保存（修复"手动添加节点传不出去"+ 避免空节点阻塞确认）。
+func TestSaveDraftWithPlaceholderNode(t *testing.T) {
+	svc := newTestService()
+	outline := mustCreateOutline(t, svc, "session_1")
+	// 模拟前端手动新增一个未填内容的空占位节点
+	nodes := sampleNodes()
+	nodes = append(nodes, OutlineNode{NodeID: "node_new", Order: 3, NodeType: "content"})
+	saved, err := svc.SaveOutlineVersion(context.Background(), outline.OutlineID, 1, nodes)
+	if err != nil {
+		t.Fatalf("含空占位节点的草稿保存应成功, 实际 %v", err)
+	}
+	if len(saved.Nodes) != 2 {
+		t.Fatalf("空占位节点应被滤除, 期望剩 2 个, 实际 %d", len(saved.Nodes))
+	}
+}
+
+// TestSaveDraftWithFilledNewNode —— 手动新增的已填节点正常保存并传递。
+func TestSaveDraftWithFilledNewNode(t *testing.T) {
+	svc := newTestService()
+	outline := mustCreateOutline(t, svc, "session_1")
+	nodes := sampleNodes()
+	nodes = append(nodes, OutlineNode{
+		NodeID: "node_new", Order: 3, Title: "课堂练习", Summary: "巩固", NodeType: "quiz",
+		KeyPoints: []string{"练习"}, EstimatedDurationMin: 8,
+	})
+	saved, err := svc.SaveOutlineVersion(context.Background(), outline.OutlineID, 1, nodes)
+	if err != nil {
+		t.Fatalf("含已填新节点的草稿保存应成功, 实际 %v", err)
+	}
+	if len(saved.Nodes) != 3 {
+		t.Fatalf("应保存 3 个节点, 实际 %d", len(saved.Nodes))
+	}
+	if saved.Nodes[2].NodeID != "node_new" || saved.Nodes[2].NodeType != "quiz" {
+		t.Fatalf("新节点应完整保留, 实际 %+v", saved.Nodes[2])
+	}
+}

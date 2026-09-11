@@ -21,9 +21,32 @@ function makeNodeId() {
   return `node_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 }
 
+/**
+ * 归一 node_type 到前端大纲编辑器的枚举（content/section/quiz/interactive/summary）。
+ * 引擎侧（Python normalize_stage2_nodes）产出 slide/cover/divider 等渲染枚举，
+ * 编辑器 <select> 无这些选项会显示空白，故在此收敛。
+ */
+function normalizeOutlineNodeType(raw) {
+  const v = String(raw || '').trim()
+  switch (v) {
+    case 'content':
+    case 'section':
+    case 'quiz':
+    case 'interactive':
+    case 'summary':
+      return v
+    case 'slide':
+    case 'cover':
+      return 'content'
+    case 'divider':
+      return 'section'
+    default:
+      return 'content'
+  }
+}
+
 /** 前端内部大纲节点（前端编辑用，不含完整讲稿） */
-function createOutlineNode(overrides = {}) {
-  return {
+function createOutlineNode(overrides = {}) {  return {
     node_id: makeNodeId(),
     order: 1,
     title: '',
@@ -218,15 +241,16 @@ export const useOutlineStore = defineStore('outline', {
       this._persist()
     },
 
-    /** 交换两个节点的顺序 */
+    /** 交换两个节点的顺序（真换数组位置，再重排 order） */
     swapNodes(nodeIdA, nodeIdB) {
       if (!this.canEdit) return
       const idxA = this.nodes.findIndex((n) => n.node_id === nodeIdA)
       const idxB = this.nodes.findIndex((n) => n.node_id === nodeIdB)
-      if (idxA < 0 || idxB < 0) return
-      const tmp = this.nodes[idxA].order
-      this.nodes[idxA].order = this.nodes[idxB].order
-      this.nodes[idxB].order = tmp
+      if (idxA < 0 || idxB < 0 || idxA === idxB) return
+      // 交换数组元素位置（此前只换 order 字段值，随即被 _reorder() 抹掉，导致排序无效）
+      const tmp = this.nodes[idxA]
+      this.nodes[idxA] = this.nodes[idxB]
+      this.nodes[idxB] = tmp
       this._reorder()
       this._persist()
     },
@@ -313,7 +337,12 @@ export const useOutlineStore = defineStore('outline', {
       if (!this.pendingRevision) return
       this.nodes = this.pendingRevision.nodes.map((n) => ({
         ...n,
-        node_id: n.node_id || makeNodeId()
+        node_id: n.node_id || makeNodeId(),
+        node_type: normalizeOutlineNodeType(n.node_type),
+        key_points: Array.isArray(n.key_points) ? n.key_points : [],
+        estimated_duration_minutes: Number(n.estimated_duration_minutes) || 5,
+        source_chunk_ids: Array.isArray(n.source_chunk_ids) ? n.source_chunk_ids : [],
+        interactive_plan: n.interactive_plan || null
       }))
       this.outline_version = this.pendingRevision.outline_version
       this.pendingRevision = null
@@ -398,7 +427,8 @@ export const useOutlineStore = defineStore('outline', {
         order: Number(n.order) || 1,
         title: n.title || '',
         summary: n.summary || '',
-        node_type: n.node_type || 'content',
+        // 兼容引擎枚举（slide/cover/divider）→ 大纲编辑器的前端枚举
+        node_type: normalizeOutlineNodeType(n.node_type),
         key_points: Array.isArray(n.key_points) ? n.key_points : [],
         estimated_duration_minutes: Number(n.estimated_duration_minutes) || 5,
         source_chunk_ids: Array.isArray(n.source_chunk_ids) ? n.source_chunk_ids : [],

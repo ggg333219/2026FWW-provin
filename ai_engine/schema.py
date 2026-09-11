@@ -160,6 +160,10 @@ def normalize_stage2_nodes(nodes: list[dict[str, Any]] | None) -> list[dict[str,
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for idx, item in enumerate(nodes or [], start=1):
+        # 类型守卫：LLM 偶发输出非 dict 元素（如嵌套 list / 字符串），跳过而非崩溃。
+        # 修复前 `(item or {}).get(...)` 对 list 元素抛 'list' object has no attribute 'get'。
+        if not isinstance(item, dict):
+            continue
         raw_id = str((item or {}).get("node_id") or f"node_{idx:03d}").strip()
         if not raw_id or raw_id in seen:
             continue

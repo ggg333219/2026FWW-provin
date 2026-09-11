@@ -31,13 +31,18 @@ const (
 	OutlineStatusSuperseded = "superseded"
 )
 
-// OutlineNode 节点类型常量（规范 §2.1 枚举）。
+// OutlineNode 节点类型常量。
+// 并集：大纲语义（规范 §2.1，前端使用） + 引擎渲染枚举（Python schema.py VALID_NODE_TYPES）。
 const (
 	OutlineNodeTypeContent    = "content"
 	OutlineNodeTypeSection    = "section"
 	OutlineNodeTypeQuiz       = "quiz"
 	OutlineNodeTypeInteractive = "interactive"
 	OutlineNodeTypeSummary    = "summary"
+	// 引擎渲染枚举（Python normalize_stage2_nodes 产出，大纲草稿可能携带）
+	OutlineNodeTypeSlide  = "slide"
+	OutlineNodeTypeCover  = "cover"
+	OutlineNodeTypeDivider = "divider"
 )
 
 // Outline 领域实体 —— outline_id + outline_version 唯一确定一份大纲内容（规范 §6）。
@@ -471,7 +476,7 @@ func (s *OutlineService) CreateOutline(ctx context.Context, req OutlineGenerateR
 	outlineID := "outline_" + uuid.NewString()[:12]
 	now := time.Now()
 	nodes := normalizeOutlineNodes(resp.Nodes)
-	if err := validateOutlineNodes(nodes); err != nil {
+	if err := validateOutlineDraft(nodes); err != nil {
 		return nil, fmt.Errorf("%w: AI 生成大纲无效: %v", ErrInvalidOutline, err)
 	}
 	outline := &Outline{
@@ -514,7 +519,7 @@ func (s *OutlineService) SaveOutlineVersion(ctx context.Context, outlineID strin
 	if current.OutlineVersion != baseVersion {
 		return nil, fmt.Errorf("%w: 当前版本为 %d", ErrOutlineVersionConflict, current.OutlineVersion)
 	}
-	if err := validateOutlineNodes(nodes); err != nil {
+	if err := validateOutlineDraft(nodes); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidOutline, err)
 	}
 	now := time.Now()
@@ -567,7 +572,7 @@ func (s *OutlineService) ReviseOutline(ctx context.Context, outlineID string, me
 		return nil, err
 	}
 	nodes := normalizeOutlineNodes(resp.Nodes)
-	if err := validateOutlineNodes(nodes); err != nil {
+	if err := validateOutlineDraft(nodes); err != nil {
 		return nil, fmt.Errorf("%w: AI 修订产出无效节点: %v", ErrInvalidOutline, err)
 	}
 	revised := &Outline{
@@ -641,14 +646,11 @@ func (s *OutlineService) ListVersions(ctx context.Context, outlineID string) ([]
 // 校验与归一
 // =============================================================================
 
-// validateOutlineNodes —— 规范 §3.4/§3.5 校验：
-//   - 非空
-//   - node_id 不重复且非空
-//   - order 从 1 连续编号且不重复
-//   - title / summary 非空
-//   - estimated_duration_minutes > 0
-//   - node_type 合法
-func validateOutlineNodes(nodes []OutlineNode) error {
+// validateOutlineDraft —— 草稿松校验（Create/Revise/Save 用）。
+// 只保证结构可用：非空、node_id 唯一非空、order 连续、node_type 合法。
+// 不校验 title/summary 非空与时长 > 0——这些是"可确认"的严格条件，见 validateOutlineNodes，
+// 由 Confirm 把关（规范 §3.4 保存宽松 / §3.5 确认严格）。
+func validateOutlineDraft(nodes []OutlineNode) error {
 	if len(nodes) == 0 {
 		return fmt.Errorf("节点数量为 0")
 	}
@@ -664,6 +666,25 @@ func validateOutlineNodes(nodes []OutlineNode) error {
 		if n.Order != i+1 {
 			return fmt.Errorf("order 必须从 1 连续编号: 期望 %d 实际 %d", i+1, n.Order)
 		}
+		if normalizeNodeType(n.NodeType) == "" {
+			return fmt.Errorf("节点 %s node_type 非法", n.NodeID)
+		}
+	}
+	return nil
+}
+
+// validateOutlineNodes —— 确认严格校验（Confirm 用，规范 §3.5）：
+//   - 非空
+//   - node_id 不重复且非空
+//   - order 从 1 连续编号且不重复
+//   - title / summary 非空
+//   - estimated_duration_minutes > 0
+//   - node_type 合法
+func validateOutlineNodes(nodes []OutlineNode) error {
+	if err := validateOutlineDraft(nodes); err != nil {
+		return err
+	}
+	for _, n := range nodes {
 		if strings.TrimSpace(n.Title) == "" {
 			return fmt.Errorf("节点 %s 标题为空", n.NodeID)
 		}
@@ -673,33 +694,44 @@ func validateOutlineNodes(nodes []OutlineNode) error {
 		if n.EstimatedDurationMin <= 0 {
 			return fmt.Errorf("节点 %s 时长必须大于 0", n.NodeID)
 		}
-		switch n.NodeType {
-		case OutlineNodeTypeContent, OutlineNodeTypeSection, OutlineNodeTypeQuiz,
-			OutlineNodeTypeInteractive, OutlineNodeTypeSummary:
-		case "":
-			return fmt.Errorf("节点 %s 缺少 node_type", n.NodeID)
-		default:
-			return fmt.Errorf("节点 %s node_type 非法: %s", n.NodeID, n.NodeType)
-		}
 	}
 	return nil
 }
 
-// normalizeOutlineNodes —— 兜底归一：node_id 缺失时补生成、order 重排连续。
+// normalizeOutlineNodes —— 兜底归一：node_id 缺失时补生成、order 重排连续、
+// 时长为 0 时补默认值、node_type 收敛到合法枚举。
+// 说明：Python /gen/outline 返回的节点（normalize_stage2_nodes）不含 order 与
+// estimated_duration_minutes，node_type 为 slide/section/quiz/interactive/cover/divider；
+// 前端使用 content/section/quiz/interactive/summary。这里统一收敛，避免草稿落库被校验拒绝。
 func normalizeOutlineNodes(nodes []OutlineNode) []OutlineNode {
 	if nodes == nil {
 		return []OutlineNode{}
 	}
-	out := make([]OutlineNode, 0, len(nodes))
-	seenID := make(map[string]bool, len(nodes))
-	for i, n := range nodes {
+	// 先剔除 LLM 偶发产出的空占位节点（title/summary/key_points 全空），
+	// 这类节点会让确认校验（§3.5 摘要非空）必然 422，属噪声。
+	// 但若剔除后为空（如全部节点都空），保留原样由校验层报错。
+	filtered := make([]OutlineNode, 0, len(nodes))
+	for _, n := range nodes {
+		if strings.TrimSpace(n.Title) == "" && strings.TrimSpace(n.Summary) == "" && len(n.KeyPoints) == 0 {
+			continue
+		}
+		filtered = append(filtered, n)
+	}
+	if len(filtered) == 0 {
+		filtered = nodes
+	}
+	out := make([]OutlineNode, 0, len(filtered))
+	seenID := make(map[string]bool, len(filtered))
+	for i, n := range filtered {
 		if n.NodeID == "" || seenID[n.NodeID] {
 			n.NodeID = fmt.Sprintf("node_%03d", i+1)
 		}
 		seenID[n.NodeID] = true
 		n.Order = i + 1
-		if n.NodeType == "" {
-			n.NodeType = OutlineNodeTypeContent
+		n.NodeType = normalizeNodeType(n.NodeType)
+		if n.EstimatedDurationMin <= 0 {
+			// 引擎草稿节点常缺时长；补默认 5 分钟，避免草稿落库被拒。
+			n.EstimatedDurationMin = 5
 		}
 		if n.KeyPoints == nil {
 			n.KeyPoints = []string{}
@@ -707,4 +739,21 @@ func normalizeOutlineNodes(nodes []OutlineNode) []OutlineNode {
 		out = append(out, n)
 	}
 	return out
+}
+
+// normalizeNodeType —— 收敛 node_type 到并集枚举。
+// 前端词汇：content/section/quiz/interactive/summary；
+// 引擎词汇：slide/section/quiz/interactive/cover/divider。
+// 二者取并集，未知值回退 content（大纲语义的通用内容节点）。
+func normalizeNodeType(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case OutlineNodeTypeContent, OutlineNodeTypeSection, OutlineNodeTypeQuiz,
+		OutlineNodeTypeInteractive, OutlineNodeTypeSummary,
+		OutlineNodeTypeSlide, OutlineNodeTypeCover, OutlineNodeTypeDivider:
+		return strings.TrimSpace(raw)
+	case "":
+		return OutlineNodeTypeContent
+	default:
+		return OutlineNodeTypeContent
+	}
 }

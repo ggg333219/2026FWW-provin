@@ -93,14 +93,23 @@ class OutlineBuilder:
             build_stage2_node_tree_schema(),
             temperature=self.config.temperature,
         )
-        revised = normalize_stage2_nodes(result.get("nodes") or [])
+        # 类型容错：降级链③（纯 prompt 约束）下 LLM 可能直接返回顶层数组 [{...}]
+        # 而非 {"nodes": [...]}；此前 result.get 对 list 崩溃（'list' object has no attribute 'get'）。
+        if isinstance(result, dict):
+            raw_nodes = result.get("nodes")
+        else:
+            raw_nodes = result
+        revised = normalize_stage2_nodes(raw_nodes if isinstance(raw_nodes, list) else [])
         if not revised:
             revised = normalize_stage2_nodes(nodes)
 
         used_ids: set[str] = set()
         for index, node in enumerate(revised):
-            if index < len(nodes) and nodes[index].get("node_id"):
-                node["node_id"] = str(nodes[index]["node_id"])
+            if not isinstance(node, dict):
+                continue
+            prev = nodes[index] if index < len(nodes) else None
+            if isinstance(prev, dict) and prev.get("node_id"):
+                node["node_id"] = str(prev["node_id"])
             candidate = str(node.get("node_id") or f"node_{index + 1:03d}")
             while candidate in used_ids:
                 candidate = f"node_{index + 1:03d}_{len(used_ids) + 1}"
