@@ -578,6 +578,9 @@ class SearchRequest(BaseModel):
     knowledge_base_ids: list[str] = Field(default_factory=list)
     top_k: int = 5
     min_score: float = 0.6
+    scope: str = "course"
+    node_id: Optional[str] = None
+    page_id: Optional[str] = None
 
 
 class SearchResponse(BaseModel):

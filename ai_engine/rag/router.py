@@ -97,6 +97,13 @@ async def rag_search(req: SearchRequest):
     """
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=400, detail="query 不能为空")
+    scope = (req.scope or "course").strip().lower()
+    if scope not in {"node", "page", "course"}:
+        raise HTTPException(status_code=400, detail="scope 必须是 node、page 或 course")
+    if scope == "node" and not (req.node_id or "").strip():
+        raise HTTPException(status_code=400, detail="scope=node 时 node_id 不能为空")
+    if scope == "page" and not (req.page_id or "").strip():
+        raise HTTPException(status_code=400, detail="scope=page 时 page_id 不能为空")
 
     try:
         retriever = _get_retriever()
@@ -105,6 +112,9 @@ async def rag_search(req: SearchRequest):
             top_k=req.top_k or 5,
             min_score=req.min_score or 0.6,
             knowledge_base_ids=req.knowledge_base_ids or None,
+            scope=scope,
+            node_id=req.node_id,
+            page_id=req.page_id,
         )
         return SearchResponse(
             results=results,
