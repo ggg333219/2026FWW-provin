@@ -812,7 +812,20 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                     _content_tasks[content_id] = task
                 _persist_content_task_sync(content_id, task)
 
-                if req.enhanced:
+                node_type = str(node.get("node_type") or node.get("type") or "").strip().lower()
+                if node_type == "interactive":
+                    interactive_items = InteractiveBuilder().build_all(node)
+                    from ai_engine.gen.export_html5 import render_interactive_html
+                    merged = {
+                        **node,
+                        "interactive_items": interactive_items,
+                        "content": render_interactive_html(
+                            interactive_items,
+                            course_name=req.course_name,
+                            title=str(node.get("title") or "互动课堂"),
+                        ),
+                    }
+                elif req.enhanced:
                     result = generator.generate_enhanced(nodes, req.context_markdown, req.course_name)
                     script_data = next(
                         (s for s in result.get("scripts", []) if s.get("node_id") == node.get("node_id")),
@@ -821,7 +834,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                 else:
                     script_data = generator.generate_single(node, req.course_name)
 
-                merged = {**node, **script_data}
+                    merged = {**node, **script_data}
                 completed.append(merged)
                 task["completed_nodes"] = idx + 1
                 task["nodes"] = list(completed)

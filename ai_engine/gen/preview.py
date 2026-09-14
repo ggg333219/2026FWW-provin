@@ -196,7 +196,7 @@ class PreviewRenderer:
 
     def _slide_interactive(self, node: dict, index: int, title: str) -> str:
         """interactive 类型专属布局：与 quiz 同源但视觉区分（绿色系、互动感）。"""
-        questions = self._as_raw_list(node.get("questions") or node.get("interactive_questions"))
+        questions = self._interactive_questions(node)
         if not questions:
             questions = self._extract_key_points(node) or self._split_content_into_points(
                 str(node.get("content") or "").strip()
@@ -211,6 +211,19 @@ class PreviewRenderer:
   {script_html}
   {segments_html}
 </div>"""
+
+    def _interactive_questions(self, node: dict[str, Any]) -> list[Any]:
+        """从结构化互动素材中提取题目，供预览与导出共用节点数据。"""
+        questions = self._as_raw_list(node.get("questions") or node.get("interactive_questions"))
+        if questions:
+            return questions
+        flattened: list[Any] = []
+        for item in node.get("interactive_items") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "").lower() == "quiz":
+                flattened.extend(self._as_raw_list(item.get("questions")))
+        return flattened
 
     @staticmethod
     def _as_raw_list(value: Any) -> list[Any]:
