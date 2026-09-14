@@ -127,7 +127,18 @@ func RegisterNewSkillRoutes(
 	versionHandler *handler.VersionHandler,
 	exportHandler *handler.ExportHandler,
 	contentHandler *handler.ContentHandler,
+	coursewareProjectHandler *handler.CoursewareProjectHandler,
 ) {
+	if coursewareProjectHandler != nil {
+		projects := v1.Group("/coursewares")
+		projects.Use(handler.JWTAuthMiddleware())
+		projects.POST("", coursewareProjectHandler.Create)
+		projects.GET("", coursewareProjectHandler.List)
+		projects.GET("/:project_id/context", coursewareProjectHandler.Context)
+		projects.GET("/:project_id/draft", coursewareProjectHandler.DraftGet)
+		projects.PUT("/:project_id/draft", coursewareProjectHandler.DraftPut)
+		projects.PUT("/:project_id/step", coursewareProjectHandler.StepPut)
+	}
 	// ---- S1: 意图理解 ----
 	intent := v1.Group("/intent")
 	{
@@ -200,4 +211,10 @@ func RegisterNewSkillRoutes(
 		exp.GET("/status/:job_id", exportHandler.Status)
 		exp.GET("/download/:job_id/:extension", exportHandler.Download)
 	}
+	canonicalExports := v1.Group("/generations")
+	canonicalExports.Use(handler.JWTAuthMiddleware())
+	canonicalExports.POST("/:generation_id/exports", exportHandler.CreateV2)
+	canonicalExportStatus := v1.Group("/exports")
+	canonicalExportStatus.Use(handler.JWTAuthMiddleware())
+	canonicalExportStatus.GET("/:export_job_id", exportHandler.StatusV2)
 }

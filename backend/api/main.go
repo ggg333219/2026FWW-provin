@@ -25,7 +25,6 @@ import (
 	"smart-teaching-backend/pkg/config"
 	applogger "smart-teaching-backend/pkg/logger"
 	"smart-teaching-backend/pkg/oss"
-	
 )
 
 func main() {
@@ -64,6 +63,7 @@ func main() {
 
 	err = db.AutoMigrate(
 		&model.Course{},
+		&model.CoursewareProject{},
 		&model.CoursePage{},
 		&model.TeachingNode{},
 		&model.TeachingNodeRelation{},
@@ -156,6 +156,8 @@ func main() {
 	weakPointHandler := handler.NewWeakPointHandler(db, aiClient, knowledgeMapService)
 	compatHandler := handler.NewCompatibilityHandler(db, aiClient, courseService)
 	authHandler := handler.NewAuthHandler(db)
+	coursewareProjectHandler := handler.NewCoursewareProjectHandler(service.NewCoursewareProjectService(db))
+	exportHandler := handler.NewExportHandler(aiClient, service.NewCoursewareProjectService(db))
 
 	// 初始化新的处理器
 	knowledgeMapHandler := handler.NewKnowledgeMapHandler(knowledgeMapService)
@@ -291,6 +293,19 @@ func main() {
 				teacherV1.GET("/:courseId/knowledge-graph/reference-health", compatHandler.GetTeachingNodeReferenceHealthV1)
 				teacherV1.POST("/:courseId/knowledge-graph/reference-health/repair", compatHandler.PostTeachingNodeReferenceRepairV1)
 			}
+			projects := v1.Group("/coursewares")
+			{
+				projects.POST("", coursewareProjectHandler.Create)
+				projects.GET("", coursewareProjectHandler.List)
+				projects.GET("/:project_id/context", coursewareProjectHandler.Context)
+				projects.GET("/:project_id/draft", coursewareProjectHandler.DraftGet)
+				projects.PUT("/:project_id/draft", coursewareProjectHandler.DraftPut)
+				projects.PUT("/:project_id/step", coursewareProjectHandler.StepPut)
+			}
+			canonicalExports := v1.Group("/generations")
+			canonicalExports.POST("/:generation_id/exports", exportHandler.CreateV2)
+			canonicalExportStatus := v1.Group("/exports")
+			canonicalExportStatus.GET("/:export_job_id", exportHandler.StatusV2)
 
 			aiV1 := v1.Group("/ai")
 			{

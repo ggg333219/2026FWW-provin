@@ -79,6 +79,7 @@ func main() {
 	if err := db.AutoMigrate(
 		&model.User{},
 		&model.Course{},
+		&model.CoursewareProject{},
 		&model.CoursePage{},
 		&model.TeachingNode{},
 		&model.TeachingNodeRelation{},
@@ -133,10 +134,11 @@ func main() {
 	}
 	outlineService := service.NewOutlineServiceWithDB(aiClient, db)
 	outlineHandler := handler.NewOutlineHandler(outlineService)
-	genHandler := handler.NewGenerationHandler(aiClient, outlineService)
+	genHandler := handler.NewGenerationHandler(aiClient, outlineService, service.NewCoursewareProjectService(db))
 	versionHandler := handler.NewVersionHandler(aiClient)
-	exportHandler := handler.NewExportHandler(aiClient)
+	exportHandler := handler.NewExportHandler(aiClient, service.NewCoursewareProjectService(db))
 	contentHandler := handler.NewContentHandler(aiClient)
+	coursewareProjectHandler := handler.NewCoursewareProjectHandler(service.NewCoursewareProjectService(db))
 
 	r := newBaseEngine(cfg.Server.Mode)
 
@@ -153,7 +155,7 @@ func main() {
 	skillV1 := api.Group("/v1")
 	router.RegisterNewSkillRoutes(skillV1,
 		convHandler, parseHandler, knowledgeHandler, outlineHandler,
-		genHandler, versionHandler, exportHandler, contentHandler,
+		genHandler, versionHandler, exportHandler, contentHandler, coursewareProjectHandler,
 	)
 
 	applogger.Info("教师端服务运行中", zap.Int("port", 8082))
