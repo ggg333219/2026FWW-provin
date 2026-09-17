@@ -243,6 +243,10 @@
           {{ outlineStore.loading ? 'AI 生成中...' : '🤖 AI 生成大纲' }}
         </button>
       </div>
+
+      <div v-if="outlineStore.loading" class="operation-status" role="status" aria-live="polite">
+        正在根据教学意图生成大纲，请稍候…
+      </div>
     </div>
 
     <!-- AI 修订对话框 -->
@@ -276,7 +280,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useOutlineStore } from '../../stores/outlineStore'
 import OutlineRevisionDialog from './OutlineRevisionDialog.vue'
 
@@ -313,6 +317,19 @@ if (props.autoRestore) {
   outlineStore.restore()
 }
 
+// localStorage 里的版本可能落后于后端（例如后端重启后重新保存、
+// 多标签页编辑或其他操作已经创建了新版本）。进入 S3 后先同步一次，
+// 避免第一次 AI 修订直接因为过期 base_version 返回 409。
+onMounted(async () => {
+  if (!outlineStore.outline_id) return
+  try {
+    await outlineStore.loadOutline(outlineStore.outline_id)
+    outlineStore._persist()
+  } catch {
+    // 后端暂不可用时保留已恢复的本地大纲，交由后续请求显示真实错误。
+  }
+})
+
 // 若无大纲且有 intent，自动创建
 watch(
   () => [outlineStore.outline_id, outlineStore.nodes.length],
@@ -326,7 +343,9 @@ watch(
 
 async function handleGenerateOutline() {
   if (!props.sessionId) {
-    emit('error', '缺少 session_id，请先完成 S1 意图理解')
+    const message = '缺少 session_id，请先完成 S1 意图理解'
+    outlineStore.error = message
+    emit('error', message)
     return
   }
   try {
@@ -355,7 +374,9 @@ async function handleGenerateOutline() {
       outline_version: outlineStore.outline_version
     })
   } catch (err) {
-    emit('error', err?.message || '创建大纲失败')
+    const message = err?.message || '创建大纲失败'
+    outlineStore.error = message
+    emit('error', message)
   }
 }
 
@@ -418,10 +439,14 @@ async function handleSendRevise() {
   }
 }
 
-function handleApplyRevision() {
-  outlineStore.applyRevision()
-  showReviseDialog.value = false
-  reviseMessage.value = ''
+async function handleApplyRevision() {
+  try {
+    await outlineStore.applyRevision()
+    showReviseDialog.value = false
+    reviseMessage.value = ''
+  } catch (err) {
+    emit('error', err?.message || '保存 AI 修订失败')
+  }
 }
 
 function handleCancelRevision() {
@@ -481,6 +506,16 @@ function handleCancelRevision() {
   border: 1px solid #fecaca;
   border-radius: 8px;
   color: #dc2626;
+  font-size: 13px;
+}
+
+.operation-status {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid #c6ded6;
+  border-radius: 8px;
+  background: #f0f5f2;
+  color: #2f605a;
   font-size: 13px;
 }
 

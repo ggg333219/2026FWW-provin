@@ -33,6 +33,7 @@ from ai_engine.gen.preview import PreviewRenderer
 from ai_engine.gen.validator import ContentValidator
 from ai_engine.gen.commands import CommandParser, EditCommand, CommandType
 from ai_engine.gen.patch import NodePatcher
+from ai_engine.gen.modify_intent import parse_modify_instruction
 from ai_engine.gen.interactive import InteractiveBuilder
 from ai_engine.intent.router import router as intent_router
 # RAG 内联调用支持（S2→KB 证据自动注入 S3 管线）
@@ -701,6 +702,11 @@ class GenContentRequest(BaseModel):
     enhanced: bool = False
     outline_id: str = ""
     outline_version: int = 0
+    target_node_ids: list[str] = Field(default_factory=list)
+    modify_instruction: str = ""
+    actions: list[str] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    adjacent_nodes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class GenContentStatusResponse(BaseModel):
@@ -726,6 +732,20 @@ _content_tasks: dict[str, dict[str, Any]] = {}
 _content_tasks_lock = threading.Lock()
 
 
+class ModifyIntentRequest(BaseModel):
+    project_id: str = ""
+    instruction: str = ""
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    modify_session_id: str = ""
+
+
+@app.post("/api/v1/ai/parse_modify")
+async def parse_modify(req: ModifyIntentRequest):
+    if not req.instruction.strip():
+        raise HTTPException(status_code=400, detail="instruction 不能为空")
+    return parse_modify_instruction(req.project_id, req.instruction, req.nodes)
+
+
 def _persist_content_task_sync(content_id: str, data: dict) -> None:
     """在同步 daemon 线程中持久化内容生成任务快照。"""
     try:
@@ -741,6 +761,7 @@ def _persist_content_task_sync(content_id: str, data: dict) -> None:
 
 
 @app.post("/gen/content", response_model=GenContentStatusResponse)
+@app.post("/api/v1/gen/content", response_model=GenContentStatusResponse)
 async def generate_content(req: GenContentRequest):
     """[S3 P1] 大纲确认后的内容生成：逐节点生成讲稿内容。
 
@@ -751,6 +772,8 @@ async def generate_content(req: GenContentRequest):
     """
     if not req.nodes:
         raise HTTPException(status_code=400, detail="nodes 不能为空")
+    if req.mode == "partial" and not req.target_node_ids:
+        raise HTTPException(status_code=400, detail="partial 模式需要 target_node_ids")
 
     content_id = f"content_{uuid.uuid4().hex[:12]}"
     now = datetime.utcnow().isoformat() + "Z"
@@ -799,6 +822,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
     try:
         generator = NodeGenerator()
         nodes = req.nodes
+        target_ids = set(req.target_node_ids)
         total = len(nodes)
         completed = []
         errors = []
@@ -812,12 +836,28 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                     _content_tasks[content_id] = task
                 _persist_content_task_sync(content_id, task)
 
+                if req.mode == "partial" and node.get("node_id") not in target_ids:
+                    merged = dict(node)
+                    completed.append(merged)
+                    task["completed_nodes"] = idx + 1
+                    task["nodes"] = list(completed)
+                    with _content_tasks_lock:
+                        _content_tasks[content_id] = task
+                    _persist_content_task_sync(content_id, task)
+                    continue
+
                 node_type = str(node.get("node_type") or node.get("type") or "").strip().lower()
+                generation_node = dict(node)
+                if req.mode == "partial" and req.modify_instruction:
+                    generation_node["content"] = (
+                        f"{node.get('content', '')}\n\n修改要求：{req.modify_instruction}\n"
+                        f"约束：{'；'.join(req.constraints)}"
+                    )
                 if node_type == "interactive":
-                    interactive_items = InteractiveBuilder().build_all(node)
+                    interactive_items = InteractiveBuilder().build_all(generation_node)
                     from ai_engine.gen.export_html5 import render_interactive_html
                     merged = {
-                        **node,
+                        **generation_node,
                         "interactive_items": interactive_items,
                         "content": render_interactive_html(
                             interactive_items,
@@ -832,9 +872,9 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                         {"script": "", "segments": []},
                     )
                 else:
-                    script_data = generator.generate_single(node, req.course_name)
+                    script_data = generator.generate_single(generation_node, req.course_name)
 
-                    merged = {**node, **script_data}
+                    merged = {**generation_node, **script_data}
                 completed.append(merged)
                 task["completed_nodes"] = idx + 1
                 task["nodes"] = list(completed)
@@ -879,6 +919,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
 
 
 @app.get("/gen/content/status/{content_id}", response_model=GenContentStatusResponse)
+@app.get("/api/v1/gen/content/status/{content_id}", response_model=GenContentStatusResponse)
 async def content_status(content_id: str):
     """[S3 P1] 查询内容生成任务状态。
 

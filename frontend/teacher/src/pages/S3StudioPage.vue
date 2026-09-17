@@ -50,11 +50,19 @@
         </button>
         <button
           class="phase-tab"
-          :class="{ active: currentPhase === 'generating' }"
-          @click="currentPhase = 'generating'"
+          :class="{ active: currentPhase === 'content' }"
+          @click="currentPhase = 'content'"
           :disabled="!outlineStore.isConfirmed"
         >
-          ⚙️ 内容生成
+          📝 内容生成
+        </button>
+        <button
+          class="phase-tab"
+          :class="{ active: currentPhase === 'generating' }"
+          @click="currentPhase = 'generating'"
+          :disabled="!contentStore.hasContent"
+        >
+          ⚙️ 全流程生成
         </button>
         <button
           class="phase-tab"
@@ -77,9 +85,176 @@
           @outline-created="handleOutlineCreated"
           @error="handleError"
         />
+        <div v-if="genError" class="error-bar" role="alert">
+          {{ genError }}
+        </div>
       </div>
 
       <!-- ==================== 内容生成阶段 ==================== -->
+      <div v-else-if="currentPhase === 'content'" class="phase-panel">
+        <!-- 大纲信息栏 -->
+        <div class="content-info-bar">
+          <div class="content-info-left">
+            <span class="gen-label">大纲</span>
+            <span class="gen-value"
+              >{{ outlineStore.outline_id }} v{{
+                outlineStore.outline_version
+              }}</span
+            >
+            <span class="gen-label" style="margin-left: 12px">节点数</span>
+            <span class="gen-value">{{ outlineStore.nodes.length }}</span>
+          </div>
+          <div class="content-info-right">
+            <button
+              v-if="
+                !contentStore.isGenerating && contentStore.status === 'idle'
+              "
+              class="btn btn-primary"
+              :disabled="!outlineStore.isConfirmed"
+              @click="handleStartContentGeneration"
+            >
+              📝 生成全部节点讲稿
+            </button>
+            <button
+              v-if="contentStore.status === 'done'"
+              class="btn btn-primary"
+              @click="goToGeneratingPhase"
+            >
+              继续生成页面 →
+            </button>
+          </div>
+        </div>
+
+        <!-- 内容生成进度 -->
+        <div
+          v-if="contentStore.isGenerating || contentStore.progress_pct > 0"
+          class="gen-progress-panel"
+        >
+          <div class="progress-bar-wrap">
+            <div
+              class="progress-bar-fill"
+              :style="{ width: contentStore.progress_pct + '%' }"
+            ></div>
+          </div>
+          <div class="progress-text">
+            <span>{{ Math.round(contentStore.progress_pct) }}%</span>
+            <span>{{ contentStore.progressText }}</span>
+          </div>
+        </div>
+
+        <!-- 错误展示 -->
+        <div v-if="contentStore.error" class="error-bar" role="alert">
+          {{ contentStore.error }}
+        </div>
+
+        <!-- 节点讲稿列表 -->
+        <div v-if="outlineStore.nodes.length > 0" class="content-nodes-list">
+          <div
+            v-for="node in outlineStore.nodes"
+            :key="node.node_id"
+            class="content-node-card"
+            :class="{
+              'node-done': contentStore.nodesContent[node.node_id],
+              'node-pending':
+                !contentStore.nodesContent[node.node_id] &&
+                !contentStore.isGenerating,
+              'node-current':
+                contentStore.current_node_id === node.node_id &&
+                contentStore.isGenerating,
+            }"
+          >
+            <div class="node-header">
+              <span class="node-order">第 {{ node.order }} 节</span>
+              <span class="node-title">{{ node.title || "未命名节点" }}</span>
+              <span
+                class="node-badge"
+                v-if="contentStore.nodesContent[node.node_id]"
+                >✅ 已完成</span
+              >
+              <span
+                class="node-badge node-badge-pending"
+                v-else-if="
+                  contentStore.isGenerating &&
+                  contentStore.current_node_id === node.node_id
+                "
+                >⏳ 生成中</span
+              >
+              <span class="node-badge node-badge-empty" v-else>⏸ 待生成</span>
+            </div>
+            <div class="node-body">
+              <!-- 已生成内容 -->
+              <div
+                v-if="contentStore.nodesContent[node.node_id]"
+                class="node-content-area"
+              >
+                <div class="node-summary">{{ node.summary }}</div>
+                <div class="node-script">
+                  {{
+                    contentStore.nodesContent[node.node_id].script ||
+                    contentStore.nodesContent[node.node_id].lecture_script ||
+                    "（内容生成中...）"
+                  }}
+                </div>
+                <div v-if="node.key_points?.length" class="node-key-points">
+                  <span
+                    v-for="(kp, i) in node.key_points"
+                    :key="i"
+                    class="key-point-tag"
+                  >
+                    {{ kp }}
+                  </span>
+                </div>
+                <div class="node-actions">
+                  <button
+                    class="btn btn-sm"
+                    :disabled="contentStore.modifying"
+                    @click="handleModifyNode(node.node_id)"
+                  >
+                    ✏️ AI 修改
+                  </button>
+                </div>
+              </div>
+              <!-- 待生成占位 -->
+              <div v-else class="node-placeholder">
+                <span v-if="!contentStore.isGenerating"
+                  >点击"生成全部节点讲稿"开始</span
+                >
+                <span v-else>等待生成...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="modifyNodeId" class="content-modify-bar" role="dialog" aria-label="AI 修改节点">
+          <div class="content-modify-title">修改第 {{ modifyNodeOrder }} 节内容</div>
+          <input
+            v-model="modifyMessage"
+            class="content-modify-input"
+            placeholder="例如：精简文字并增加一个生活案例"
+            autofocus
+            @keyup.enter="submitModifyNode"
+          />
+          <button
+            class="btn btn-primary"
+            :disabled="!modifyMessage.trim() || contentStore.modifying"
+            @click="submitModifyNode"
+          >
+            {{ contentStore.modifying ? "AI 修改中..." : "发送修改" }}
+          </button>
+          <button class="btn btn-outline" :disabled="contentStore.modifying" @click="cancelModifyNode">
+            取消
+          </button>
+          <div v-if="contentStore.modifyError" class="content-modify-error" role="alert">
+            {{ contentStore.modifyError }}
+          </div>
+        </div>
+
+        <div v-if="outlineStore.nodes.length === 0" class="pages-empty">
+          大纲中暂无节点，请先在大纲编辑中添加节点
+        </div>
+      </div>
+
+      <!-- ==================== 内容生成阶段（全流程） ==================== -->
       <div v-else-if="currentPhase === 'generating'" class="phase-panel">
         <!-- 生成控制栏 -->
         <div class="gen-control-bar">
@@ -306,6 +481,7 @@ import { useGenerationStore } from "../stores/generationStore";
 import { useOutlineStore } from "../stores/outlineStore";
 import { useInteractiveStore } from "../stores/interactiveStore";
 import { useIntentStore } from "../stores/intentStore";
+import { useContentStore } from "../stores/contentStore";
 import { teacherV1Api } from "../services/v1";
 import { API_BASE, AI_API_BASE } from "../config/api";
 
@@ -313,6 +489,7 @@ const generationStore = useGenerationStore();
 const outlineStore = useOutlineStore();
 const interactiveStore = useInteractiveStore();
 const intentStore = useIntentStore();
+const contentStore = useContentStore();
 
 // 阶段：outline | generating | pages
 const currentPhase = ref("outline");
@@ -322,6 +499,13 @@ const genError = ref("");
 const generationPages = ref([]);
 const regeneratingPageId = ref("");
 const previewFrameSrc = ref("");
+const modifyNodeId = ref("");
+const modifyMessage = ref("");
+
+const modifyNodeOrder = computed(() => {
+  const node = outlineStore.nodes.find((item) => item.node_id === modifyNodeId.value);
+  return node?.order || "";
+});
 
 // 是否有参考资料
 const hasEvidence = computed(() => {
@@ -358,6 +542,11 @@ onMounted(async () => {
     interactiveStore.setGenerationId(generationStore.lastGenId);
     await loadGenerationStatus();
   }
+  // 恢复内容生成状态
+  const contentRestored = contentStore.restore();
+  if (contentRestored && contentStore.hasContent) {
+    currentPhase.value = "content";
+  }
 });
 
 function statusLabel(status) {
@@ -382,6 +571,73 @@ function handleOutlineCreated({ outline_id, outline_version }) {
 
 // 大纲确认完成，进入生成阶段
 function handleOutlineConfirmed() {
+  currentPhase.value = "content";
+}
+
+// 开始内容生成（P1：outline → content）
+async function handleStartContentGeneration() {
+  if (!outlineStore.isConfirmed) {
+    handleError("请先确认大纲");
+    return;
+  }
+  if (!outlineStore.nodes || outlineStore.nodes.length === 0) {
+    handleError("大纲中无节点");
+    return;
+  }
+  contentStore.error = "";
+  contentStore.status = "idle";
+  contentStore.progress_pct = 0;
+  contentStore.completed_nodes = 0;
+  contentStore.total_nodes = outlineStore.nodes.length;
+
+  try {
+    // 调用 content API 创建任务
+    await contentStore.startGeneration({
+      nodes: outlineStore.nodes,
+      course_name: outlineStore.title || "课件",
+      mode: "llm",
+      enhanced: false,
+      outline_id: outlineStore.outline_id,
+      outline_version: outlineStore.outline_version,
+    });
+  } catch (err) {
+    handleError("启动内容生成失败: " + (err?.message || ""));
+  }
+}
+
+// AI 修改单个节点内容
+async function handleModifyNode(nodeId) {
+  if (!contentStore.content_id) {
+    handleError("内容生成任务尚未就绪，请先完成节点内容生成");
+    return;
+  }
+  modifyNodeId.value = nodeId;
+  modifyMessage.value = "";
+}
+
+function cancelModifyNode() {
+  if (contentStore.modifying) return;
+  modifyNodeId.value = "";
+  modifyMessage.value = "";
+}
+
+async function submitModifyNode() {
+  const message = modifyMessage.value.trim();
+  if (!modifyNodeId.value || !message) return;
+  try {
+    await contentStore.modifyNode({
+      content_id: contentStore.content_id,
+      node_id: modifyNodeId.value,
+      message,
+    });
+    cancelModifyNode();
+  } catch (err) {
+    handleError("修改内容失败: " + (err?.message || ""));
+  }
+}
+
+// 从 content 阶段跳转到 generating 阶段
+function goToGeneratingPhase() {
   currentPhase.value = "generating";
 }
 
@@ -415,11 +671,12 @@ async function handleStartGeneration() {
     });
 
     const task = resp?.data || resp || {};
-    const taskId = task.task_id || task.generation_id;
+  const taskId = task.task_id || task.generation_id;
     if (!taskId) throw new Error("未返回生成任务 ID");
 
     // 记录 generation_id
     const genId = task.generation_id || taskId;
+    generationStore.setLastTaskId(task.task_id || taskId);
     generationStore.setLastGenId(genId);
     interactiveStore.setGenerationId(genId);
 
@@ -453,13 +710,14 @@ async function handleStartGeneration() {
 
 // 加载生成状态
 async function loadGenerationStatus() {
-  if (!generationStore.lastGenId) return;
+  generationStore.restoreLastTaskId();
+  if (!generationStore.lastTaskId) return;
   try {
-    const resp = await teacherV1Api.generation.getGeneration(
-      generationStore.lastGenId,
+    const resp = await teacherV1Api.generation.getGenerationStatus(
+      generationStore.lastTaskId,
     );
     const data = resp?.data || resp || {};
-    generationPages.value = data.pages || [];
+    generationPages.value = data.pages || data.nodes || [];
   } catch (err) {
     console.warn("[S3StudioPage] 加载生成状态失败", err);
   }
@@ -830,6 +1088,165 @@ function handleError(msg) {
   display: flex;
   gap: 10px;
   justify-content: flex-end;
+}
+
+/* 内容生成阶段 */
+.content-info-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 16px;
+  background: #f8fbf9;
+  border: 1px solid #e4ede8;
+  border-radius: 12px;
+}
+.content-info-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.content-info-right {
+  display: flex;
+  gap: 8px;
+}
+.content-nodes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.content-node-card {
+  border: 1.5px solid #e2ece6;
+  border-radius: 12px;
+  padding: 12px 16px;
+  background: #fff;
+  transition: border-color 0.15s;
+}
+.content-node-card.node-done {
+  border-color: #6ee7b7;
+}
+.content-node-card.node-pending {
+  border-color: #e2ece6;
+  opacity: 0.85;
+}
+.content-node-card.node-current {
+  border-color: #fcd34d;
+  box-shadow: 0 0 0 1px #fcd34d33;
+}
+.node-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.node-order {
+  font-size: 11px;
+  font-weight: 700;
+  color: #2f605a;
+  background: #e8f5f0;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.node-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+}
+.node-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  background: #d1fae5;
+  color: #065f46;
+}
+.node-badge-pending {
+  background: #fef9c3;
+  color: #854d0e;
+}
+.node-badge-empty {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+.node-body {
+  font-size: 13px;
+}
+.node-summary {
+  font-size: 12px;
+  color: #607a71;
+  margin-bottom: 6px;
+}
+.node-script {
+  font-size: 13px;
+  color: #334155;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  padding: 8px 12px;
+  background: #f8fbf9;
+  border-radius: 8px;
+}
+.node-key-points {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.key-point-tag {
+  font-size: 11px;
+  background: #e8f5f0;
+  color: #2f605a;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.node-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+}
+.content-modify-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: #f0f5f2;
+  border: 1px solid #c6ded6;
+  border-radius: 10px;
+}
+.content-modify-title {
+  color: #2f605a;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.content-modify-input {
+  flex: 1;
+  min-width: 220px;
+  padding: 7px 10px;
+  border: 1px solid #c6ded6;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+}
+.content-modify-input:focus { border-color: #5ca68f; }
+.content-modify-error {
+  flex-basis: 100%;
+  color: #dc2626;
+  font-size: 12px;
+}
+.node-content-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.node-placeholder {
+  font-size: 13px;
+  color: #94a3b8;
+  padding: 8px 0;
 }
 
 /* 页面管理 */

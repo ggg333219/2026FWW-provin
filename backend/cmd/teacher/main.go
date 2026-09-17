@@ -80,6 +80,7 @@ func main() {
 		&model.User{},
 		&model.Course{},
 		&model.CoursewareProject{},
+		&service.CoursewareVersion{},
 		&model.CoursePage{},
 		&model.TeachingNode{},
 		&model.TeachingNodeRelation{},
@@ -134,7 +135,9 @@ func main() {
 	versionHandler := handler.NewVersionHandler(aiClient)
 	exportHandler := handler.NewExportHandler(aiClient, service.NewCoursewareProjectService(db))
 	contentHandler := handler.NewContentHandler(aiClient)
-	coursewareProjectHandler := handler.NewCoursewareProjectHandler(service.NewCoursewareProjectService(db))
+	projectService := service.NewCoursewareProjectService(db)
+	coursewareProjectHandler := handler.NewCoursewareProjectHandler(projectService)
+	coursewareModifyHandler := handler.NewCoursewareModifyHandler(projectService, service.NewCoursewareVersionService(db), aiClient)
 
 	r := newBaseEngine(cfg.Server.Mode)
 
@@ -151,7 +154,7 @@ func main() {
 	skillV1 := api.Group("/v1")
 	router.RegisterNewSkillRoutes(skillV1,
 		convHandler, parseHandler, knowledgeHandler, outlineHandler,
-		genHandler, versionHandler, exportHandler, contentHandler, coursewareProjectHandler,
+		genHandler, versionHandler, exportHandler, contentHandler, coursewareProjectHandler, coursewareModifyHandler,
 	)
 
 	applogger.Info("教师端服务运行中", zap.Int("port", 8082))

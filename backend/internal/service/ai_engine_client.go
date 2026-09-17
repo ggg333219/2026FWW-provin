@@ -733,13 +733,18 @@ func (c *aiEngineClient) GenerationFinalize(ctx context.Context, req GenerationF
 // =============================================================================
 
 type GenContentRequest struct {
-	Nodes           []TeachingNodeItem `json:"nodes"`
-	ContextMarkdown string             `json:"context_markdown"`
-	CourseName      string             `json:"course_name"`
-	Mode            string             `json:"mode"`
-	Enhanced        bool               `json:"enhanced"`
-	OutlineID       string             `json:"outline_id"`
-	OutlineVersion  int                `json:"outline_version"`
+	Nodes             []TeachingNodeItem `json:"nodes"`
+	ContextMarkdown   string             `json:"context_markdown"`
+	CourseName        string             `json:"course_name"`
+	Mode              string             `json:"mode"`
+	Enhanced          bool               `json:"enhanced"`
+	OutlineID         string             `json:"outline_id"`
+	OutlineVersion    int                `json:"outline_version"`
+	TargetNodeIDs     []string           `json:"target_node_ids,omitempty"`
+	ModifyInstruction string             `json:"modify_instruction,omitempty"`
+	Actions           []string           `json:"actions,omitempty"`
+	Constraints       []string           `json:"constraints,omitempty"`
+	AdjacentNodes     []TeachingNodeItem `json:"adjacent_nodes,omitempty"`
 }
 
 type GenContentStatusResponse struct {
@@ -751,6 +756,33 @@ type GenContentStatusResponse struct {
 	CompletedNodes int                `json:"completed_nodes"`
 	Nodes          []TeachingNodeItem `json:"nodes,omitempty"`
 	Error          string             `json:"error,omitempty"`
+}
+
+type ModifyIntentRequest struct {
+	ProjectID       string             `json:"project_id"`
+	Instruction     string             `json:"instruction"`
+	Nodes           []TeachingNodeItem `json:"nodes"`
+	ModifySessionID string             `json:"modify_session_id,omitempty"`
+}
+
+type ModifyIntentResponse struct {
+	ProjectID           string   `json:"project_id,omitempty"`
+	TargetType          string   `json:"target_type"`
+	TargetIDs           []string `json:"target_ids"`
+	Action              string   `json:"action"`
+	Actions             []string `json:"actions,omitempty"`
+	Constraints         []string `json:"constraints"`
+	Confidence          float64  `json:"confidence"`
+	ClarificationNeeded bool     `json:"clarification_needed"`
+	Clarification       string   `json:"clarification,omitempty"`
+}
+
+func (c *aiEngineClient) ParseModify(ctx context.Context, req ModifyIntentRequest) (*ModifyIntentResponse, error) {
+	var result ModifyIntentResponse
+	if err := c.postJSON(ctx, "/api/v1/ai/parse_modify", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func (c *aiEngineClient) GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error) {

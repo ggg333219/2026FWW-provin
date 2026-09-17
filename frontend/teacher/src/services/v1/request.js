@@ -38,6 +38,14 @@ function clearMockMode() {
   }
 }
 
+// S3 生成链路必须使用真实 Go → AI Engine 服务，不能用离线 Mock 伪造任务状态。
+function isStrictS3Path(path = '') {
+  return path === '/api/v1/gen/create' ||
+    path === '/api/v1/gen/preview' ||
+    path.startsWith('/api/v1/gen/status/') ||
+    path.startsWith('/api/v1/gen/content')
+}
+
 /**
  * 探测后端是否已恢复可用。
  * 仅当处于 Mock 模式时调用：后端重启/恢复后，清除 mock 标志，重新走真实链路。
@@ -77,6 +85,9 @@ export async function requestJson(path, options = {}) {
     if (await isBackendReachable()) {
       clearMockMode()
     } else {
+      if (isStrictS3Path(path)) {
+        throw new Error('S3 真实后端不可用，已阻止 Mock 回退')
+      }
       const mockPayload = handleMockRequest(path, options, new Error('mock mode'))
       if (mockPayload) return mockPayload
       throw new Error(`[Mock] 未匹配路由: ${options?.method || 'GET'} ${path}`)
@@ -105,6 +116,9 @@ export async function requestJson(path, options = {}) {
     // 不切换全局 mock、也不回退 Mock，避免“真实数据 → 假数据”跳变；
     // 交由调用方优雅降级（空态提示 / 轮询重试）。
     if (error && error.name === 'AbortError') {
+      throw error
+    }
+    if (isStrictS3Path(path)) {
       throw error
     }
     // 尝试 Mock 回退

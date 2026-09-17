@@ -51,6 +51,9 @@ export const useGenerationStore = defineStore('generation', {
     /** 最近一次 S3 全流程生成的 generation_id，供 S4 版本管理读取。 */
     lastGenId: '',
 
+    /** 最近一次 S3 全流程生成的 task_id，供 gen/status 状态轮询使用。 */
+    lastTaskId: '',
+
     /** 当前页音频（S2 兼容） */
     currentPageAudio: null,
     audioGenerating: false,
@@ -104,6 +107,18 @@ export const useGenerationStore = defineStore('generation', {
       return normalized
     },
 
+    setLastTaskId(taskId) {
+      const normalized = String(taskId || '').trim()
+      if (!normalized) return ''
+      this.lastTaskId = normalized
+      try {
+        window.localStorage.setItem('fuww_last_task_id', normalized)
+      } catch (error) {
+        console.warn('[generationStore] 持久化 task_id 失败', error)
+      }
+      return normalized
+    },
+
     /** 从 localStorage 恢复最近一次成功生成的 ID。 */
     restoreLastGenId() {
       if (this.lastGenId) return this.lastGenId
@@ -114,6 +129,17 @@ export const useGenerationStore = defineStore('generation', {
         console.warn('[generationStore] 恢复 generation_id 失败', error)
       }
       return this.lastGenId
+    },
+
+    restoreLastTaskId() {
+      if (this.lastTaskId) return this.lastTaskId
+      try {
+        const cached = window.localStorage.getItem('fuww_last_task_id')
+        if (cached) this.lastTaskId = cached
+      } catch (error) {
+        console.warn('[generationStore] 恢复 task_id 失败', error)
+      }
+      return this.lastTaskId
     },
 
     /**

@@ -83,12 +83,13 @@ type Course struct {
 // CoursewareProject is the persistent workspace for the teacher editing flow.
 type CoursewareProject struct {
 	BaseModel
-	OwnerID     string `gorm:"size:36;not null;index" json:"owner_id"`
-	Title       string `gorm:"size:200;not null" json:"title"`
-	CurrentStep string `gorm:"size:30;not null;default:'s1_intent'" json:"current_step"`
-	GenID       string `gorm:"size:100;index" json:"gen_id,omitempty"`
-	Status      string `gorm:"size:20;not null;default:'draft';index" json:"status"`
-	DraftJSON   JSONB  `gorm:"type:jsonb;not null;default:'{}'" json:"draft_json"`
+	OwnerID        string `gorm:"size:36;not null;index" json:"owner_id"`
+	Title          string `gorm:"size:200;not null" json:"title"`
+	CurrentStep    string `gorm:"size:30;not null;default:'s1_intent'" json:"current_step"`
+	CurrentVersion int    `gorm:"not null;default:1" json:"current_version"`
+	GenID          string `gorm:"size:100;index" json:"gen_id,omitempty"`
+	Status         string `gorm:"size:20;not null;default:'draft';index" json:"status"`
+	DraftJSON      JSONB  `gorm:"type:jsonb;not null;default:'{}'" json:"draft_json"`
 }
 
 // CoursePage 课件页表

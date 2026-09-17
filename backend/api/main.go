@@ -64,6 +64,7 @@ func main() {
 	err = db.AutoMigrate(
 		&model.Course{},
 		&model.CoursewareProject{},
+		&service.CoursewareVersion{},
 		&model.CoursePage{},
 		&model.TeachingNode{},
 		&model.TeachingNodeRelation{},
@@ -157,6 +158,7 @@ func main() {
 	compatHandler := handler.NewCompatibilityHandler(db, aiClient, courseService)
 	authHandler := handler.NewAuthHandler(db)
 	coursewareProjectHandler := handler.NewCoursewareProjectHandler(service.NewCoursewareProjectService(db))
+	coursewareModifyHandler := handler.NewCoursewareModifyHandler(service.NewCoursewareProjectService(db), service.NewCoursewareVersionService(db), aiClient)
 	exportHandler := handler.NewExportHandler(aiClient, service.NewCoursewareProjectService(db))
 
 	// 初始化新的处理器
@@ -301,6 +303,10 @@ func main() {
 				projects.GET("/:project_id/draft", coursewareProjectHandler.DraftGet)
 				projects.PUT("/:project_id/draft", coursewareProjectHandler.DraftPut)
 				projects.PUT("/:project_id/step", coursewareProjectHandler.StepPut)
+				projects.POST("/:project_id/modify", coursewareModifyHandler.Modify)
+				projects.GET("/:project_id/modify-history", coursewareModifyHandler.History)
+				projects.POST("/:project_id/rollback", coursewareModifyHandler.Rollback)
+				projects.GET("/:project_id/versions", coursewareModifyHandler.History)
 			}
 			canonicalExports := v1.Group("/generations")
 			canonicalExports.POST("/:generation_id/exports", exportHandler.CreateV2)

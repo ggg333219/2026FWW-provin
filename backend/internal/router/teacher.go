@@ -128,6 +128,7 @@ func RegisterNewSkillRoutes(
 	exportHandler *handler.ExportHandler,
 	contentHandler *handler.ContentHandler,
 	coursewareProjectHandler *handler.CoursewareProjectHandler,
+	coursewareModifyHandler *handler.CoursewareModifyHandler,
 ) {
 	if coursewareProjectHandler != nil {
 		projects := v1.Group("/coursewares")
@@ -138,6 +139,12 @@ func RegisterNewSkillRoutes(
 		projects.GET("/:project_id/draft", coursewareProjectHandler.DraftGet)
 		projects.PUT("/:project_id/draft", coursewareProjectHandler.DraftPut)
 		projects.PUT("/:project_id/step", coursewareProjectHandler.StepPut)
+		if coursewareModifyHandler != nil {
+			projects.POST("/:project_id/modify", coursewareModifyHandler.Modify)
+			projects.GET("/:project_id/modify-history", coursewareModifyHandler.History)
+			projects.POST("/:project_id/rollback", coursewareModifyHandler.Rollback)
+			projects.GET("/:project_id/versions", coursewareModifyHandler.History)
+		}
 	}
 	// ---- S1: 意图理解 ----
 	intent := v1.Group("/intent")
