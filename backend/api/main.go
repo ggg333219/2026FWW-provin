@@ -297,6 +297,7 @@ func main() {
 			{
 				projects.POST("", coursewareProjectHandler.Create)
 				projects.GET("", coursewareProjectHandler.List)
+				projects.DELETE("/:project_id", coursewareProjectHandler.Delete)
 				projects.GET("/:project_id/context", coursewareProjectHandler.Context)
 				projects.GET("/:project_id/draft", coursewareProjectHandler.DraftGet)
 				projects.PUT("/:project_id/draft", coursewareProjectHandler.DraftPut)

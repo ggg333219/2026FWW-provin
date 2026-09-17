@@ -1,6 +1,7 @@
 <template>
   <div class="section-card">
     <h3>导出中心</h3>
+    <p v-if="genId" class="export-context">{{ courseTitle }} · {{ versionLabel }}</p>
 
     <div v-if="!genId" class="empty-tip">请先加载版本</div>
     <div v-else class="export-panel">
@@ -98,6 +99,8 @@ const props = defineProps({
   intent: { type: Object, default: () => ({}) },
   /** 当前版本节点树，直接渲染为幻灯片（跳过 LLM） */
   nodes: { type: Array, default: () => [] }
+  ,courseTitle: { type: String, default: '未命名课件' }
+  ,versionLabel: { type: String, default: 'v1' }
 })
 
 defineEmits(['start-export', 'reset-export', 'skill-preview'])
@@ -186,6 +189,7 @@ function handleDownload() {
   height: fit-content;
 }
 .section-card h3 { margin: 0 0 12px; font-size: 16px; color: #2d5f58; }
+.export-context { margin: -5px 0 12px; color: #71847d; font-size: 12px; }
 .empty-tip { color: #94a3b8; text-align: center; padding: 40px 0; font-size: 14px; }
 
 .export-panel { display: flex; flex-direction: column; gap: 14px; }

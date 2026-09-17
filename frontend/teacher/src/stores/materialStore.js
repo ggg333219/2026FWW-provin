@@ -12,10 +12,12 @@ export const isEvidencePacketUsable = (packet) => {
   return chunks.length > 0 || citations.length > 0
 }
 
-const removeEvidenceHandoff = () => {
+const evidenceHandoffKey = (scopeId = '') => scopeId ? `${EVIDENCE_HANDOFF_KEY}:${scopeId}` : EVIDENCE_HANDOFF_KEY
+
+const removeEvidenceHandoff = (scopeId = '') => {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.removeItem(EVIDENCE_HANDOFF_KEY)
+    window.localStorage.removeItem(evidenceHandoffKey(scopeId))
   } catch {
     // 浏览器禁用存储时仍允许清理内存状态。
   }
@@ -194,7 +196,6 @@ export const useMaterialStore = defineStore('material', {
         this.parseTasks = []
         this.ragResults = []
         this.evidencePackets = []
-        removeEvidenceHandoff()
       }
       this.activeSessionId = requestedSessionId
       this.loading = true
@@ -426,7 +427,7 @@ export const useMaterialStore = defineStore('material', {
       // 持久化最新证据包到 localStorage，供 S3 生成环节读取（成员B：S2→S3 证据透传）
       if (packet) {
         try {
-          window.localStorage.setItem(EVIDENCE_HANDOFF_KEY, JSON.stringify(packet))
+          window.localStorage.setItem(evidenceHandoffKey(this.activeSessionId), JSON.stringify(packet))
         } catch (e) {
           console.warn('[materialStore] 持久化证据包失败', e)
         }
@@ -439,7 +440,7 @@ export const useMaterialStore = defineStore('material', {
 
     clearEvidencePackets() {
       this.evidencePackets = []
-      removeEvidenceHandoff()
+      removeEvidenceHandoff(this.activeSessionId)
     },
 
     /** 清除选中素材的持久化（用于刷新后重建） */
@@ -457,7 +458,6 @@ export const useMaterialStore = defineStore('material', {
       this.parseTasks = []
       this.ragResults = []
       this.evidencePackets = []
-      removeEvidenceHandoff()
       this.uploading = false
       this.loading = false
       this.searching = false

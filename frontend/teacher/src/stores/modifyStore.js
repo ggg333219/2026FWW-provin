@@ -152,7 +152,7 @@ export const useModifyStore = defineStore('modifyPanel', {
 
         // 应用修改结果
         if (typeof onApplied === 'function' && Array.isArray(data.all_nodes)) {
-          onApplied(data.all_nodes)
+          await Promise.resolve(onApplied(data.all_nodes))
         }
 
         this._persist()
@@ -186,7 +186,7 @@ export const useModifyStore = defineStore('modifyPanel', {
           versionNo: this.currentVersionNo,
         })
         if (typeof onApplied === 'function' && Array.isArray(data.nodes)) {
-          onApplied(data.nodes)
+          await Promise.resolve(onApplied(data.nodes))
         }
         this._persist()
       } catch (e) {
@@ -212,7 +212,7 @@ export const useModifyStore = defineStore('modifyPanel', {
           versionNo: this.currentVersionNo,
         })
         if (typeof onApplied === 'function' && Array.isArray(data.nodes)) {
-          onApplied(data.nodes)
+          await Promise.resolve(onApplied(data.nodes))
         }
         this._persist()
       } catch (e) {

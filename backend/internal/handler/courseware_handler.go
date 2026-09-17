@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -70,34 +72,92 @@ func (h *CoursewareHandler) List(c *gin.Context) {
 func (h *CoursewareHandler) UpdateStep(c *gin.Context) {
 	projectID := c.Param("project_id")
 	var req struct {
-		Step string `json:"step"`
+		Step        string `json:"step"`
+		CurrentStep string `json:"current_step"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Step == "" {
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
+		return
+	}
+	step := req.CurrentStep
+	if step == "" {
+		step = req.Step
+	}
+	if step == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "step 必填"})
 		return
 	}
-	if err := h.svc.UpdateStep(c.Request.Context(), projectID, req.Step); err != nil {
+	if err := h.svc.UpdateStep(c.Request.Context(), projectID, step); err != nil {
 		h.mapError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"project_id": projectID, "step": req.Step}})
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"project_id": projectID, "step": step, "current_step": step}})
 }
 
 // SaveDraft PUT /:project_id/draft —— 保存草稿。
 func (h *CoursewareHandler) SaveDraft(c *gin.Context) {
 	projectID := c.Param("project_id")
 	var req struct {
-		DraftJSON string `json:"draft_json"`
+		DraftJSON json.RawMessage `json:"draft_json"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
 		return
 	}
-	if err := h.svc.SaveDraft(c.Request.Context(), projectID, req.DraftJSON); err != nil {
+	raw := bytes.TrimSpace(req.DraftJSON)
+	if len(raw) == 0 {
+		raw = []byte("{}")
+	}
+	draftJSON := string(raw)
+	if raw[0] == '"' {
+		if err := json.Unmarshal(raw, &draftJSON); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "draft_json 不是有效 JSON"})
+			return
+		}
+	}
+	if !json.Valid([]byte(draftJSON)) {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "draft_json 不是有效 JSON"})
+		return
+	}
+	if err := h.svc.SaveDraft(c.Request.Context(), projectID, draftJSON); err != nil {
 		h.mapError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"saved": true}})
+}
+
+// Context GET /:project_id/context —— 一次返回恢复编辑所需的项目与草稿。
+func (h *CoursewareHandler) Context(c *gin.Context) {
+	projectID := c.Param("project_id")
+	project, err := h.svc.GetProject(c.Request.Context(), projectID)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	draftJSON, err := h.svc.GetDraft(c.Request.Context(), projectID)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	var draft any = map[string]any{}
+	if draftJSON != "" {
+		if err := json.Unmarshal([]byte(draftJSON), &draft); err != nil {
+			draft = map[string]any{}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
+		"project": project, "draft": draft, "current_step": project.CurrentStep,
+		"generation_id": project.GenID,
+	}})
+}
+
+// Delete DELETE /:project_id —— 删除项目及关联草稿、版本。
+func (h *CoursewareHandler) Delete(c *gin.Context) {
+	if err := h.svc.DeleteProject(c.Request.Context(), c.Param("project_id")); err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"deleted": true}})
 }
 
 // GetDraft GET /:project_id/draft —— 读取草稿（draft_json 为原始 JSON 字符串）。
@@ -115,7 +175,7 @@ func (h *CoursewareHandler) GetDraft(c *gin.Context) {
 func (h *CoursewareHandler) Modify(c *gin.Context) {
 	projectID := c.Param("project_id")
 	var req struct {
-		Instruction string                   `json:"instruction"`
+		Instruction string                     `json:"instruction"`
 		Nodes       []service.TeachingNodeItem `json:"nodes"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {

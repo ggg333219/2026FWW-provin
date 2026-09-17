@@ -251,7 +251,7 @@ onMounted(async () => {
         if (Array.isArray(parsed)) {
           boundEvidenceList.value = parsed
           const latest = parsed[parsed.length - 1]?.packet
-          if (latest) window.localStorage.setItem('fuww_s2_evidence_packet', JSON.stringify(latest))
+          if (latest) window.localStorage.setItem(`fuww_s2_evidence_packet:${sessionId.value}`, JSON.stringify(latest))
         }
       }
     } catch {

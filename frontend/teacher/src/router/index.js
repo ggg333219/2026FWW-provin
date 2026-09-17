@@ -3,6 +3,12 @@ import { useAuthStore } from '../stores/authStore'
 
 const routes = [
   {
+    path: '/courseware/create',
+    name: 'CoursewareResume',
+    component: () => import('../pages/CoursewareResumePage.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/',
     redirect: '/middle'
   },

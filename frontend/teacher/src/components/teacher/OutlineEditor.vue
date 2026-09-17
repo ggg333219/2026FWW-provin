@@ -335,7 +335,7 @@ async function handleGenerateOutline() {
     // 尝试从 localStorage 读取证据包
     let evidence = null
     try {
-      const raw = window.localStorage.getItem('fuww_s2_evidence_packet')
+      const raw = window.localStorage.getItem(`fuww_s2_evidence_packet:${props.sessionId}`)
       if (raw) evidence = JSON.parse(raw)
     } catch {}
     // 尝试从 localStorage 读取 markdown 内容

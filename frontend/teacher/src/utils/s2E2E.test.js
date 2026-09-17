@@ -103,27 +103,29 @@ describe('S2 前端链路（mock）', () => {
       }
     })
     const store = useMaterialStore()
+    store.activeSessionId = 's_test'
     const packet = await store.generateEvidence({ query: '完全不存在的内容' })
 
     expect(packet).toBe(null)
     expect(store.evidencePackets).toHaveLength(0)
-    expect(window.localStorage.getItem('fuww_s2_evidence_packet')).toBe(null)
+    expect(window.localStorage.getItem('fuww_s2_evidence_packet:s_test')).toBe(null)
     expect(store.error).toContain('未检索到可用证据')
   })
 
   it('清空证据历史时同时移除 S3 交接缓存', () => {
     const store = useMaterialStore()
+    store.activeSessionId = 's_test'
     store.addEvidencePacket('快速排序', {
       relevant_chunks: [{ chunk_id: 'chunk_1', content: '分治思想' }],
       synthesized_context: '快速排序使用分治思想。',
       citations: []
     })
-    expect(window.localStorage.getItem('fuww_s2_evidence_packet')).toBeTruthy()
+    expect(window.localStorage.getItem('fuww_s2_evidence_packet:s_test')).toBeTruthy()
 
     store.clearEvidencePackets()
 
     expect(store.evidencePackets).toHaveLength(0)
-    expect(window.localStorage.getItem('fuww_s2_evidence_packet')).toBe(null)
+    expect(window.localStorage.getItem('fuww_s2_evidence_packet:s_test')).toBe(null)
   })
 
   it('parseProcess → 轮询到 done 且 chunks 含 materialId', async () => {

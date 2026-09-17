@@ -1,7 +1,7 @@
 <template>
   <div class="modify-panel" v-if="modifyStore.projectId">
     <div class="panel-header">
-      <span class="panel-title">🤖 AI 修改</span>
+      <span class="panel-title">🤖 AI 修改 PPT</span>
       <span class="version-badge">{{ modifyStore.versionLabel }}</span>
       <div class="undo-redo">
         <button class="icon-btn" :disabled="!modifyStore.canUndo || modifyStore.modifying"
@@ -64,20 +64,25 @@
 import { ref, watch, nextTick } from 'vue'
 import { useModifyStore } from '../../stores/modifyStore'
 import { useOutlineStore } from '../../stores/outlineStore'
+import { useGenerationStore } from '../../stores/generationStore'
 
 const modifyStore = useModifyStore()
 const outlineStore = useOutlineStore()
+const generationStore = useGenerationStore()
 const messagesEl = ref(null)
 
 // 节点转 TeachingNodeItem 格式（outlineStore.nodes → Go TeachingNodeItem JSON）
 function nodesForApi() {
-  return (outlineStore.nodes || []).map((n) => ({
+  const source = generationStore.currentScriptNodes?.length
+    ? generationStore.currentScriptNodes
+    : outlineStore.nodes
+  return (source || []).map((n) => ({
     node_id: n.node_id,
     title: n.title,
     summary: n.summary,
     node_type: n.node_type,
     key_points: n.key_points || [],
-    core_points: n.key_points || [],
+    core_points: n.core_points || n.key_points || [],
     script: n.script || '',
     segments: n.segments || [],
     estimated_duration_minutes: n.estimated_duration_minutes || 5,
@@ -86,15 +91,16 @@ function nodesForApi() {
   }))
 }
 
-// 修改结果写回 outlineStore
-function applyResult(allNodes) {
+// 生成后优先写回 PPT 节点并用 inline 节点刷新预览；生成前才回写大纲。
+async function applyResult(allNodes) {
   if (!Array.isArray(allNodes)) return
-  outlineStore.nodes = allNodes.map((n) => ({
+  const normalized = allNodes.map((n) => ({
     node_id: n.node_id,
     title: n.title,
     summary: n.summary,
     node_type: n.node_type || 'content',
-    key_points: n.key_points || [],
+    key_points: n.key_points || n.core_points || [],
+    core_points: n.core_points || n.key_points || [],
     estimated_duration_minutes: n.estimated_duration_minutes || 5,
     script: n.script || '',
     segments: n.segments || [],
@@ -102,8 +108,17 @@ function applyResult(allNodes) {
     source_chunk_ids: n.source_chunk_ids || [],
     interactive_plan: n.interactive_plan || null,
   }))
-  outlineStore._reorder()
-  outlineStore._persist()
+  if (generationStore.currentScriptNodes?.length || generationStore.lastGenId) {
+    generationStore.setNodes(normalized)
+    generationStore.setScript(
+      normalized.map((node) => node.script || node.content || node.summary || '').filter(Boolean).join('\n\n'),
+    )
+    await generationStore.renderCoursewarePreview('AI 迭代课件', { genId: '' })
+  } else {
+    outlineStore.nodes = normalized
+    outlineStore._reorder()
+    outlineStore._persist()
+  }
 }
 
 async function handleSend() {

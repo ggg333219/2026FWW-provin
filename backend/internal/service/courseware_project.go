@@ -73,6 +73,16 @@ func (s *CoursewareProjectService) List(ctx context.Context, ownerID string, pag
 	return items, total, err
 }
 
+// Delete removes a project from the owner's active list. CoursewareProject uses
+// GORM soft deletion, so an accidental removal remains recoverable by operators.
+func (s *CoursewareProjectService) Delete(ctx context.Context, ownerID, id string) error {
+	p, err := s.Get(ctx, ownerID, id)
+	if err != nil {
+		return err
+	}
+	return s.db.WithContext(ctx).Delete(p).Error
+}
+
 func (s *CoursewareProjectService) SaveDraft(ctx context.Context, ownerID, id string, raw json.RawMessage) (*model.CoursewareProject, error) {
 	p, err := s.Get(ctx, ownerID, id)
 	if err != nil {

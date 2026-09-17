@@ -8,15 +8,17 @@
           <p>大纲编辑 → 内容生成 → 页面预览</p>
         </div>
         <div class="page-header-right">
+          <button v-if="projectStore.projectId" class="save-state" :class="projectStore.saveState" @click="projectStore.saveNow(draftSnapshot())">{{ projectStore.saveLabel || '保存草稿' }}</button>
+          <button v-if="generationStore.currentScriptNodes.length" class="save-version" :disabled="saveVersionState === 'saving'" @click="handleSaveNewVersion">{{ saveVersionState === 'saving' ? '正在保存版本…' : (lastSavedVersion ? `已保存 v${lastSavedVersion}` : '保存新版本') }}</button>
           <div class="step-pills">
-            <router-link :to="{ name: 'S1Intent' }" class="pill"
+            <router-link :to="{ name: 'S1Intent', query: { project_id: projectStore.projectId } }" class="pill"
               >S1 意图</router-link
             >
-            <router-link :to="{ name: 'S2Material' }" class="pill"
+            <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="pill"
               >S2 资料</router-link
             >
             <span class="pill active">S3 生成</span>
-            <router-link :to="{ name: 'S4Version' }" class="pill"
+            <router-link :to="{ name: 'S4Version', query: { project_id: projectStore.projectId, generation_id: generationStore.lastGenId } }" class="pill"
               >S4 版本</router-link
             >
             <router-link :to="{ name: 'Middle' }" class="pill back-pill"
@@ -36,7 +38,7 @@
           <strong>当前为无参考资料生成模式</strong>
           <span>本次内容仅依据 S1 教学意图生成，不会伪造资料引用。</span>
         </div>
-        <router-link :to="{ name: 'S2Material' }">返回补充资料</router-link>
+        <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }">返回补充资料</router-link>
       </div>
 
       <!-- S3 阶段指示器 -->
@@ -64,12 +66,21 @@
         >
           📄 页面管理
         </button>
+        <button class="phase-tab" :class="{ active: currentPhase === 'style' }" :disabled="!generationStore.lastGenId" @click="currentPhase = 'style'">🎨 PPT 样式</button>
       </div>
 
       <!-- ==================== 大纲阶段 ==================== -->
       <!-- ==================== 大纲阶段 ==================== -->
+      <EvidenceSidebar
+        :packet="evidencePacket"
+        :nodes="generationStore.currentScriptNodes.length ? generationStore.currentScriptNodes : outlineStore.nodes"
+        :searching="materialStore.searching"
+        :default-query="intentStore.intentSummary?.topic || ''"
+        @search="handleEvidenceSearch"
+        @apply="handleEvidenceApply"
+      />
       <!-- C6: AI 修改对话面板（右侧浮动；projectId 绑定后显示） -->
-      <ModifyPanel />
+      <ModifyPanel class="s3-ai-panel" />
       <div v-if="currentPhase === 'outline'" class="phase-panel">
         <OutlineEditor
           :session-id="intentStore.sessionId"
@@ -192,6 +203,18 @@
         </div>
       </div>
 
+      <div v-else-if="currentPhase === 'style'" class="phase-panel style-panel">
+        <h3>只调整呈现，不改教学事实</h3>
+        <p>样式设置不会触发 RAG 检索，也不会修改大纲、引用或生成内容。</p>
+        <label>全局模板 <select v-model="templateId"><option value="default">默认教学模板</option><option value="deck-swiss-edu">瑞士教育风</option></select></label>
+        <label>配色 <select v-model="palette"><option value="classic">经典青绿</option><option value="klein-blue">克莱因蓝</option></select></label>
+        <label>版式 <select v-model="layoutMode"><option value="balanced">图文均衡</option><option value="visual">视觉优先</option><option value="text">内容优先</option></select></label>
+        <label>字体 <select v-model="fontFamily"><option value="system">系统默认</option><option value="source-han">思源黑体</option><option value="serif">中文宋体</option></select></label>
+        <label>信息密度 <select v-model="density"><option value="comfortable">舒展</option><option value="compact">紧凑</option><option value="minimal">极简</option></select></label>
+        <div class="style-ai-hint">也可以在右侧直接告诉 AI：“整体换成简洁商务风”或“这一页改成左图右文”。样式调整只改呈现字段，不重新检索资料。</div>
+        <div class="style-actions"><button class="btn btn-outline" @click="projectStore.saveNow(draftSnapshot())">保存样式草稿</button><button class="btn btn-primary" :disabled="generationStore.previewLoading" @click="applyPresentationStyle">{{ generationStore.previewLoading ? '正在刷新…' : '应用并刷新预览' }}</button></div>
+      </div>
+
       <!-- ==================== 页面管理阶段 ==================== -->
       <div v-else-if="currentPhase === 'pages'" class="phase-panel">
         <div class="pages-control-bar">
@@ -302,15 +325,19 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import AppShell from "../components/layout/AppShell.vue";
 import OutlineEditor from "../components/teacher/OutlineEditor.vue";
 import ModifyPanel from "../components/teacher/ModifyPanel.vue";
+import EvidenceSidebar from "../components/teacher/EvidenceSidebar.vue";
 import { useGenerationStore } from "../stores/generationStore";
 import { useOutlineStore } from "../stores/outlineStore";
 import { useInteractiveStore } from "../stores/interactiveStore";
 import { useIntentStore } from "../stores/intentStore";
+import { useMaterialStore } from "../stores/materialStore";
 import { useModifyStore } from "../stores/modifyStore";
+import { useCoursewareProjectStore } from "../stores/coursewareProjectStore";
 import { teacherV1Api } from "../services/v1";
 import { API_BASE, AI_API_BASE } from "../config/api";
 
@@ -318,7 +345,11 @@ const generationStore = useGenerationStore();
 const outlineStore = useOutlineStore();
 const interactiveStore = useInteractiveStore();
 const intentStore = useIntentStore();
+const materialStore = useMaterialStore();
 const modifyStore = useModifyStore();
+const projectStore = useCoursewareProjectStore();
+const route = useRoute();
+const router = useRouter();
 
 // 阶段：outline | generating | pages
 const currentPhase = ref("outline");
@@ -328,15 +359,23 @@ const genError = ref("");
 const generationPages = ref([]);
 const regeneratingPageId = ref("");
 const previewFrameSrc = ref("");
+const templateId = ref("default");
+const palette = ref("classic");
+const layoutMode = ref("balanced");
+const fontFamily = ref("system");
+const density = ref("comfortable");
+const evidencePacket = ref(null);
+const evidenceScope = ref({ scope: "draft", nodeId: "" });
+const saveVersionState = ref("idle");
+const lastSavedVersion = ref(0);
+
+function draftSnapshot() {
+  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: evidencePacket.value, evidence_scope: evidenceScope.value, presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value } };
+}
 
 // 是否有参考资料
 const hasEvidence = computed(() => {
-  try {
-    const raw = window.localStorage.getItem("fuww_s2_evidence_packet");
-    return !!raw;
-  } catch {
-    return false;
-  }
+  return !!evidencePacket.value;
 });
 
 // 需要互动资源的节点（大纲中标记为 interactive / quiz 的节点）
@@ -347,38 +386,77 @@ const interactiveNodes = computed(() =>
 );
 
 onMounted(async () => {
+	let restoredGenerationNodes = false;
   // 恢复 S1 会话/意图（刷新或直接进入 S3 时 store 内存为空，
   // 不恢复会导致 sessionId 缺失 → AI 生成大纲被 "缺少 session_id" 拦截）
   intentStore.initialize();
+  materialStore.activeSessionId = intentStore.sessionId || projectStore.projectId || "";
   if (typeof window !== "undefined") {
     generationMode.value =
       window.localStorage.getItem(
         `fuww_s2_generation_mode:${intentStore.sessionId}`,
       ) || "";
+    try {
+      const rawEvidence = window.localStorage.getItem(`fuww_s2_evidence_packet:${intentStore.sessionId}`);
+      evidencePacket.value = rawEvidence ? JSON.parse(rawEvidence) : null;
+    } catch { evidencePacket.value = null; }
   }
 
-  // C6: 绑定修改面板到当前课件项目
-  // 优先用 generation_id（S3 生成后产生），其次用 localStorage 持久化的 last_gen_id
-  const lastGenId =
-    typeof window !== "undefined"
-      ? window.localStorage.getItem("fuww_last_gen_id") || ""
-      : "";
-  if (lastGenId) {
-    modifyStore.bindProject(lastGenId);
+  // project_id 才是 AI 对话、草稿与版本的边界；generation_id 只是该项目的生成结果。
+  projectStore.setActive(String(route.query.project_id || projectStore.restoreActiveId() || ""));
+  if (projectStore.projectId) {
+    modifyStore.bindProject(projectStore.projectId);
     await modifyStore.loadVersionHistory();
+    await projectStore.updateStep("s3_studio").catch(() => {});
+    // 统一恢复入口已把后端 draft 放入 session；优先恢复项目快照，避免误用另一份课件的全局缓存。
+    try {
+      const rawDraft = window.localStorage.getItem("fuww_courseware_resume_draft");
+      const savedDraft = rawDraft ? JSON.parse(rawDraft) : null;
+      if (savedDraft?.outline?.outline_id) {
+        outlineStore._applyOutlineData(savedDraft.outline);
+        outlineStore._persist();
+      }
+      if (savedDraft?.generation) {
+        if (savedDraft.generation.generation_id) generationStore.setLastGenId(savedDraft.generation.generation_id);
+        if (savedDraft.generation.task_id) generationStore.setLastTaskId(savedDraft.generation.task_id);
+        if (Array.isArray(savedDraft.generation.nodes) && savedDraft.generation.nodes.length) {
+          const restoredNodes = savedDraft.generation.nodes;
+          generationStore.setNodes(restoredNodes);
+          generationPages.value = restoredNodes.map((node, index) => ({
+            ...node,
+            page_id: node.page_id || node.node_id || `page_${index + 1}`,
+            page_order: Number(node.page_order || node.order || index + 1),
+            status: node.status || "completed",
+          }));
+          restoredGenerationNodes = true;
+          currentPhase.value = "pages";
+        }
+      }
+      if (savedDraft?.evidence_packet) evidencePacket.value = savedDraft.evidence_packet;
+      if (savedDraft?.evidence_scope) evidenceScope.value = savedDraft.evidence_scope;
+      if (savedDraft?.presentation) { templateId.value = savedDraft.presentation.template_id || "default"; palette.value = savedDraft.presentation.palette || "classic"; layoutMode.value = savedDraft.presentation.layout || "balanced"; fontFamily.value = savedDraft.presentation.font_family || "system"; density.value = savedDraft.presentation.density || "comfortable"; }
+    } catch {}
   }
   // 尝试从 localStorage 恢复大纲
   const restored = outlineStore.restore();
-  if (restored && outlineStore.isConfirmed) {
+  if (!restoredGenerationNodes && restored && outlineStore.isConfirmed) {
     currentPhase.value = "generating";
   }
   // 恢复最近生成记录
   generationStore.restoreLastGenId();
   if (generationStore.lastGenId) {
     interactiveStore.setGenerationId(generationStore.lastGenId);
-    await loadGenerationStatus();
+    // 项目草稿已经包含完整节点时直接使用，避免全局缓存中的旧 task_id
+    // 覆盖当前课件的恢复结果。
+    if (!restoredGenerationNodes) await loadGenerationStatus();
   }
 });
+
+watch(() => [outlineStore.nodes, generationStore.currentScriptNodes, templateId.value, palette.value, layoutMode.value, fontFamily.value, density.value], () => projectStore.scheduleSave(draftSnapshot()), { deep: true });
+watch(() => generationStore.previewHtml, (html) => {
+  previewFrameSrc.value = html ? `data:text/html;charset=utf-8,${encodeURIComponent(html)}` : "";
+});
+onBeforeUnmount(() => { projectStore.saveNow(draftSnapshot()).catch(() => {}); });
 
 function statusLabel(status) {
   return (
@@ -418,7 +496,7 @@ async function handleStartGeneration() {
   try {
     let evidence = null;
     try {
-      const raw = window.localStorage.getItem("fuww_s2_evidence_packet");
+      const raw = window.localStorage.getItem(`fuww_s2_evidence_packet:${intentStore.sessionId}`);
       if (raw) evidence = JSON.parse(raw);
     } catch {}
 
@@ -428,7 +506,8 @@ async function handleStartGeneration() {
       outline_id: outlineStore.outline_id,
       outline_version: outlineStore.outline_version,
       outline_confirmed: true,
-      template_id: "default",
+      template_id: templateId.value,
+      project_id: projectStore.projectId,
       generate_mode: generateMode.value,
       intent: intentStore.intentSummary || undefined,
       evidence_packet: evidence,
@@ -442,6 +521,7 @@ async function handleStartGeneration() {
     // 记录 generation_id
     const genId = task.generation_id || taskId;
     generationStore.setLastGenId(genId);
+    projectStore.scheduleSave(draftSnapshot(), 0);
     interactiveStore.setGenerationId(genId);
 
     generationStore.setGenerateProgress(25, "正在生成内容");
@@ -539,7 +619,23 @@ async function handleGenerateInteractive(node) {
         delivery: "html5_link",
       },
     });
-    await interactiveStore.pollAssetStatus(node.node_id);
+    const asset = await interactiveStore.pollAssetStatus(node.node_id);
+    if (asset?.status === "done") {
+      const nodes = (generationStore.currentScriptNodes || []).map((item) => item.node_id === node.node_id
+        ? { ...item, metadata: { ...(item.metadata || {}), interactive_asset: asset, interactive_entry_url: asset.entry_url || asset.file_url || "" } }
+        : item);
+      generationStore.setNodes(nodes);
+      const page = generationPages.value.find((item) => item.node_id === node.node_id);
+      if (page?.page_id && asset.interactive_asset_id) {
+        await interactiveStore.linkToPage({
+          generation_id: generationStore.lastGenId,
+          page_id: page.page_id,
+          interactive_asset_id: asset.interactive_asset_id,
+          label: node.title || "互动练习",
+        }).catch(() => {});
+      }
+      projectStore.scheduleSave(draftSnapshot(), 0);
+    }
   } catch (err) {
     handleError("生成互动资源失败: " + (err?.message || ""));
   }
@@ -562,6 +658,91 @@ function openPreviewWindow() {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+async function applyPresentationStyle() {
+  const presentation = {
+    template_id: templateId.value,
+    palette: palette.value,
+    layout: layoutMode.value,
+    font_family: fontFamily.value,
+    density: density.value,
+  };
+  generationStore.setNodes((generationStore.currentScriptNodes || []).map((node) => ({
+    ...node,
+    layout_hint: layoutMode.value === "visual" ? "text_with_media" : (layoutMode.value === "text" ? "text_only" : (node.layout_hint || "two_column")),
+    font_size_hint: density.value === "minimal" ? "large" : (density.value === "compact" ? "small" : "medium"),
+    slide_background: palette.value === "klein-blue" ? "preset_blue" : "preset_green",
+    metadata: { ...(node.metadata || {}), presentation },
+  })));
+  await generationStore.renderCoursewarePreview(
+    outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
+    { genId: "" },
+  );
+  projectStore.scheduleSave(draftSnapshot(), 0);
+  currentPhase.value = "generating";
+}
+
+async function handleEvidenceSearch(query) {
+  const packet = await materialStore.generateEvidence({
+    query,
+    context: { intent: intentStore.intentSummary || {}, project_id: projectStore.projectId },
+  });
+  if (packet) {
+    evidencePacket.value = packet;
+    projectStore.scheduleSave(draftSnapshot(), 0);
+  }
+}
+
+async function handleEvidenceApply({ scope, nodeId }) {
+  evidenceScope.value = { scope, nodeId: nodeId || "" };
+  if (scope === "none" || !evidencePacket.value) {
+    projectStore.scheduleSave(draftSnapshot(), 0);
+    return;
+  }
+  const refs = [
+    ...(evidencePacket.value.citations || []).map((item) => item.chunk_id),
+    ...(evidencePacket.value.relevant_chunks || []).map((item) => item.chunk_id),
+  ].filter(Boolean);
+  const uniqueRefs = [...new Set(refs)];
+  if (generationStore.currentScriptNodes?.length) {
+    generationStore.setNodes(generationStore.currentScriptNodes.map((node) => {
+      const selected = scope === "draft" || node.node_id === nodeId;
+      return selected ? {
+        ...node,
+        citation_refs: [...new Set([...(node.citation_refs || []), ...uniqueRefs])],
+        source_chunk_ids: [...new Set([...(node.source_chunk_ids || []), ...uniqueRefs])],
+        metadata: { ...(node.metadata || {}), evidence_scope: scope },
+      } : node;
+    }));
+    await generationStore.renderCoursewarePreview(outlineStore.title || intentStore.intentSummary?.topic || "课件预览", { genId: "" });
+  }
+  projectStore.scheduleSave(draftSnapshot(), 0);
+}
+
+async function handleSaveNewVersion() {
+  if (!generationStore.currentScriptNodes.length || saveVersionState.value === "saving") return;
+  saveVersionState.value = "saving";
+  genError.value = "";
+  try {
+    await projectStore.saveNow(draftSnapshot());
+    const response = await teacherV1Api.generation.finalize({
+      generation_id: generationStore.lastGenId,
+      nodes: generationStore.currentScriptNodes,
+      course_name: outlineStore.title || intentStore.intentSummary?.topic || "未命名课件",
+      summary: `教师保存：${new Date().toLocaleString()}`,
+      outline_id: outlineStore.outline_id,
+      outline_version: outlineStore.outline_version,
+    });
+    const data = response?.data || response || {};
+    if (data.generation_id) generationStore.setLastGenId(data.generation_id);
+    lastSavedVersion.value = Number(data.version_number || 0);
+    saveVersionState.value = "saved";
+    await modifyStore.loadVersionHistory().catch(() => {});
+  } catch (error) {
+    saveVersionState.value = "error";
+    genError.value = error?.message || "保存新版本失败";
+  }
+}
+
 function goToS4() {
   // 同步大纲信息到 localStorage，供 S4 使用
   try {
@@ -574,10 +755,8 @@ function goToS4() {
       }),
     );
   } catch {}
-  import("vue-router").then(({ useRouter }) => {
-    const router = useRouter();
-    router.push({ name: "S4Version" });
-  });
+  projectStore.updateStep("s4_version").catch(() => {});
+  router.push({ name: "S4Version", query: { project_id: projectStore.projectId, generation_id: generationStore.lastGenId } });
 }
 
 function handleError(msg) {
@@ -590,7 +769,7 @@ function handleError(msg) {
 .s3-page {
   display: flex;
   flex-direction: column;
-  padding: 20px;
+  padding: 20px 380px 20px 340px;
   min-height: calc(100vh - 140px);
   overflow: hidden;
   background:
@@ -700,6 +879,18 @@ function handleError(msg) {
   flex-direction: column;
   gap: 14px;
 }
+
+.s3-ai-panel { position: fixed; top: 118px; right: 20px; bottom: 20px; width: 340px; z-index: 12; box-shadow: 0 12px 34px rgba(30, 72, 60, .12); border: 1px solid #dce9e3; border-radius: 14px; overflow: hidden; }
+.style-ai-hint { padding: 12px; border-radius: 10px; background: #f1f8f5; color: #45685e; font-size: 13px; line-height: 1.6; }
+@media (max-width: 1400px) { .s3-page { padding-left: 20px; } }
+@media (max-width: 1100px) { .s3-page { padding-right: 20px; } .s3-ai-panel { position: static; width: auto; min-height: 420px; margin-bottom: 14px; } }
+.save-state { border: 1px solid #bdd8cb; border-radius: 999px; padding: 6px 10px; background: #fff; color: #42675d; font-size: 12px; cursor: pointer; }
+.save-state.saving { color: #996a14; }.save-state.error { color: #b42318; }
+.save-version { border: 1px solid #2f605a; border-radius: 999px; padding: 6px 11px; background: #2f605a; color: #fff; font-size: 12px; cursor: pointer; }.save-version:disabled{opacity:.55;cursor:not-allowed}
+.style-panel { max-width: 680px; padding: 22px; border: 1px solid #dce9e3; border-radius: 14px; background: #fff; }
+.style-panel h3 { margin: 0; color: #24483e; }.style-panel p { color: #667b73; font-size: 13px; }
+.style-panel label { display: grid; gap: 6px; margin-top: 14px; color: #365e52; font-size: 13px; font-weight: 600; }
+.style-panel select { padding: 9px; border: 1px solid #c7ddd4; border-radius: 8px; background: #fff; }.style-actions { display: flex; gap: 10px; margin-top: 20px; }
 
 /* 生成控制栏 */
 .gen-control-bar {

@@ -27,7 +27,8 @@ export const teacherGenerationApi = {
     outline_id,
     outline_version,
     outline_confirmed,
-    generate_mode
+    generate_mode,
+    project_id
   } = {}) =>
     requestJson('/api/v1/gen/create', {
       method: 'POST',
@@ -39,6 +40,7 @@ export const teacherGenerationApi = {
         markdown: markdown || '',
         intent: intent || undefined,
         evidence_packet: evidence_packet || null,
+        project_id: project_id || '',
         template_id: template_id || 'default',
         // 规范 3.6：确认大纲后必须传递完整 outline 上下文
         ...(outline_id ? { outline_id, outline_version, outline_confirmed: !!outline_confirmed, generate_mode: generate_mode || 'page_incremental' } : {})
@@ -58,6 +60,21 @@ export const teacherGenerationApi = {
         generation_id,
         commands: commands || [],
         nodes: nodes || []
+      })
+    }),
+
+  /** 将当前内容、样式和证据引用固化为新的正式版本快照 */
+  finalize: ({ generation_id, nodes, course_name, summary, outline_id, outline_version } = {}) =>
+    requestJson('/api/v1/gen/finalize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        generation_id: generation_id || '',
+        nodes: nodes || [],
+        course_name: course_name || '未命名课件',
+        summary: summary || '教师保存的新版本',
+        outline_id: outline_id || '',
+        outline_version: outline_version || 0
       })
     }),
 

@@ -1,356 +1,61 @@
 <template>
-  <AppShell ref="shellRef">
-    <div class="teacher-middle-layout">
-      <!-- 左侧用户信息栏 -->
-      <aside class="middle-user-sidebar">
-        <div class="middle-avatar">{{ (authStore.username || '教').slice(0, 1).toUpperCase() }}</div>
-        <div class="middle-username">{{ authStore.username || '教师' }}</div>
-        <div class="middle-subtitle">教学中间页</div>
-
-        <button class="middle-side-btn primary" @click="enterNewFlow">📋 新建课件</button>
-        <button class="middle-side-btn" @click="switchView('platform')">平台管理</button>
-      </aside>
-
-      <!-- 主面板 -->
-      <section class="middle-main-panel" v-loading="workspaceStore.platformOverviewLoading">
-        <template v-if="currentView === 'home'">
-          <div class="middle-head">
-            <div>
-              <h3>教师中间页</h3>
-              <p>登录后先进入这里。点击课程卡片进入教学页面，平台管理在左侧按钮中打开。</p>
-            </div>
-            <button class="ghost-btn" @click="workspaceStore.loadPlatformOverview()">刷新</button>
-          </div>
-
-          <div class="middle-tile-grid">
-            <button
-              v-for="tile in platformTiles"
-              :key="tile.id"
-              class="middle-tile"
-              :class="{ mock: tile.mock }"
-              @click="openTile(tile)"
-            >
-              <div class="tile-badge">{{ tile.mock ? '占位课程' : '平台课程' }}</div>
-              <h4>{{ tile.name }}</h4>
-              <p>{{ tile.desc }}</p>
-              <div class="tile-meta">
-                <span>{{ tile.metaA }}</span>
-                <span>{{ tile.metaB }}</span>
-              </div>
-            </button>
-          </div>
-        </template>
-
-        <template v-else>
-          <div class="middle-head compact">
-            <div>
-              <h3>平台管理</h3>
-              <p>这里保留原平台管理功能，确保兼容历史流程。</p>
-            </div>
-            <button class="ghost-btn" @click="switchView('home')">返回中间页</button>
-          </div>
-          <PlatformManagementPanel />
-        </template>
+  <AppShell>
+    <main class="page">
+      <header class="head">
+        <div><p class="eyebrow">我的课件</p><h1>继续完善你的教学设计</h1><p>课件、AI 迭代记录与版本会保存在同一项目中。</p></div>
+        <div class="head-actions"><button class="secondary" @click="router.push({ name: 'S2Material' })">资料与证据中心</button><button class="secondary" @click="load">刷新</button><button class="primary" @click="createProject">＋ 新建课件</button></div>
+      </header>
+      <section v-if="projects.loading" class="empty">正在加载课件…</section>
+      <section v-else-if="projects.error" class="empty error"><p>{{ projects.error }}</p><button class="secondary" @click="load">重试</button></section>
+      <section v-else-if="!projects.items.length" class="empty"><div class="empty-icon">▤</div><h2>还没有课件</h2><p>开始创建第一份课件，让 AI 和你一起完成备课。</p><button class="primary" @click="createProject">开始创建第一份课件</button></section>
+      <section v-else class="grid">
+        <article v-for="item in projects.items" :key="projectId(item)" class="card">
+          <div class="card-top"><span class="status" :class="item.status">{{ statusText(item.status) }}</span><span>v{{ item.version_no || item.version || 1 }}</span></div>
+          <h2>{{ item.title || '未命名课件' }}</h2><p class="meta">最近编辑：{{ formatTime(item.updated_at) }}</p><p class="step">{{ stepText(item.current_step) }}</p>
+          <div class="card-actions"><button class="primary" @click="resume(item)">继续编辑</button><button class="secondary" @click="viewVersions(item)">查看版本</button><button class="secondary" @click="exportProject(item)">导出</button><button class="danger" @click="removeProject(item)">删除</button></div>
+        </article>
       </section>
-    </div>
+    </main>
   </AppShell>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '../stores/authStore'
-import { useWorkspaceStore } from '../stores/workspaceStore'
+import AppShell from '../components/layout/AppShell.vue'
+import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
 import { useIntentStore } from '../stores/intentStore'
 import { useMaterialStore } from '../stores/materialStore'
 import { useOutlineStore } from '../stores/outlineStore'
 import { useGenerationStore } from '../stores/generationStore'
 import { useVersionStore } from '../stores/versionStore'
-import AppShell from '../components/layout/AppShell.vue'
-import PlatformManagementPanel from '../components/teacher/PlatformManagementPanel.vue'
+import { useModifyStore } from '../stores/modifyStore'
 
-const router = useRouter()
-const authStore = useAuthStore()
-const workspaceStore = useWorkspaceStore()
-const intentStore = useIntentStore()
-const materialStore = useMaterialStore()
-const outlineStore = useOutlineStore()
-const generationStore = useGenerationStore()
-const versionStore = useVersionStore()
-const shellRef = ref(null)
-
-const currentView = ref('home')
-
-const switchView = (view) => {
-  currentView.value = view
-  if (view === 'platform') {
-    // platform 视图由 PlatformManagementPanel 自行管理
-  }
+const router = useRouter(); const projects = useCoursewareProjectStore()
+const statusText = (status) => ({ draft: '草稿', active: '编辑中', archived: '已归档', completed: '已完成' }[status] || '编辑中')
+const stepText = (step) => ({ s1_intent: '当前：教学意图', s2_material: '当前：参考资料', s3_studio: '当前：AI 生成与迭代', s4_version: '当前：版本与导出' }[step] || '当前：教学意图')
+const formatTime = (time) => time ? new Date(time).toLocaleString() : '刚刚'
+const projectId = (item) => item.id || item.project_id || ''
+const load = () => projects.loadProjects().catch(() => {})
+async function createProject() {
+  const title = window.prompt('请输入课件名称')?.trim(); if (!title) return
+  try {
+    const project = await projects.create(title)
+    for (const store of [useIntentStore(), useMaterialStore(), useOutlineStore(), useGenerationStore(), useVersionStore(), useModifyStore()]) store.reset?.()
+    await projects.updateStep('s1_intent')
+    router.push({ name: 'S1Intent', query: { project_id: project.id || project.project_id } })
+  } catch (error) { window.alert(error?.message || '新建课件失败') }
 }
-
-const platformTiles = computed(() => {
-  const courseItems = Array.isArray(workspaceStore.platformOverviewData?.recentCourses)
-    ? workspaceStore.platformOverviewData.recentCourses
-    : []
-  if (courseItems.length > 0) {
-    return courseItems.map((item, index) => ({
-      id: String(item.courseId || `platform-course-${index + 1}`),
-      name: item.title || `未命名课程 ${index + 1}`,
-      desc: '来自平台课程池，点击进入附加功能页继续管理。',
-      metaA: item.semester || '未设学期',
-      metaB: item.status || 'unknown',
-      mock: false
-    }))
-  }
-  return Array.from({ length: 6 }).map((_, index) => ({
-    id: `platform-mock-${index + 1}`,
-    name: `平台占位课程 ${String(index + 1).padStart(2, '0')}`,
-    desc: '暂无真实平台课程数据，先使用占位卡片维持中间页结构。',
-    metaA: '示例学期',
-    metaB: 'draft',
-    mock: true
-  }))
-})
-
-const openTile = (tile) => {
-  if (!tile) return
-  workspaceStore.enterWorkspace()
-  router.push({ name: 'Workspace', query: { courseId: tile.id } })
+function resume(item) { router.push({ name: 'CoursewareResume', query: { project_id: projectId(item), generation_id: item.gen_id || item.generation_id || '' } }) }
+function viewVersions(item) { router.push({ name: 'S4Version', query: { project_id: projectId(item), generation_id: item.gen_id || item.generation_id || '' } }) }
+function exportProject(item) { viewVersions(item) }
+async function removeProject(item) {
+  if (!window.confirm(`确定删除“${item.title || '未命名课件'}”吗？删除后将从课件列表移除。`)) return
+  try { await projects.remove(projectId(item)) } catch (error) { window.alert(error?.message || '删除课件失败') }
 }
-
-const enterNewFlow = () => {
-  // 重置所有与旧课件相关的 store 状态，防止缓存遗留
-  intentStore.reset()
-  materialStore.clearEvidencePackets()
-  outlineStore.reset()
-  generationStore.reset()
-  versionStore.reset()
-  // 清空可能残留的其他 localStorage 键
-  if (typeof window !== 'undefined') {
-    const keysToRemove = [
-      'fuww_s2_evidence_packet',
-      'fuww_s2_generation_mode:*',
-      'fuww_s3_outline_info',
-      'fuww_s1_confirmed_intent',
-      'fuww_workflow_intent_id'
-    ]
-    keysToRemove.forEach(key => {
-      if (key.includes('*')) {
-        // 对于通配符，遍历所有 localStorage 键
-        const pattern = key.replace('*', '')
-        Object.keys(window.localStorage).forEach(k => {
-          if (k.startsWith(pattern)) {
-            window.localStorage.removeItem(k)
-          }
-        })
-      } else {
-        window.localStorage.removeItem(key)
-      }
-    })
-  }
-  router.push({ name: 'S1Intent' })
-}
-
-onMounted(async () => {
-  await workspaceStore.loadPlatformOverview()
-})
+onMounted(load)
 </script>
 
 <style scoped>
-.teacher-middle-layout {
-  margin-top: 14px;
-  min-height: calc(100vh - 110px);
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 14px;
-  padding: 14px;
-}
-
-.middle-user-sidebar {
-  border-radius: 20px;
-  border: 1px solid #d3e3db;
-  background: linear-gradient(180deg, #f4fbf7 0%, #e8f4ee 100%);
-  color: #2f5e55;
-  padding: 20px 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  box-shadow: 0 12px 24px rgba(33, 61, 54, 0.1);
-}
-
-.middle-avatar {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 26px;
-  font-weight: 800;
-  color: #2a5a50;
-  background: linear-gradient(180deg, #ffffff 0%, #dceee6 100%);
-}
-
-.middle-username {
-  margin-top: 12px;
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-.middle-subtitle {
-  margin-top: 4px;
-  font-size: 12px;
-  color: #6b887e;
-}
-
-.middle-side-btn {
-  margin-top: 10px;
-  width: 100%;
-  border: 1px solid #bdd8cb;
-  border-radius: 12px;
-  padding: 10px 12px;
-  background: #ffffff;
-  color: #2f605a;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.middle-side-btn:hover {
-  border-color: #8fbcae;
-  background: #f4fbf7;
-}
-.middle-side-btn.primary {
-  background: #2f605a;
-  color: #fff;
-  border-color: #2f605a;
-}
-.middle-side-btn.primary:hover {
-  background: #3d7a70;
-  border-color: #3d7a70;
-}
-
-.middle-main-panel {
-  border-radius: 20px;
-  border: 1px solid #dbe6df;
-  background: linear-gradient(180deg, #ffffff 0%, #f6faf8 100%);
-  padding: 18px;
-  box-shadow: 0 16px 30px rgba(33, 61, 54, 0.08);
-}
-
-.middle-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.middle-head h3 {
-  margin: 0;
-  font-size: 24px;
-  color: #0f172a;
-}
-
-.middle-head p {
-  margin: 8px 0 0;
-  font-size: 14px;
-  color: #607a71;
-}
-
-.middle-head.compact {
-  margin-bottom: 12px;
-}
-
-.ghost-btn {
-  border: 0;
-  background: #ffffff;
-  color: #334155;
-  border-radius: 999px;
-  padding: 8px 16px;
-  font-size: 12px;
-  cursor: pointer;
-  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-}
-
-.ghost-btn:hover {
-  background: #f7f8fc;
-  transform: translateY(-1px);
-  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.1);
-}
-
-.middle-tile-grid {
-  margin-top: 14px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 12px;
-  max-height: calc(100vh - 280px);
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.middle-tile {
-  border: 1px solid #d8e6de;
-  border-radius: 16px;
-  background: linear-gradient(180deg, #ffffff 0%, #f5faf7 100%);
-  padding: 14px;
-  text-align: left;
-  cursor: pointer;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-}
-
-.middle-tile:hover {
-  transform: translateY(-2px);
-  border-color: #8fbcae;
-  box-shadow: 0 12px 20px rgba(33, 61, 54, 0.1);
-}
-
-.middle-tile.mock {
-  background: linear-gradient(180deg, #fcfcff 0%, #f4f6fd 100%);
-}
-
-.middle-tile h4 {
-  margin: 10px 0 6px;
-  font-size: 17px;
-  color: #284a43;
-}
-
-.middle-tile p {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.65;
-  color: #638075;
-}
-
-.tile-badge {
-  display: inline-flex;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: #edf5f2;
-  color: #2f605a;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.tile-meta {
-  margin-top: 10px;
-  display: grid;
-  gap: 4px;
-  font-size: 12px;
-  color: #4d665d;
-}
-
-@media (max-width: 980px) {
-  .teacher-middle-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .middle-user-sidebar {
-    align-items: flex-start;
-  }
-
-  .middle-tile-grid {
-    max-height: none;
-  }
-}
+.page{min-height:calc(100vh - 84px);padding:44px max(24px,calc((100vw - 1200px)/2));background:linear-gradient(145deg,#f5faf7,#fff)}.head{display:flex;justify-content:space-between;gap:24px;align-items:flex-end;margin-bottom:30px}.eyebrow{color:#25806d;font-weight:700;margin:0}.head h1{margin:6px 0;color:#173b33}.head p:not(.eyebrow),.meta{color:#6b7e77}.head-actions,.card-actions{display:flex;gap:10px;flex-wrap:wrap}.primary,.secondary,.danger{border-radius:9px;padding:9px 14px;font-weight:650;cursor:pointer}.primary{border:1px solid #277765;background:#277765;color:#fff}.secondary{border:1px solid #bfd5cd;background:#fff;color:#27594e}.danger{border:1px solid #f1c1c1;background:#fff;color:#a33}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}.card{min-height:192px;padding:20px;border:1px solid #d9e8e1;border-radius:16px;background:#fff;box-shadow:0 8px 24px #235a4810}.card-top{display:flex;justify-content:space-between;color:#71847d;font-size:12px}.status{padding:3px 8px;border-radius:999px;background:#ecf7f2;color:#28735f}.status.draft{background:#fff5df;color:#a56709}.card h2{font-size:18px;color:#193d34;margin:18px 0 6px}.step{font-size:13px;color:#26715f}.card-actions{margin-top:20px}.empty{min-height:320px;display:grid;place-content:center;text-align:center;border:1px dashed #bdd7cc;border-radius:18px;background:#ffffffaa;color:#62766f}.empty-icon{font-size:42px;color:#59a18d}.error{color:#a33}@media(max-width:640px){.page{padding:24px 16px}.head{align-items:flex-start;flex-direction:column}}
 </style>

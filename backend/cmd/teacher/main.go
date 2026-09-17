@@ -227,6 +227,8 @@ func runS1Standalone(mode string, aiClient service.AIEngine) {
 	{
 		coursewares.POST("", coursewareHandler.Create)
 		coursewares.GET("", coursewareHandler.List)
+		coursewares.DELETE("/:project_id", coursewareHandler.Delete)
+		coursewares.GET("/:project_id/context", coursewareHandler.Context)
 		coursewares.PUT("/:project_id/step", coursewareHandler.UpdateStep)
 		coursewares.PUT("/:project_id/draft", coursewareHandler.SaveDraft)
 		coursewares.GET("/:project_id/draft", coursewareHandler.GetDraft)
@@ -260,6 +262,7 @@ func runS1Standalone(mode string, aiClient service.AIEngine) {
 		gen.POST("/preview", genHandler.PreviewHTML)
 		gen.GET("/preview/:gen_id", genHandler.Preview)
 		gen.POST("/modify", genHandler.Modify)
+		gen.POST("/finalize", genHandler.Finalize)
 	}
 
 	// P1: S3 大纲 → 内容生成

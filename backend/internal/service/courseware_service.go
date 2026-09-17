@@ -31,12 +31,12 @@ var (
 
 // CoursewareProject —— 课件项目（A1 最小基础，契约 §3.8.3）。
 type CoursewareProject struct {
-	ProjectID   string `json:"project_id"`
-	OwnerID     string `json:"owner_id"`
-	Title       string `json:"title"`
-	CurrentStep string `json:"current_step"` // s1_intent / s2_material / s3_studio / s4_version
-	GenID       string `json:"gen_id,omitempty"`
-	Status      string `json:"status"` // draft / generating / done / locked
+	ProjectID   string    `json:"project_id"`
+	OwnerID     string    `json:"owner_id"`
+	Title       string    `json:"title"`
+	CurrentStep string    `json:"current_step"` // s1_intent / s2_material / s3_studio / s4_version
+	GenID       string    `json:"gen_id,omitempty"`
+	Status      string    `json:"status"` // draft / generating / done / locked
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -57,12 +57,12 @@ func (coursewareProjectRow) TableName() string { return "courseware_projects" }
 
 // CoursewareVersion —— 版本快照（A6）。
 type CoursewareVersion struct {
-	VersionID    string    `json:"version_id"`
-	ProjectID    string    `json:"project_id"`
-	VersionNo    int       `json:"version_no"`
-	NodesJSON    string    `json:"-"` // 原始 JSON（内部）
-	ModifyInstr  string    `json:"modify_instruction"`
-	CreatedAt    time.Time `json:"created_at"`
+	VersionID   string    `json:"version_id"`
+	ProjectID   string    `json:"project_id"`
+	VersionNo   int       `json:"version_no"`
+	NodesJSON   string    `json:"-"` // 原始 JSON（内部）
+	ModifyInstr string    `json:"modify_instruction"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type coursewareVersionRow struct {
@@ -79,9 +79,9 @@ func (coursewareVersionRow) TableName() string { return "courseware_versions" }
 // ---- 草稿（A2 最小内联：draft_json 存于 projects 表的扩展列）----
 // A2 的独立接口在原分配中属 A；这里内联最小实现供 A6 modify 后更新草稿。
 type coursewareDraftRow struct {
-	ProjectID  string    `gorm:"column:project_id;size:64;primaryKey"`
-	DraftJSON  string    `gorm:"column:draft_json;type:text"`
-	UpdatedAt  time.Time `gorm:"column:updated_at"`
+	ProjectID string    `gorm:"column:project_id;size:64;primaryKey"`
+	DraftJSON string    `gorm:"column:draft_json;type:text"`
+	UpdatedAt time.Time `gorm:"column:updated_at"`
 }
 
 func (coursewareDraftRow) TableName() string { return "courseware_drafts" }
@@ -103,8 +103,8 @@ type ModifyIntent struct {
 
 // ParseModifyRequest / Response —— Go→Python 调用 DTO。
 type ParseModifyRequest struct {
-	ProjectID   string          `json:"project_id"`
-	Instruction string          `json:"instruction"`
+	ProjectID   string             `json:"project_id"`
+	Instruction string             `json:"instruction"`
 	Nodes       []TeachingNodeItem `json:"nodes"`
 }
 
@@ -133,6 +133,7 @@ type coursewareStore interface {
 	CreateProject(ctx context.Context, p *CoursewareProject) error
 	GetProject(ctx context.Context, projectID string) (*CoursewareProject, error)
 	ListProjects(ctx context.Context, ownerID string) ([]*CoursewareProject, error)
+	DeleteProject(ctx context.Context, projectID string) error
 	UpdateProjectStep(ctx context.Context, projectID, step string) error
 	UpdateProjectGenID(ctx context.Context, projectID, genID string) error
 	UpdateProjectStatus(ctx context.Context, projectID, status string) error
@@ -189,6 +190,11 @@ func (s *CoursewareService) GetProject(ctx context.Context, projectID string) (*
 // ListProjects 我的课件列表。
 func (s *CoursewareService) ListProjects(ctx context.Context, ownerID string) ([]*CoursewareProject, error) {
 	return s.store.ListProjects(ctx, ownerID)
+}
+
+// DeleteProject 删除项目及其草稿、版本快照。
+func (s *CoursewareService) DeleteProject(ctx context.Context, projectID string) error {
+	return s.store.DeleteProject(ctx, projectID)
 }
 
 // UpdateStep 持久化当前步骤。
@@ -537,6 +543,18 @@ func (m *memCoursewareStore) ListProjects(_ context.Context, ownerID string) ([]
 	return out, nil
 }
 
+func (m *memCoursewareStore) DeleteProject(_ context.Context, projectID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.projects[projectID]; !ok {
+		return ErrProjectNotFound
+	}
+	delete(m.projects, projectID)
+	delete(m.drafts, projectID)
+	delete(m.versions, projectID)
+	return nil
+}
+
 func (m *memCoursewareStore) UpdateProjectStep(_ context.Context, projectID, step string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -680,6 +698,25 @@ func (g *gormCoursewareStore) ListProjects(ctx context.Context, ownerID string) 
 		})
 	}
 	return out, nil
+}
+
+func (g *gormCoursewareStore) DeleteProject(ctx context.Context, projectID string) error {
+	return g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("project_id = ?", projectID).Delete(&coursewareVersionRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", projectID).Delete(&coursewareDraftRow{}).Error; err != nil {
+			return err
+		}
+		res := tx.Where("project_id = ?", projectID).Delete(&coursewareProjectRow{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrProjectNotFound
+		}
+		return nil
+	})
 }
 
 func (g *gormCoursewareStore) UpdateProjectStep(ctx context.Context, projectID, step string) error {

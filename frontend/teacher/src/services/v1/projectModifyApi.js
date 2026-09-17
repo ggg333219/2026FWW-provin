@@ -29,8 +29,20 @@ export const projectModifyApi = {
     }),
 
   /** 我的课件列表 */
-  list: (owner_id = 'teacher_demo') =>
-    requestJson(`/api/v1/coursewares?owner_id=${encodeURIComponent(owner_id)}`, {
+  list: () =>
+    requestJson('/api/v1/coursewares', {
+      method: 'GET',
+    }),
+
+  /** 删除课件项目 */
+  remove: (project_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}`, {
+      method: 'DELETE',
+    }),
+
+  /** 恢复项目的步骤、草稿和 generation_id。 */
+  context: (project_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/context`, {
       method: 'GET',
     }),
 
@@ -39,7 +51,7 @@ export const projectModifyApi = {
     requestJson(`/api/v1/coursewares/${project_id}/step`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ step }),
+      body: JSON.stringify({ current_step: step }),
     }),
 
   /** 保存草稿（draft_json 为 JSON 字符串） */

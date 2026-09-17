@@ -24,6 +24,8 @@ export const useVersionStore = defineStore("version", {
     versions: [],
     /** 当前加载的版本详情（含 nodes_snapshot） */
     currentVersionDetail: null,
+    comparison: null,
+    comparing: false,
     /** 当前 generation_id */
     genId: "",
     /** 修改指令列表 */
@@ -57,6 +59,7 @@ export const useVersionStore = defineStore("version", {
     latestVersion: (state) =>
       state.versions.length > 0 ? state.versions[0] : null,
     isExportDone: (state) => state.exportStatus === "done",
+    isCurrentLocked: (state) => !!state.currentVersionDetail?.locked,
     exportIsActive: (state) =>
       ["pending", "exporting"].includes(state.exportStatus),
   },
@@ -112,6 +115,41 @@ export const useVersionStore = defineStore("version", {
       }
     },
 
+    async compareVersions(genId, leftVersion, rightVersion) {
+      if (!genId || !leftVersion || !rightVersion || leftVersion === rightVersion) return null;
+      this.comparing = true;
+      this.error = "";
+      try {
+        const [leftRaw, rightRaw] = await Promise.all([
+          teacherV1Api.version.load(genId, leftVersion),
+          teacherV1Api.version.load(genId, rightVersion),
+        ]);
+        const left = leftRaw?.data || leftRaw || {};
+        const right = rightRaw?.data || rightRaw || {};
+        const leftNodes = Array.isArray(left.nodes_snapshot) ? left.nodes_snapshot : [];
+        const rightNodes = Array.isArray(right.nodes_snapshot) ? right.nodes_snapshot : [];
+        const leftMap = new Map(leftNodes.map((node, index) => [node.node_id, { node, index }]));
+        const rightMap = new Map(rightNodes.map((node, index) => [node.node_id, { node, index }]));
+        const added = [], removed = [], changed = [], same = [];
+        for (const [id, entry] of rightMap) {
+          const old = leftMap.get(id);
+          if (!old) { added.push({ node_id: id, title: entry.node.title || id }); continue; }
+          const fields = [];
+          for (const field of ["title", "summary", "content", "script", "node_type", "citation_refs", "source_chunk_ids", "layout_hint", "font_size_hint", "slide_background", "metadata"]) {
+            if (JSON.stringify(old.node[field] ?? null) !== JSON.stringify(entry.node[field] ?? null)) fields.push(field);
+          }
+          if (old.index !== entry.index) fields.push("order");
+          (fields.length ? changed : same).push({ node_id: id, title: entry.node.title || id, changes: fields });
+        }
+        for (const [id, entry] of leftMap) if (!rightMap.has(id)) removed.push({ node_id: id, title: entry.node.title || id });
+        this.comparison = { v1: leftVersion, v2: rightVersion, added, removed, changed, same };
+        return this.comparison;
+      } catch (err) {
+        this.error = err.message || "版本对比失败";
+        throw err;
+      } finally { this.comparing = false; }
+    },
+
     // ================================================================
     // 回滚
     // ================================================================
@@ -126,6 +164,7 @@ export const useVersionStore = defineStore("version", {
         );
         // 回滚后刷新列表
         await this.loadVersions(genId);
+        await this.loadVersion(genId);
         return result;
       } catch (err) {
         this.error = err.message || "回滚失败";
@@ -145,6 +184,7 @@ export const useVersionStore = defineStore("version", {
       try {
         const result = await teacherV1Api.version.lock(genId);
         await this.loadVersions(genId);
+        await this.loadVersion(genId);
         return result;
       } catch (err) {
         this.error = err.message || "锁定失败";
@@ -222,19 +262,21 @@ export const useVersionStore = defineStore("version", {
 
     clearPending() {
       this.pendingChanges = [];
+      this.comparison = null;
+      this.comparing = false;
     },
 
     // ================================================================
     // 导出
     // ================================================================
-    async startExport(genId, format = "pptx") {
+    async startExport(genId, format = "pptx", version = null) {
       if (!genId) return;
       this.exportStatus = "pending";
       this.exportFormat = format;
       this.exportError = "";
       try {
         // 统一兼容 {code,message,data} 信封（Mock）与裸响应（FastAPI 网关）
-        const response = await teacherV1Api.version.exportCreate(genId, format);
+        const response = await teacherV1Api.version.exportCreate(genId, format, version);
         const job = response?.data || response || {};
         this.exportJobId = job.job_id || "";
         this.exportStatus = job.status === "done" ? "done" : "pending";

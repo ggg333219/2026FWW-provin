@@ -88,6 +88,17 @@ func (h *CoursewareProjectHandler) Context(c *gin.Context) {
 	}
 	c.JSON(200, gin.H{"code": 200, "data": data})
 }
+func (h *CoursewareProjectHandler) Delete(c *gin.Context) {
+	owner, ok := h.owner(c)
+	if !ok {
+		return
+	}
+	if err := h.service.Delete(c.Request.Context(), owner, c.Param("project_id")); err != nil {
+		projectError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"deleted": true}})
+}
 func (h *CoursewareProjectHandler) DraftGet(c *gin.Context) { h.Context(c) }
 func (h *CoursewareProjectHandler) DraftPut(c *gin.Context) {
 	owner, ok := h.owner(c)

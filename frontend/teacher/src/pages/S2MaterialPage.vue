@@ -3,18 +3,18 @@
     <div class="s2-page">
       <div class="page-header">
         <div>
-          <h2>S2 多模态资料中心</h2>
-          <p>资料上传 → 解析 → 切片 (ChunkSchema) → RAG 检索 → 证据绑定</p>
+          <h2>资料与证据中心</h2>
+          <p>独立管理资料上传、解析、知识库检索与证据绑定；可随时返回生成工作台。</p>
         </div>
         <div class="page-header-right">
           <button v-if="isMockModeActive" class="mock-exit-btn" @click="exitMockMode">
             ⚠ Mock 模式 · 点击退出
           </button>
           <div class="step-pills">
-            <router-link :to="{ name: 'S1Intent' }" class="pill">S1 意图</router-link>
-            <span class="pill active">S2 资料</span>
+            <router-link :to="{ name: 'S1Intent', query: { project_id: projectStore.projectId } }" class="pill">教学意图</router-link>
+            <span class="pill active">资料中心</span>
             <button class="pill pill-button" @click="requestContinue" :disabled="navigatingToS3">{{ navigatingToS3 ? '跳转中...' : 'S3 生成' }}</button>
-            <router-link :to="{ name: 'S4Version' }" class="pill">S4 版本</router-link>
+            <router-link :to="{ name: 'S4Version', query: { project_id: projectStore.projectId } }" class="pill">版本与导出</router-link>
             <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
           </div>
         </div>
@@ -50,11 +50,14 @@ import AppShell from '../components/layout/AppShell.vue'
 import S2MaterialWorkspace from '../components/teacher/S2MaterialWorkspace.vue'
 import { useMaterialStore, isEvidencePacketUsable } from '../stores/materialStore'
 import { useIntentStore } from '../stores/intentStore'
+import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
 
 const router = useRouter()
 const materialStore = useMaterialStore()
 const intentStore = useIntentStore()
+const projectStore = useCoursewareProjectStore()
 intentStore.initialize()
+projectStore.restoreActiveId()
 
 const showNoEvidenceConfirm = ref(false)
 const navigatingToS3 = ref(false)
@@ -63,7 +66,7 @@ const readEvidence = () => {
   if (isEvidencePacketUsable(materialStore.s3EvidencePayload)) return materialStore.s3EvidencePayload
   if (typeof window === 'undefined') return null
   try {
-    return JSON.parse(window.localStorage.getItem('fuww_s2_evidence_packet') || 'null')
+    return JSON.parse(window.localStorage.getItem(`fuww_s2_evidence_packet:${intentStore.sessionId}`) || 'null')
   } catch {
     return null
   }
@@ -79,7 +82,8 @@ const requestContinue = () => {
   if (isEvidencePacketUsable(readEvidence())) {
     navigatingToS3.value = true
     writeGenerationMode('with_evidence')
-    router.push({ name: 'S3Studio' })
+    projectStore.updateStep('s3_studio').catch(() => {})
+    router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId } })
     return
   }
   showNoEvidenceConfirm.value = true
@@ -89,7 +93,8 @@ const confirmWithoutEvidence = () => {
   navigatingToS3.value = true
   materialStore.clearEvidencePackets()
   writeGenerationMode('without_evidence')
-  router.push({ name: 'S3Studio' })
+  projectStore.updateStep('s3_studio').catch(() => {})
+  router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId } })
 }
 
 /** Mock 模式检测与退出 */
