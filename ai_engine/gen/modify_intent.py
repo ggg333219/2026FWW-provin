@@ -19,7 +19,7 @@ import json
 import logging
 from typing import Any
 
-from core.config import get_settings
+from core.config import settings
 from core.llm import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -104,8 +104,10 @@ class ModifyIntentParser:
 
     def _get_llm(self) -> LLMClient:
         if self._llm is None:
-            settings = get_settings()
-            self._llm = LLMClient(settings.llm)
+            self._llm = LLMClient(
+                model=getattr(settings, "MODEL", None),
+                temperature=getattr(settings, "TEMPERATURE", 0.1),
+            )
         return self._llm
 
     def parse(self, instruction: str, nodes: list[dict[str, Any]]) -> dict[str, Any]:
