@@ -79,6 +79,7 @@ func main() {
 	if err := db.AutoMigrate(
 		&model.User{},
 		&model.Course{},
+		&model.CoursewareProject{},
 		&model.CoursePage{},
 		&model.TeachingNode{},
 		&model.TeachingNodeRelation{},
@@ -133,11 +134,13 @@ func main() {
 	}
 	outlineService := service.NewOutlineServiceWithDB(aiClient, db)
 	outlineHandler := handler.NewOutlineHandler(outlineService)
-	genHandler := handler.NewGenerationHandler(aiClient, outlineService)
+	genHandler := handler.NewGenerationHandler(aiClient, outlineService, service.NewCoursewareProjectService(db))
 	versionHandler := handler.NewVersionHandler(aiClient)
-	exportHandler := handler.NewExportHandler(aiClient)
+	exportHandler := handler.NewExportHandler(aiClient, service.NewCoursewareProjectService(db))
 	contentHandler := handler.NewContentHandler(aiClient)
-	// A6/A7: 课件项目 + 修改对话 + 版本快照
+	// A1: 课件项目持久化（远程队友实现）
+	coursewareProjectHandler := handler.NewCoursewareProjectHandler(service.NewCoursewareProjectService(db))
+	// A6/A7: 修改对话 + 版本快照 + 回滚
 	if err := service.AutoMigrateCourseware(db); err != nil {
 		applogger.Warn("courseware 表迁移失败", zap.Error(err))
 	}
@@ -159,7 +162,7 @@ func main() {
 	skillV1 := api.Group("/v1")
 	router.RegisterNewSkillRoutes(skillV1,
 		convHandler, parseHandler, knowledgeHandler, outlineHandler,
-		genHandler, versionHandler, exportHandler, contentHandler, coursewareHandler,
+		genHandler, versionHandler, exportHandler, contentHandler, coursewareProjectHandler, coursewareHandler,
 	)
 
 	applogger.Info("教师端服务运行中", zap.Int("port", 8082))

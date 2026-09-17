@@ -127,22 +127,37 @@ func RegisterNewSkillRoutes(
 	versionHandler *handler.VersionHandler,
 	exportHandler *handler.ExportHandler,
 	contentHandler *handler.ContentHandler,
+	coursewareProjectHandler *handler.CoursewareProjectHandler,
 	coursewareHandler *handler.CoursewareHandler,
 ) {
-	// ---- A1/A6/A7: 课件项目 + 修改对话 + 版本快照 ----
-	coursewares := v1.Group("/coursewares")
-	{
-		coursewares.POST("", coursewareHandler.Create)
-		coursewares.GET("", coursewareHandler.List)
-		coursewares.PUT("/:project_id/step", coursewareHandler.UpdateStep)
-		coursewares.PUT("/:project_id/draft", coursewareHandler.SaveDraft)
-		coursewares.GET("/:project_id/draft", coursewareHandler.GetDraft)
-		coursewares.POST("/:project_id/modify", coursewareHandler.Modify)
-		coursewares.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
-		coursewares.GET("/:project_id/versions", coursewareHandler.Versions)
-		coursewares.POST("/:project_id/rollback", coursewareHandler.Rollback)
+	// ---- A1: 课件项目 CRUD（远程队友实现，JWT 保护）+ A6/A7: 修改编排/快照/回滚 ----
+	if coursewareProjectHandler != nil {
+		projects := v1.Group("/coursewares")
+		projects.Use(handler.JWTAuthMiddleware())
+		projects.POST("", coursewareProjectHandler.Create)
+		projects.GET("", coursewareProjectHandler.List)
+		projects.GET("/:project_id/context", coursewareProjectHandler.Context)
+		projects.GET("/:project_id/draft", coursewareProjectHandler.DraftGet)
+		projects.PUT("/:project_id/draft", coursewareProjectHandler.DraftPut)
+		projects.PUT("/:project_id/step", coursewareProjectHandler.StepPut)
+		// A6/A7: 修改对话 + 版本快照 + 回滚（追加到同一路由组）
+		projects.POST("/:project_id/modify", coursewareHandler.Modify)
+		projects.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
+		projects.GET("/:project_id/versions", coursewareHandler.Versions)
+		projects.POST("/:project_id/rollback", coursewareHandler.Rollback)
+	} else if coursewareHandler != nil {
+		// S1 standalone（无 JWT、无持久化 handler）
+		projects := v1.Group("/coursewares")
+		projects.POST("", coursewareHandler.Create)
+		projects.GET("", coursewareHandler.List)
+		projects.PUT("/:project_id/step", coursewareHandler.UpdateStep)
+		projects.PUT("/:project_id/draft", coursewareHandler.SaveDraft)
+		projects.GET("/:project_id/draft", coursewareHandler.GetDraft)
+		projects.POST("/:project_id/modify", coursewareHandler.Modify)
+		projects.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
+		projects.GET("/:project_id/versions", coursewareHandler.Versions)
+		projects.POST("/:project_id/rollback", coursewareHandler.Rollback)
 	}
-
 	// ---- S1: 意图理解 ----
 	intent := v1.Group("/intent")
 	{
@@ -215,4 +230,10 @@ func RegisterNewSkillRoutes(
 		exp.GET("/status/:job_id", exportHandler.Status)
 		exp.GET("/download/:job_id/:extension", exportHandler.Download)
 	}
+	canonicalExports := v1.Group("/generations")
+	canonicalExports.Use(handler.JWTAuthMiddleware())
+	canonicalExports.POST("/:generation_id/exports", exportHandler.CreateV2)
+	canonicalExportStatus := v1.Group("/exports")
+	canonicalExportStatus.Use(handler.JWTAuthMiddleware())
+	canonicalExportStatus.GET("/:export_job_id", exportHandler.StatusV2)
 }

@@ -1,0 +1,102 @@
+[grep] 未找到 ripgrep (rg) 或其执行失败；已使用慢速回退。
+frontend/teacher/src/stores/outlineStore.js:  179│     // ------------------------------------------------------------------
+frontend/teacher/src/stores/outlineStore.js:  180│ 
+frontend/teacher/src/stores/outlineStore.js:  181│     /** 添加节点（追加到末尾） */
+frontend/teacher/src/stores/outlineStore.js:  182│     addNode(afterNodeId = null) {
+frontend/teacher/src/stores/outlineStore.js:  183│       if (!this.canEdit) return null
+frontend/teacher/src/stores/outlineStore.js:  184│       const newNode = createOutlineNode({
+frontend/teacher/src/stores/outlineStore.js:  185│         order: afterNodeId ? this._nextOrderAfter(afterNodeId) : this.nodes.length + 1
+frontend/teacher/src/stores/outlineStore.js:  186│       })
+frontend/teacher/src/stores/outlineStore.js:  187│       if (afterNodeId) {
+frontend/teacher/src/stores/outlineStore.js:  188│         const idx = this.nodes.findIndex((n) => n.node_id === afterNodeId)
+frontend/teacher/src/stores/outlineStore.js:  189│         if (idx >= 0) {
+frontend/teacher/src/stores/outlineStore.js:  190│           this.nodes.splice(idx + 1, 0, newNode)
+frontend/teacher/src/stores/outlineStore.js:> 191│           this._reorder()
+frontend/teacher/src/stores/outlineStore.js:  192│         } else {
+frontend/teacher/src/stores/outlineStore.js:  193│           this.nodes.push(newNode)
+frontend/teacher/src/stores/outlineStore.js:  194│         }
+frontend/teacher/src/stores/outlineStore.js:  195│       } else {
+frontend/teacher/src/stores/outlineStore.js:  196│         this.nodes.push(newNode)
+frontend/teacher/src/stores/outlineStore.js:  197│       }
+frontend/teacher/src/stores/outlineStore.js:  198│       this._persist()
+frontend/teacher/src/stores/outlineStore.js:  199│       return newNode
+frontend/teacher/src/stores/outlineStore.js:  200│     },
+frontend/teacher/src/stores/outlineStore.js:  201│ 
+frontend/teacher/src/stores/outlineStore.js:  202│     /** 删除节点 */
+frontend/teacher/src/stores/outlineStore.js:> 203│     removeNode(nodeId) {
+frontend/teacher/src/stores/outlineStore.js:  204│       if (!this.canEdit) return
+frontend/teacher/src/stores/outlineStore.js:  205│       this.nodes = this.nodes.filter((n) => n.node_id !== nodeId)
+frontend/teacher/src/stores/outlineStore.js:> 206│       this._reorder()
+frontend/teacher/src/stores/outlineStore.js:  207│       this._persist()
+frontend/teacher/src/stores/outlineStore.js:  208│     },
+frontend/teacher/src/stores/outlineStore.js:  209│ 
+frontend/teacher/src/stores/outlineStore.js:  210│     /** 更新节点字段 */
+frontend/teacher/src/stores/outlineStore.js:  211│     updateNode(nodeId, patch) {
+frontend/teacher/src/stores/outlineStore.js:  212│       if (!this.canEdit) return
+frontend/teacher/src/stores/outlineStore.js:  213│       const idx = this.nodes.findIndex((n) => n.node_id === nodeId)
+frontend/teacher/src/stores/outlineStore.js:  214│       if (idx < 0) return
+frontend/teacher/src/stores/outlineStore.js:  215│       // 禁止覆盖 node_id 和 order
+frontend/teacher/src/stores/outlineStore.js:  216│       const { node_id: _nid, order: _ord, ...safe } = patch
+frontend/teacher/src/stores/outlineStore.js:  217│       this.nodes[idx] = { ...this.nodes[idx], ...safe }
+frontend/teacher/src/stores/outlineStore.js:  218│       this._persist()
+frontend/teacher/src/stores/outlineStore.js:  219│     },
+frontend/teacher/src/stores/outlineStore.js:  220│ 
+frontend/teacher/src/stores/outlineStore.js:  221│     /** 交换两个节点的顺序 */
+frontend/teacher/src/stores/outlineStore.js:> 222│     swapNodes(nodeIdA, nodeIdB) {
+frontend/teacher/src/stores/outlineStore.js:  223│       if (!this.canEdit) return
+frontend/teacher/src/stores/outlineStore.js:  224│       const idxA = this.nodes.findIndex((n) => n.node_id === nodeIdA)
+frontend/teacher/src/stores/outlineStore.js:  225│       const idxB = this.nodes.findIndex((n) => n.node_id === nodeIdB)
+frontend/teacher/src/stores/outlineStore.js:  226│       if (idxA < 0 || idxB < 0) return
+frontend/teacher/src/stores/outlineStore.js:  227│       const tmp = this.nodes[idxA].order
+frontend/teacher/src/stores/outlineStore.js:  228│       this.nodes[idxA].order = this.nodes[idxB].order
+frontend/teacher/src/stores/outlineStore.js:  229│       this.nodes[idxB].order = tmp
+frontend/teacher/src/stores/outlineStore.js:> 230│       this._reorder()
+frontend/teacher/src/stores/outlineStore.js:  231│       this._persist()
+frontend/teacher/src/stores/outlineStore.js:  232│     },
+frontend/teacher/src/stores/outlineStore.js:  233│ 
+frontend/teacher/src/stores/outlineStore.js:  234│     /** 向上/下移动节点 */
+frontend/teacher/src/stores/outlineStore.js:> 235│     moveNode(nodeId, direction) {
+frontend/teacher/src/stores/outlineStore.js:  236│       const idx = this.nodes.findIndex((n) => n.node_id === nodeId)
+frontend/teacher/src/stores/outlineStore.js:  237│       if (idx < 0) return
+frontend/teacher/src/stores/outlineStore.js:  238│       const newIdx = direction === 'up' ? idx - 1 : idx + 1
+frontend/teacher/src/stores/outlineStore.js:  239│       if (newIdx < 0 || newIdx >= this.nodes.length) return
+frontend/teacher/src/stores/outlineStore.js:> 240│       this.swapNodes(this.nodes[idx].node_id, this.nodes[newIdx].node_id)
+frontend/teacher/src/stores/outlineStore.js:  241│     },
+frontend/teacher/src/stores/outlineStore.js:  242│ 
+frontend/teacher/src/stores/outlineStore.js:  243│     // ------------------------------------------------------------------
+frontend/teacher/src/stores/outlineStore.js:  244│     // 保存 & AI 修订
+frontend/teacher/src/stores/outlineStore.js:  245│     // ------------------------------------------------------------------
+frontend/teacher/src/stores/outlineStore.js:  246│ 
+frontend/teacher/src/stores/outlineStore.js:  247│     /**
+frontend/teacher/src/stores/outlineStore.js:  248│      * 保存大纲版本（手动编辑后持久化）
+frontend/teacher/src/stores/outlineStore.js:  249│      * 对应规范 3.4 PUT /api/v1/outlines/{id}
+frontend/teacher/src/stores/outlineStore.js:  250│      *
+frontend/teacher/src/stores/outlineStore.js:  251│      * 后端校验：base_version 必须等于当前版本（409冲突检测）
+frontend/teacher/src/stores/outlineStore.js:  252│      */
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  308│       }
+frontend/teacher/src/stores/outlineStore.js:  309│     },
+frontend/teacher/src/stores/outlineStore.js:  310│ 
+frontend/teacher/src/stores/outlineStore.js:  311│     /** 接受 AI 修订结果（写入当前节点） */
+frontend/teacher/src/stores/outlineStore.js:  312│     applyRevision() {
+frontend/teacher/src/stores/outlineStore.js:  313│       if (!this.pendingRevision) return
+frontend/teacher/src/stores/outlineStore.js:  314│       this.nodes = this.pendingRevision.nodes.map((n) => ({
+frontend/teacher/src/stores/outlineStore.js:  315│         ...n,
+frontend/teacher/src/stores/outlineStore.js:  316│         node_id: n.node_id || makeNodeId()
+frontend/teacher/src/stores/outlineStore.js:  317│       }))
+frontend/teacher/src/stores/outlineStore.js:  318│       this.outline_version = this.pendingRevision.outline_version
+frontend/teacher/src/stores/outlineStore.js:  319│       this.pendingRevision = null
+frontend/teacher/src/stores/outlineStore.js:> 320│       this._reorder()
+frontend/teacher/src/stores/outlineStore.js:  321│       this._persist()
+frontend/teacher/src/stores/outlineStore.js:  322│     },
+frontend/teacher/src/stores/outlineStore.js:  323│ 
+frontend/teacher/src/stores/outlineStore.js:  324│     /** 放弃 AI 修订结果 */
+frontend/teacher/src/stores/outlineStore.js:  325│     discardRevision() {
+frontend/teacher/src/stores/outlineStore.js:  326│       this.pendingRevision = null
+frontend/teacher/src/stores/outlineStore.js:  327│     },
+frontend/teacher/src/stores/outlineStore.js:  328│ 
+frontend/teacher/src/stores/outlineStore.js:  329│     // ------------------------------------------------------------------
+frontend/teacher/src/stores/outlineStore.js:  330│     // 大纲确认
+frontend/teacher/src/stores/outlineStore.js:  331│     // ------------------------------------------------------------------
+frontend/teacher/src/stores/outlineStore.js:  332│
+── 寻迹（grep）

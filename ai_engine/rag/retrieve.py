@@ -192,6 +192,9 @@ class HybridRetriever:
         min_score: float = 0.6,
         knowledge_base_ids: Optional[list[str]] = None,
         source_type: Optional[SourceType] = None,
+        scope: str = "course",
+        node_id: Optional[str] = None,
+        page_id: Optional[str] = None,
     ) -> list[SearchResult]:
         """
         混合检索：向量 + BM25 融合打分。
@@ -220,10 +223,14 @@ class HybridRetriever:
             min_score=0.0,  # 向量侧不过滤，留给融合后统一阈值
             source_type=source_type,
         )
+        vector_hits = [
+            hit for hit in vector_hits
+            if self._matches_scope(hit.chunk, scope, node_id, page_id)
+        ]
 
         # 向量不可用 → 纯 BM25 检索
         if not vector_available:
-            return self._bm25_only_search(query, top_k, min_score, source_type)
+            return self._bm25_only_search(query, top_k, min_score, source_type, scope, node_id, page_id)
 
         if not vector_hits:
             return []
@@ -321,6 +328,9 @@ class HybridRetriever:
         top_k: int,
         min_score: float,
         source_type: Optional[SourceType] = None,
+        scope: str = "course",
+        node_id: Optional[str] = None,
+        page_id: Optional[str] = None,
     ) -> list[SearchResult]:
         """
         Embedding 不可用时的纯 BM25 兜底检索。
@@ -334,13 +344,15 @@ class HybridRetriever:
 
         scored = sorted(b_scores.items(), key=lambda x: x[1], reverse=True)
         results: list[SearchResult] = []
-        for cid, score in scored[:top_k]:
+        for cid, score in scored:
             if score < min_score:
                 continue
             indexed = self.store.get_chunk(cid)
             if indexed is None:
                 continue
             if source_type is not None and indexed.source_type != source_type:
+                continue
+            if not self._matches_scope(indexed, scope, node_id, page_id):
                 continue
             results.append(SearchResult(
                 chunk_id=indexed.chunk_id,
@@ -357,7 +369,23 @@ class HybridRetriever:
                     **indexed.metadata,
                 },
             ))
+            if len(results) >= top_k:
+                break
         return results
+
+    @staticmethod
+    def _matches_scope(indexed, scope: str, node_id: Optional[str], page_id: Optional[str]) -> bool:
+        normalized_scope = (scope or "course").strip().lower()
+        if normalized_scope == "course":
+            return True
+        metadata = indexed.metadata or {}
+        if normalized_scope == "node":
+            candidate = metadata.get("node_id") or metadata.get("node_ref")
+            return bool(node_id) and str(candidate or "") == str(node_id)
+        if normalized_scope == "page":
+            candidate = metadata.get("page_id") or metadata.get("page_ref") or indexed.page_ref
+            return bool(page_id) and str(candidate or "") == str(page_id)
+        return False
 
     @staticmethod
     def _normalize_scores(scored: dict[str, float]) -> dict[str, float]:

@@ -1,11 +1,48 @@
 package model
 
 import (
+	"database/sql/driver"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// JSONB stores an arbitrary JSON object in PostgreSQL jsonb columns.
+type JSONB json.RawMessage
+
+func (j JSONB) Value() (driver.Value, error) {
+	if len(j) == 0 {
+		return []byte("{}"), nil
+	}
+	if !json.Valid(j) {
+		return nil, fmt.Errorf("invalid JSON")
+	}
+	return []byte(j), nil
+}
+
+func (j *JSONB) Scan(value any) error {
+	if value == nil {
+		*j = JSONB("{}")
+		return nil
+	}
+	var data []byte
+	switch v := value.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		return fmt.Errorf("unsupported JSONB value %T", value)
+	}
+	if !json.Valid(data) {
+		return fmt.Errorf("invalid JSON")
+	}
+	*j = JSONB(append([]byte(nil), data...))
+	return nil
+}
 
 // BaseModel 基础模型
 type BaseModel struct {
@@ -41,6 +78,17 @@ type Course struct {
 	// 关联
 	Pages         []CoursePage   `gorm:"foreignKey:CourseID" json:"pages,omitempty"`
 	TeachingNodes []TeachingNode `gorm:"foreignKey:CourseID" json:"teaching_nodes,omitempty"`
+}
+
+// CoursewareProject is the persistent workspace for the teacher editing flow.
+type CoursewareProject struct {
+	BaseModel
+	OwnerID     string `gorm:"size:36;not null;index" json:"owner_id"`
+	Title       string `gorm:"size:200;not null" json:"title"`
+	CurrentStep string `gorm:"size:30;not null;default:'s1_intent'" json:"current_step"`
+	GenID       string `gorm:"size:100;index" json:"gen_id,omitempty"`
+	Status      string `gorm:"size:20;not null;default:'draft';index" json:"status"`
+	DraftJSON   JSONB  `gorm:"type:jsonb;not null;default:'{}'" json:"draft_json"`
 }
 
 // CoursePage 课件页表

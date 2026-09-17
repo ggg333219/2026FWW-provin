@@ -1,0 +1,100 @@
+[grep] 未找到 ripgrep (rg) 或其执行失败；已使用慢速回退。
+frontend/teacher/src/stores/outlineStore.js:   23│ 
+frontend/teacher/src/stores/outlineStore.js:   24│ /**
+frontend/teacher/src/stores/outlineStore.js:>  25│  * 归一 node_type 到前端大纲编辑器的枚举（content/section/quiz/interactive/summary）。
+frontend/teacher/src/stores/outlineStore.js:   26│  * 引擎侧（Python normalize_stage2_nodes）产出 slide/cover/divider 等渲染枚举，
+frontend/teacher/src/stores/outlineStore.js:   27│  * 编辑器 <select> 无这些选项会显示空白，故在此收敛。
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:   52│     title: '',
+frontend/teacher/src/stores/outlineStore.js:   53│     summary: '',
+frontend/teacher/src/stores/outlineStore.js:>  54│     node_type: 'content', // content | section | quiz | interactive | summary
+frontend/teacher/src/stores/outlineStore.js:   55│     key_points: [],
+frontend/teacher/src/stores/outlineStore.js:   56│     estimated_duration_minutes: 5,
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  109│     /** 是否有互动节点 */
+frontend/teacher/src/stores/outlineStore.js:  110│     hasInteractive: (state) =>
+frontend/teacher/src/stores/outlineStore.js:> 111│       state.nodes.some((n) => n.node_type === 'interactive' || n.interactive_plan?.enabled),
+frontend/teacher/src/stores/outlineStore.js:  112│ 
+frontend/teacher/src/stores/outlineStore.js:  113│     /** 获取指定节点 */
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  144│         })
+frontend/teacher/src/stores/outlineStore.js:  145│         const data = resp?.data || resp || {}
+frontend/teacher/src/stores/outlineStore.js:> 146│         this._applyOutlineData(data)
+frontend/teacher/src/stores/outlineStore.js:  147│         this._persist()
+frontend/teacher/src/stores/outlineStore.js:  148│         return data
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  165│         const resp = await teacherV1Api.outline.get(outlineId, { version })
+frontend/teacher/src/stores/outlineStore.js:  166│         const data = resp?.data || resp || {}
+frontend/teacher/src/stores/outlineStore.js:> 167│         this._applyOutlineData(data)
+frontend/teacher/src/stores/outlineStore.js:  168│         return data
+frontend/teacher/src/stores/outlineStore.js:  169│       } catch (err) {
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  212│         if (idx >= 0) {
+frontend/teacher/src/stores/outlineStore.js:  213│           this.nodes.splice(idx + 1, 0, newNode)
+frontend/teacher/src/stores/outlineStore.js:> 214│           this._reorder()
+frontend/teacher/src/stores/outlineStore.js:  215│         } else {
+frontend/teacher/src/stores/outlineStore.js:  216│           this.nodes.push(newNode)
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  227│       if (!this.canEdit) return
+frontend/teacher/src/stores/outlineStore.js:  228│       this.nodes = this.nodes.filter((n) => n.node_id !== nodeId)
+frontend/teacher/src/stores/outlineStore.js:> 229│       this._reorder()
+frontend/teacher/src/stores/outlineStore.js:  230│       this._persist()
+frontend/teacher/src/stores/outlineStore.js:  231│     },
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  243│ 
+frontend/teacher/src/stores/outlineStore.js:  244│     /** 交换两个节点的顺序（真换数组位置，再重排 order） */
+frontend/teacher/src/stores/outlineStore.js:> 245│     swapNodes(nodeIdA, nodeIdB) {
+frontend/teacher/src/stores/outlineStore.js:  246│       if (!this.canEdit) return
+frontend/teacher/src/stores/outlineStore.js:  247│       const idxA = this.nodes.findIndex((n) => n.node_id === nodeIdA)
+frontend/teacher/src/stores/outlineStore.js:  248│       const idxB = this.nodes.findIndex((n) => n.node_id === nodeIdB)
+frontend/teacher/src/stores/outlineStore.js:  249│       if (idxA < 0 || idxB < 0 || idxA === idxB) return
+frontend/teacher/src/stores/outlineStore.js:> 250│       // 交换数组元素位置（此前只换 order 字段值，随即被 _reorder() 抹掉，导致排序无效）
+frontend/teacher/src/stores/outlineStore.js:  251│       const tmp = this.nodes[idxA]
+frontend/teacher/src/stores/outlineStore.js:  252│       this.nodes[idxA] = this.nodes[idxB]
+frontend/teacher/src/stores/outlineStore.js:  253│       this.nodes[idxB] = tmp
+frontend/teacher/src/stores/outlineStore.js:> 254│       this._reorder()
+frontend/teacher/src/stores/outlineStore.js:  255│       this._persist()
+frontend/teacher/src/stores/outlineStore.js:  256│     },
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  262│       const newIdx = direction === 'up' ? idx - 1 : idx + 1
+frontend/teacher/src/stores/outlineStore.js:  263│       if (newIdx < 0 || newIdx >= this.nodes.length) return
+frontend/teacher/src/stores/outlineStore.js:> 264│       this.swapNodes(this.nodes[idx].node_id, this.nodes[newIdx].node_id)
+frontend/teacher/src/stores/outlineStore.js:  265│     },
+frontend/teacher/src/stores/outlineStore.js:  266│ 
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  334│ 
+frontend/teacher/src/stores/outlineStore.js:  335│     /** 接受 AI 修订结果（写入当前节点） */
+frontend/teacher/src/stores/outlineStore.js:> 336│     applyRevision() {
+frontend/teacher/src/stores/outlineStore.js:  337│       if (!this.pendingRevision) return
+frontend/teacher/src/stores/outlineStore.js:  338│       this.nodes = this.pendingRevision.nodes.map((n) => ({
+frontend/teacher/src/stores/outlineStore.js:  339│         ...n,
+frontend/teacher/src/stores/outlineStore.js:  340│         node_id: n.node_id || makeNodeId(),
+frontend/teacher/src/stores/outlineStore.js:> 341│         node_type: normalizeOutlineNodeType(n.node_type),
+frontend/teacher/src/stores/outlineStore.js:  342│         key_points: Array.isArray(n.key_points) ? n.key_points : [],
+frontend/teacher/src/stores/outlineStore.js:  343│         estimated_duration_minutes: Number(n.estimated_duration_minutes) || 5,
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  347│       this.outline_version = this.pendingRevision.outline_version
+frontend/teacher/src/stores/outlineStore.js:  348│       this.pendingRevision = null
+frontend/teacher/src/stores/outlineStore.js:> 349│       this._reorder()
+frontend/teacher/src/stores/outlineStore.js:  350│       this._persist()
+frontend/teacher/src/stores/outlineStore.js:  351│     },
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  416│     // ------------------------------------------------------------------
+frontend/teacher/src/stores/outlineStore.js:  417│ 
+frontend/teacher/src/stores/outlineStore.js:> 418│     /** 将后端返回数据写入 state（_applyOutlineData） */
+frontend/teacher/src/stores/outlineStore.js:> 419│     _applyOutlineData(data) {
+frontend/teacher/src/stores/outlineStore.js:  420│       this.outline_id = data.outline_id || ''
+frontend/teacher/src/stores/outlineStore.js:  421│       this.outline_version = data.outline_version || data.outline_version || 0
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  429│         summary: n.summary || '',
+frontend/teacher/src/stores/outlineStore.js:  430│         // 兼容引擎枚举（slide/cover/divider）→ 大纲编辑器的前端枚举
+frontend/teacher/src/stores/outlineStore.js:> 431│         node_type: normalizeOutlineNodeType(n.node_type),
+frontend/teacher/src/stores/outlineStore.js:  432│         key_points: Array.isArray(n.key_points) ? n.key_points : [],
+frontend/teacher/src/stores/outlineStore.js:  433│         estimated_duration_minutes: Number(n.estimated_duration_minutes) || 5,
+frontend/teacher/src/stores/outlineStore.js:  ...
+frontend/teacher/src/stores/outlineStore.js:  440│ 
+frontend/teacher/src/stores/outlineStore.js:  441│     /** 重新编号 order（1 开始连续） */
+frontend/teacher/src/stores/outlineStore.js:> 442│     _reorder() {
+frontend/teacher/src/stores/outlineStore.js:  443│       this.nodes.forEach((n, i) => {
+frontend/teacher/src/stores/outlineStore.js:  444│         n.order = i + 1
+── 寻迹（grep）

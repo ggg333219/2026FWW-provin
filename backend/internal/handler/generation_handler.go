@@ -15,14 +15,20 @@ import (
 type GenerationHandler struct {
 	aiClient       service.AIEngine
 	outlineService *service.OutlineService
+	projectService *service.CoursewareProjectService
 }
 
-func NewGenerationHandler(aiClient service.AIEngine, outlineServices ...*service.OutlineService) *GenerationHandler {
-	var outlineService *service.OutlineService
-	if len(outlineServices) > 0 {
-		outlineService = outlineServices[0]
+func NewGenerationHandler(aiClient service.AIEngine, outlineService *service.OutlineService, projectServices ...*service.CoursewareProjectService) *GenerationHandler {
+	var projectService *service.CoursewareProjectService
+	if len(projectServices) > 0 {
+		for _, candidate := range projectServices {
+			if candidate != nil {
+				projectService = candidate
+				break
+			}
+		}
 	}
-	return &GenerationHandler{aiClient: aiClient, outlineService: outlineService}
+	return &GenerationHandler{aiClient: aiClient, outlineService: outlineService, projectService: projectService}
 }
 
 // Create  POST /api/v1/gen/create — 创建生成任务
@@ -30,6 +36,10 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 	var req service.GenerationCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
+		return
+	}
+	if req.ProjectID != "" && h.projectService != nil && c.GetString("userID") == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "缺少用户身份"})
 		return
 	}
 	if req.OutlineID != "" {
@@ -55,6 +65,21 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建生成任务失败: " + err.Error()})
 		return
+	}
+	if req.ProjectID != "" && h.projectService != nil {
+		ownerID := c.GetString("userID")
+		if err := h.projectService.AttachGeneration(c.Request.Context(), ownerID, req.ProjectID, resp.GenerationID); err != nil {
+			if errors.Is(err, service.ErrCoursewareProjectNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "课件项目不存在"})
+				return
+			}
+			if errors.Is(err, service.ErrCoursewareProjectArchived) {
+				c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "课件项目已归档"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "关联课件项目失败"})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }

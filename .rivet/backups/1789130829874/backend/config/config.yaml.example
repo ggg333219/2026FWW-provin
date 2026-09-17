@@ -1,0 +1,52 @@
+#####
+# 这是团队共享的模板配置，不要直接改成你自己的本机参数后提交。
+# 推荐做法：
+# 1. 复制为 backend/config/config.yaml 或 backend/config/config.local.yaml 后再改。
+# 2. 或直接设置环境变量覆盖，例如 APP_OSS_ENDPOINT、MINIO_ENDPOINT、DB_HOST、REDIS_HOST。
+# 3. 若用 Docker Compose，可复制 backend/.env.example 为 backend/.env 后按本机端口修改。
+#####
+server:
+  port: 18080
+  mode: debug
+  read_timeout: 30s
+  write_timeout: 30s
+
+database:
+  driver: postgres
+  host: localhost
+  port: 5432
+  user: postgres
+  password: 123456
+  dbname: teaching
+  sslmode: disable
+  max_idle_conns: 10
+  max_open_conns: 50
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+  pool_size: 10
+
+oss:
+  provider: minio
+  endpoint: localhost:9000
+  access_key: minioadmin
+  secret_key: minioadmin
+  bucket: teaching
+  use_ssl: false
+
+ai:
+  provider: llm
+  base_url: http://127.0.0.1:8000
+  api_key: ""
+  model: ""
+  timeout: 30s
+
+log:
+  level: info
+  filename: logs/app.log
+  max_size: 100
+  max_backups: 3
+  max_age: 30

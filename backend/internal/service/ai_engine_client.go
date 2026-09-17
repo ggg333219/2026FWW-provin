@@ -627,6 +627,7 @@ type GenerationCreateRequest struct {
 	OutlineConfirmed bool            `json:"outline_confirmed,omitempty"`
 	OutlineNodes     []OutlineNode   `json:"outline_nodes,omitempty"`
 	GenerateMode     string          `json:"generate_mode,omitempty"`
+	ProjectID        string          `json:"project_id,omitempty"`
 }
 
 type GenerationCreateResponse struct {
@@ -741,13 +742,18 @@ type VersionLockResponse struct {
 }
 
 type ExportCreateRequest struct {
-	Format  string `json:"format"`
-	Version int    `json:"version"`
+	Format    string   `json:"format"`
+	Version   int      `json:"version"`
+	VersionID string   `json:"version_id,omitempty"`
+	Formats   []string `json:"formats,omitempty"`
 }
 
 type ExportCreateResponse struct {
-	JobID  string `json:"job_id"`
-	Status string `json:"status"`
+	JobID           string   `json:"job_id"`
+	Status          string   `json:"status"`
+	CoursewareTitle string   `json:"courseware_title,omitempty"`
+	Version         int      `json:"version,omitempty"`
+	Formats         []string `json:"formats,omitempty"`
 }
 
 type ExportStatusResponse struct {
@@ -756,9 +762,12 @@ type ExportStatusResponse struct {
 	DownloadURL string `json:"download_url,omitempty"`
 	Error       string `json:"error,omitempty"`
 	// 引擎侧导出产物上传状态等扩展字段（字段只增不删），透传给前端。
-	UploadStatus string `json:"upload_status,omitempty"`
-	MinioPath    string `json:"minio_path,omitempty"`
-	FileSize     int64  `json:"file_size,omitempty"`
+	UploadStatus    string            `json:"upload_status,omitempty"`
+	MinioPath       string            `json:"minio_path,omitempty"`
+	FileSize        int64             `json:"file_size,omitempty"`
+	CoursewareTitle string            `json:"courseware_title,omitempty"`
+	Version         int               `json:"version,omitempty"`
+	Files           map[string]string `json:"files,omitempty"`
 }
 
 // =============================================================================
