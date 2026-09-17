@@ -20,6 +20,8 @@ export const teacherOutlineApi = {
     requestJson('/api/v1/outlines', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      // S2 -> S3 的初始大纲生成会调用真实大模型，不能使用通用 10 秒超时。
+      timeoutMs: 120000,
       body: JSON.stringify({
         session_id: session_id || '',
         intent_id: intent_id || '',
@@ -69,6 +71,8 @@ export const teacherOutlineApi = {
     requestJson(`/api/v1/outlines/${encodeURIComponent(outlineId)}/revise`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      // 真实大模型修订可能超过通用 10 秒请求超时。
+      timeoutMs: 120000,
       body: JSON.stringify({
         message: message || '',
         base_version: base_version != null ? base_version : 1,
