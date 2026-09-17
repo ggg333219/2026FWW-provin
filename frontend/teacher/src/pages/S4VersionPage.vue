@@ -12,6 +12,7 @@
             <router-link :to="{ name: 'S2Material' }" class="pill">S2 资料</router-link>
             <router-link :to="{ name: 'S3Studio' }" class="pill">S3 生成</router-link>
             <span class="pill active">S4 版本</span>
+            <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
           </div>
         </div>
       </div>
@@ -156,6 +157,8 @@
               :export-download-url="versionStore.exportDownloadUrl"
               :export-error="versionStore.exportError"
               :loading="versionStore.loading"
+              :intent="intentStore.intentSummary || {}"
+              :nodes="versionStore.currentVersionDetail?.nodes || []"
               @start-export="handleStartExport"
               @reset-export="versionStore.resetExport()"
             />
@@ -184,16 +187,21 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useVersionStore } from '../stores/versionStore'
 import { useGenerationStore } from '../stores/generationStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
+import { useIntentStore } from '../stores/intentStore'
 import AppShell from '../components/layout/AppShell.vue'
 import S4VersionExportCenter from '../components/teacher/S4VersionExportCenter.vue'
 
 const versionStore = useVersionStore()
 const generationStore = useGenerationStore()
 const workspaceStore = useWorkspaceStore()
+const intentStore = useIntentStore()
+
+const route = useRoute()
 
 const genIdInput = ref(
   generationStore.lastGenId ||
@@ -201,6 +209,14 @@ const genIdInput = ref(
   workspaceStore.currentCourseId ||
   ''
 )
+
+// 路由参数变化时自动加载版本（S3 一键生成后带 genId 跳转过来）
+watch(() => route.query.genId, (id) => {
+  if (id && typeof id === 'string') {
+    genIdInput.value = id
+    loadData()
+  }
+}, { immediate: true })
 const rollbackTarget = ref(null)
 const changeType = ref('update_node')
 const changeTarget = ref('')
@@ -263,7 +279,13 @@ function formatTime(iso) {
 </script>
 
 <style scoped>
-.s4-page { padding: 20px; min-height: calc(100vh - 140px); }
+.s4-page {
+  padding: 20px;
+  min-height: calc(100vh - 140px);
+  background:
+    radial-gradient(circle at 86% -15%, rgba(175, 221, 203, .2), transparent 30%),
+    linear-gradient(180deg, #fcfefd 0%, #f7faf8 100%);
+}
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .page-header h2 { margin: 0; font-size: 22px; color: #111827; }
 .page-header p { margin: 6px 0 0; font-size: 14px; color: #607a71; }
@@ -361,4 +383,12 @@ function formatTime(iso) {
 .node-preview-card strong { display: block; font-size: 13px; color: #1e293b; margin-bottom: 2px; }
 .node-preview-card small { font-size: 11px; color: #94a3b8; text-transform: uppercase; }
 .node-preview-card p { font-size: 12px; color: #64748b; margin: 6px 0 0; line-height: 1.4; }
+  .pill.back-pill {
+    background: #e8f0ed;
+    border-color: #c6d9d0;
+    color: #3d6b60;
+  }
+  .pill.back-pill:hover {
+    background: #d6e8e0;
+  }
 </style>

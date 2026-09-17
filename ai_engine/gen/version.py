@@ -26,7 +26,7 @@ import os
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from ..core.schema import GenerationVersion, GenerationStatus, ExportStatus
 
@@ -50,11 +50,133 @@ def _version_file_path(gen_id: str, version_no: int) -> Path:
 
 
 # =============================================================================
-# 锁（进程内线程安全）
+# 锁（本地线程锁 + Redis SETNX 分布式锁）
 # =============================================================================
 
 _version_locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
+
+_VERSION_LOCK_TTL = 30  # 锁超时秒数，防止持锁进程崩溃后死锁
+_version_redis_client: Optional[Any] = None
+
+
+def _get_redis_client() -> Optional[Any]:
+    """惰性获取 Redis 客户端，不可用则返回 None。"""
+    global _version_redis_client
+    if _version_redis_client is not None:
+        return _version_redis_client
+    import os
+    if os.getenv("REDIS_ENABLED", "1") == "0":
+        return None
+    try:
+        import redis
+        client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "127.0.0.1"),
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            password=os.getenv("REDIS_PASSWORD") or None,
+            db=int(os.getenv("REDIS_DB", "0")),
+            decode_responses=True,
+            socket_connect_timeout=3,
+            socket_timeout=5,
+        )
+        client.ping()
+        _version_redis_client = client
+        return _version_redis_client
+    except Exception:
+        _version_redis_client = None
+        return None
+
+
+class _RedisLock:
+    """Redis SETNX 分布式锁（NX+EX 原子获取，Lua 原子释放）。"""
+
+    def __init__(self, key: str, ttl: int = _VERSION_LOCK_TTL):
+        self.key = f"ai_engine:lock:{key}"
+        self.ttl = ttl
+        self._token: Optional[str] = None
+
+    def acquire(self, max_retries: int = 3) -> bool:
+        import time as _time
+        client = _get_redis_client()
+        if client is None:
+            return False
+        import uuid
+        token = str(uuid.uuid4())
+        delay = 0.1  # 100ms
+        for attempt in range(max_retries):
+            try:
+                ok = client.set(self.key, token, nx=True, ex=self.ttl)
+                if ok:
+                    self._token = token
+                    return True
+            except Exception:
+                pass
+            if attempt < max_retries - 1:
+                _time.sleep(delay)
+                delay *= 2  # 100ms -> 200ms -> 400ms
+        return False
+
+    def release(self) -> None:
+        """安全释放：仅 token 匹配时删除（Redis Lua 原子脚本）。"""
+        if self._token is None:
+            return
+        client = _get_redis_client()
+        if client is None:
+            self._token = None
+            return
+        # Redis Lua 脚本：仅当 token 相等才 del，防止误删他人持有的锁
+        lua = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+        try:
+            client.eval(lua, 1, self.key, self._token)
+        except Exception:
+            pass
+        finally:
+            self._token = None
+
+    def __enter__(self) -> bool:
+        return self.acquire()
+
+    def __exit__(self, *args) -> None:
+        self.release()
+
+
+def _lock_for(gen_id: str) -> threading.Lock:
+    """获取本地线程锁。"""
+    with _locks_guard:
+        if gen_id not in _version_locks:
+            _version_locks[gen_id] = threading.Lock()
+        return _version_locks[gen_id]
+
+
+class _DistributedLock:
+    """
+    两层锁：优先 Redis 分布式锁，Redis 不可用时降级为本地线程锁。
+    """
+
+    def __init__(self, gen_id: str):
+        self._rlock = _RedisLock(f"version:{gen_id}")
+        self._llock = _lock_for(gen_id)
+        self._using_redis = False
+        self._llock_pid = os.getpid()
+
+    def __enter__(self) -> "_DistributedLock":
+        current_pid = os.getpid()
+        if current_pid != self._llock_pid:
+            # 进程已重启（崩溃恢复），重置本地锁
+            self._llock = _lock_for(self._rlock.key.split(":")[-1])
+            self._llock_pid = current_pid
+        if self._rlock.acquire(max_retries=3):
+            self._using_redis = True
+            return self
+        self._llock.acquire()
+        self._using_redis = False
+        return self
+
+    def __exit__(self, *args) -> None:
+        if self._using_redis:
+            self._rlock.release()
+        else:
+            self._llock.release()
 
 
 def _get_title(node: Any) -> str:
@@ -73,13 +195,6 @@ def _get_field(node: Any, field: str) -> Any:
     if isinstance(node, dict):
         return node.get(field, "")
     return ""
-
-
-def _lock_for(gen_id: str) -> threading.Lock:
-    with _locks_guard:
-        if gen_id not in _version_locks:
-            _version_locks[gen_id] = threading.Lock()
-        return _version_locks[gen_id]
 
 
 # =============================================================================
@@ -120,7 +235,7 @@ class VersionManager:
         Returns:
             GenerationVersion 新版本对象（含 version_number）
         """
-        lock = _lock_for(generation_id)
+        lock = _DistributedLock(generation_id)
         with lock:
             # 读取当前版本列表
             versions_meta = self._read_meta(generation_id)
@@ -163,7 +278,7 @@ class VersionManager:
 
     def list_versions(self, generation_id: str) -> list[GenerationVersion]:
         """返回指定 generation_id 的所有版本，按 version_number 升序。"""
-        lock = _lock_for(generation_id)
+        lock = _DistributedLock(generation_id)
         with lock:
             meta = self._read_meta(generation_id)
             result = []
@@ -185,7 +300,7 @@ class VersionManager:
         Returns:
             GenerationVersion 或 None
         """
-        lock = _lock_for(generation_id)
+        lock = _DistributedLock(generation_id)
         with lock:
             meta = self._read_meta(generation_id)
             if not meta["versions"]:
@@ -263,7 +378,7 @@ class VersionManager:
           克隆 target_version 的快照，创建一个新的可编辑版本（locked=False）。
           如果目标版本已锁定，仍可回滚，回滚出的新版本默认不锁定。
         """
-        lock = _lock_for(generation_id)
+        lock = _DistributedLock(generation_id)
         with lock:
             # 读取目标快照
             target = self._read_snapshot(generation_id, target_version)
@@ -313,7 +428,7 @@ class VersionManager:
 
         锁定后的版本不可直接修改，只能通过回滚再生成新版本。
         """
-        lock = _lock_for(generation_id)
+        lock = _DistributedLock(generation_id)
         with lock:
             target_no = version if version is not None else self._read_meta(generation_id)["latest_version"]
             if target_no == 0:

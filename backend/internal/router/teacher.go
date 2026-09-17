@@ -122,10 +122,42 @@ func RegisterNewSkillRoutes(
 	convHandler *handler.ConversationHandler,
 	parseHandler *handler.ParseHandler,
 	knowledgeHandler *handler.KnowledgeHandler,
+	outlineHandler *handler.OutlineHandler,
 	genHandler *handler.GenerationHandler,
 	versionHandler *handler.VersionHandler,
 	exportHandler *handler.ExportHandler,
+	contentHandler *handler.ContentHandler,
+	coursewareProjectHandler *handler.CoursewareProjectHandler,
+	coursewareHandler *handler.CoursewareHandler,
 ) {
+	// ---- A1: 课件项目 CRUD（远程队友实现，JWT 保护）+ A6/A7: 修改编排/快照/回滚 ----
+	if coursewareProjectHandler != nil {
+		projects := v1.Group("/coursewares")
+		projects.Use(handler.JWTAuthMiddleware())
+		projects.POST("", coursewareProjectHandler.Create)
+		projects.GET("", coursewareProjectHandler.List)
+		projects.GET("/:project_id/context", coursewareProjectHandler.Context)
+		projects.GET("/:project_id/draft", coursewareProjectHandler.DraftGet)
+		projects.PUT("/:project_id/draft", coursewareProjectHandler.DraftPut)
+		projects.PUT("/:project_id/step", coursewareProjectHandler.StepPut)
+		// A6/A7: 修改对话 + 版本快照 + 回滚（追加到同一路由组）
+		projects.POST("/:project_id/modify", coursewareHandler.Modify)
+		projects.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
+		projects.GET("/:project_id/versions", coursewareHandler.Versions)
+		projects.POST("/:project_id/rollback", coursewareHandler.Rollback)
+	} else if coursewareHandler != nil {
+		// S1 standalone（无 JWT、无持久化 handler）
+		projects := v1.Group("/coursewares")
+		projects.POST("", coursewareHandler.Create)
+		projects.GET("", coursewareHandler.List)
+		projects.PUT("/:project_id/step", coursewareHandler.UpdateStep)
+		projects.PUT("/:project_id/draft", coursewareHandler.SaveDraft)
+		projects.GET("/:project_id/draft", coursewareHandler.GetDraft)
+		projects.POST("/:project_id/modify", coursewareHandler.Modify)
+		projects.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
+		projects.GET("/:project_id/versions", coursewareHandler.Versions)
+		projects.POST("/:project_id/rollback", coursewareHandler.Rollback)
+	}
 	// ---- S1: 意图理解 ----
 	intent := v1.Group("/intent")
 	{
@@ -153,6 +185,16 @@ func RegisterNewSkillRoutes(
 		knowledge.POST("/upload", knowledgeHandler.Upload)
 	}
 
+	// ---- S3: 教师确认前的大纲草稿 ----
+	outlines := v1.Group("/outlines")
+	{
+		outlines.POST("", outlineHandler.Create)
+		outlines.GET("/:outline_id", outlineHandler.Get)
+		outlines.PUT("/:outline_id", outlineHandler.Save)
+		outlines.POST("/:outline_id/revise", outlineHandler.Revise)
+		outlines.POST("/:outline_id/confirm", outlineHandler.Confirm)
+	}
+
 	// ---- S3: 课件生成 ----
 	gen := v1.Group("/gen")
 	{
@@ -160,7 +202,16 @@ func RegisterNewSkillRoutes(
 		gen.GET("/status/:task_id", genHandler.Status)
 		gen.POST("/preview", genHandler.PreviewHTML)
 		gen.GET("/preview/:gen_id", genHandler.Preview)
-		gen.POST("/modify/:gen_id", genHandler.Create) // 简化：后续拆为单独 modify handler
+		gen.POST("/modify", genHandler.Modify)
+		gen.POST("/finalize", genHandler.Finalize)
+	}
+
+	// ---- P1: S3 大纲 → 内容生成（独立阶段）----
+	content := v1.Group("/gen")
+	{
+		content.POST("/content", contentHandler.Create)
+		content.GET("/content/status/:content_id", contentHandler.Status)
+		content.POST("/content/modify", contentHandler.Modify)
 	}
 
 	// ---- S4: 版本管理 ----
@@ -179,4 +230,10 @@ func RegisterNewSkillRoutes(
 		exp.GET("/status/:job_id", exportHandler.Status)
 		exp.GET("/download/:job_id/:extension", exportHandler.Download)
 	}
+	canonicalExports := v1.Group("/generations")
+	canonicalExports.Use(handler.JWTAuthMiddleware())
+	canonicalExports.POST("/:generation_id/exports", exportHandler.CreateV2)
+	canonicalExportStatus := v1.Group("/exports")
+	canonicalExportStatus.Use(handler.JWTAuthMiddleware())
+	canonicalExportStatus.GET("/:export_job_id", exportHandler.StatusV2)
 }

@@ -3,14 +3,14 @@
 
 database:
   host: localhost
-  port: 5432
+  port: 15432
 
 redis:
   host: localhost
-  port: 6379
+  port: 16379
 
 oss:
-  endpoint: localhost:9000
+  endpoint: localhost:19000
   access_key: minioadmin
   secret_key: minioadmin
   bucket: teaching

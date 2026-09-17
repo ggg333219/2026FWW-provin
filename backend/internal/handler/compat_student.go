@@ -1106,7 +1106,7 @@ func (h *CompatibilityHandler) StreamStudentQAV1(c *gin.Context) {
 }
 
 func (h *CompatibilityHandler) ParseKnowledgeV1(c *gin.Context) {
-	NewWeakPointHandler(h.db, h.aiClient).ParseKnowledge(c)
+	NewWeakPointHandler(h.db, h.aiClient, service.NewKnowledgeMapService(h.db)).ParseKnowledge(c)
 }
 
 func countStudentNotes(db *gorm.DB, studentID, courseID string) int64 {
@@ -1116,6 +1116,7 @@ func countStudentNotes(db *gorm.DB, studentID, courseID string) int64 {
 }
 
 // Review Plan Handlers
+// Deprecated: 无对应路由注册，全属死代码。业务已停用复习计划功能。
 
 func (h *CompatibilityHandler) CreateReviewPlanV1(c *gin.Context) {
 	var req struct {

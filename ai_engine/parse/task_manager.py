@@ -385,9 +385,18 @@ class TaskManager:
             # ---- S2 → KB 桥接：将解析完成的 chunks 注册到知识库 ----
             try:
                 from ai_engine.rag.router import register_session_chunks
-                register_session_chunks(task.session_id, task.all_chunks)
-            except Exception:
-                pass  # KB 未就绪时不阻塞解析流程
+                register_session_chunks(task.session_id, task.all_chunks, intent_id=task.intent_id)
+            except Exception as e:
+                # KB 注册失败属于严重错误：知识库是课件生成的前置依赖，不允许静默失败。
+                # 将任务标记为 PARTIAL_FAIL，并在 task.error 中记录原因。
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(
+                    "[S2→KB] KB注册失败: session_id=%s, chunk_count=%d, error=%s",
+                    task.session_id, len(task.all_chunks), str(e)
+                )
+                task.status = AggregateTaskStatus.PARTIAL_FAIL
+                task.error = f"知识库注册失败: {e}"
 
     # ======================================================================
     # 流式执行（SSE）
@@ -465,9 +474,18 @@ class TaskManager:
             # ---- S2 → KB 桥接：将解析完成的 chunks 注册到知识库 ----
             try:
                 from ai_engine.rag.router import register_session_chunks
-                register_session_chunks(task.session_id, task.all_chunks)
-            except Exception:
-                pass  # KB 未就绪时不阻塞解析流程
+                register_session_chunks(task.session_id, task.all_chunks, intent_id=task.intent_id)
+            except Exception as e:
+                # KB 注册失败属于严重错误：知识库是课件生成的前置依赖，不允许静默失败。
+                # 将任务标记为 PARTIAL_FAIL，并在 task.error 中记录原因。
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(
+                    "[S2→KB] KB注册失败: session_id=%s, chunk_count=%d, error=%s",
+                    task.session_id, len(task.all_chunks), str(e)
+                )
+                task.status = AggregateTaskStatus.PARTIAL_FAIL
+                task.error = f"知识库注册失败: {e}"
 
         total_chunks = len(task.all_chunks)
         # 将 Chunk 模型转为可 JSON 序列化的字典
@@ -552,8 +570,9 @@ class TaskManager:
                         }
 
             # 3) 标准化为 Chunk（落库）
+            raw_pages = raw_result.get("parsed_pages", []) if isinstance(raw_result, dict) else raw_result
             ft.chunks = self._chunk_normalizer.normalize(
-                raw_chunks=raw_result,
+                raw_chunks=raw_pages,
                 source_ref=ft.file_path,
                 source_type=ft.source_type,
             )
@@ -599,8 +618,12 @@ class TaskManager:
 
                 raw_result = self._parse_by_type(ft)
 
+                # _parse_by_type 对 PDF/PPTX/DOCX 返回 document dict（含 parsed_pages），
+                # 对 TEXT/IMAGE/AUDIO 返回 list[dict]；normalize 需要 list，取出 pages 列表。
+                raw_pages = raw_result.get("parsed_pages", []) if isinstance(raw_result, dict) else raw_result
+
                 ft.chunks = self._chunk_normalizer.normalize(
-                    raw_chunks=raw_result,
+                    raw_chunks=raw_pages,
                     source_ref=ft.file_path,
                     source_type=ft.source_type,
                 )

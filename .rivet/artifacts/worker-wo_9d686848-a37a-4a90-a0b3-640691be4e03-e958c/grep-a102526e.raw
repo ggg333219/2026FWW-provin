@@ -1,0 +1,102 @@
+[grep] 未找到 ripgrep (rg) 或其执行失败；已使用慢速回退。
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:   21│               v-for="node in pendingNodes"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:   22│               :key="node.id"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:   23│               class="suggestion-item"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:>  24│               :class="{ 'dragging': draggedNodeId === node.id }"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:>  25│               draggable="true"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:>  26│               @dragstart="handleDragStart($event, node)"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:>  27│               @dragend="draggedNodeId = null"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:   28│             >
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:   29│               <!-- 类型指示器 -->
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:   30│               <div class="type-badge" :class="node.type">
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  ...
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  190│               class="tree-node"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  191│               :class="{ 'new-node': node.isNew || node.fromIteration, 'has-cases': (bindingMap[node.id] || []).length > 0 }"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  192│               @drop="handleDropToNode($event, idx)"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 193│               @dragover.prevent="dragOverNodeIdx = idx"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 194│               @dragleave="dragOverNodeIdx = -1"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 195│               :style="{ opacity: dragOverNodeIdx === idx ? 0.7 : 1 }"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  196│             >
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  197│               <!-- 节点头部 -->
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  198│               <div class="node-header">
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  ...
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  215│                 <button
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  216│                   v-if="idx > 0"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  217│                   class="action-btn move-up"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 218│                   @click="moveNodeUp(idx)"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  219│                   title="上移"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  220│                 >
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  221│                   ↑
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  ...
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  223│                 <button
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  224│                   v-if="idx < nodeTree.length - 1"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  225│                   class="action-btn move-down"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 226│                   @click="moveNodeDown(idx)"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  227│                   title="下移"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  228│                 >
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  229│                   ↓
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  230│                 </button>
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  231│                 <button
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  232│                   class="action-btn delete-btn"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 233│                   @click="removeNode(idx)"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  234│                   title="删除"
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  235│                 >
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  236│                   ✕
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  ...
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  337│ const nodeList = nodeTree
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  338│ 
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  339│ // 拖拽状态
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 340│ const draggedNodeId = ref(null)
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 341│ const dragOverNodeIdx = ref(-1)
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  342│ 
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  343│ // 节点选择器状态
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  344│ const activeSelectorIdx = ref(null)
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  ...
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  396│  * 拖拽开始：记录被拖动的建议节点
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  397│  */
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  398│ const handleDragStart = (event, node) => {
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 399│   draggedNodeId.value = node.id
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  400│   event.dataTransfer.effectAllowed = 'copy'
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  401│   event.dataTransfer.setData('suggestionsNode', JSON.stringify(node))
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  402│ }
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  ...
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  405│  * 拖拽结束
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  406│  */
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  407│ const handleDragEnd = () => {
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 408│   draggedNodeId.value = null
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  409│ }
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  410│ 
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  411│ /**
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  ...
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  413│  */
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  414│ const handleDropToNode = (event, idx) => {
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  415│   event.preventDefault()
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 416│   dragOverNodeIdx.value = -1
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  417│   
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  418│   try {
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  419│     const data = event.dataTransfer.getData('suggestionsNode')
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  420│     if (data) {
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 421│       const draggedNode = JSON.parse(data)
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  422│       // 将建议节点插入到大纲树中
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 423│       insertNodeToTree(draggedNode, idx)
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  424│     }
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  425│   } catch (err) {
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  426│     console.error('Drop failed:', err)
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  ...
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  519│ /**
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  520│  * 上移节点
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  521│  */
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 522│ const moveNodeUp = (idx) => {
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  523│   if (idx > 0) {
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  524│     [nodeTree.value[idx - 1], nodeTree.value[idx]] = [nodeTree.value[idx], nodeTree.value[idx - 1]]
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  525│   }
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  ...
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  528│ /**
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  529│  * 下移节点
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  530│  */
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:> 531│ const moveNodeDown = (idx) => {
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  532│   if (idx < nodeTree.value.length - 1) {
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  533│     [nodeTree.value[idx], nodeTree.value[idx + 1]] = [nodeTree.value[idx + 1], nodeTree.value[idx]]
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  534│   }
+frontend/teacher/src/components/teacher/CourseIterationPanel.vue:  ...
+── 寻迹（grep）

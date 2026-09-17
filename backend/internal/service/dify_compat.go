@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -26,8 +27,12 @@ const (
 	difySceneKnowledgeUpload   = "knowledge_upload"
 	difySceneGenerationCreate  = "generation_create"
 	difySceneGenerationStatus  = "generation_status"
+	difySceneGenerateOutline   = "generate_outline"
+	difySceneReviseOutline     = "revise_outline"
+	difySceneParseModify       = "parse_modify"
 	difySceneGenerationPreview = "generation_preview"
 	difySceneGenerationModify  = "generation_modify"
+	difySceneGenerationFinalize = "generation_finalize"
 	difySceneVersionHistory    = "version_history"
 	difySceneVersionLoad       = "version_load"
 	difySceneVersionRollback   = "version_rollback"
@@ -308,6 +313,76 @@ func (c *DifyClient) GenerationStatus(ctx context.Context, taskID string) (*Gene
 	if err := c.runDifyScene(ctx, difySceneGenerationStatus, map[string]string{"task_id": taskID}, &out, fallback); err != nil {
 		return nil, err
 	}
+	// P3: 防御性验证 nodes 数组，防止畸形 LLM 输出进入版本化/导出流程
+	if out.Nodes != nil {
+		validNodes := make([]TeachingNodeItem, 0, len(out.Nodes))
+		for _, n := range out.Nodes {
+			if n.NodeID != "" {
+				validNodes = append(validNodes, n)
+			}
+		}
+		out.Nodes = validNodes
+	}
+	return &out, nil
+}
+
+// ParseModify [B5] 走 Dify 场景；未配置时降级到本地 AI Engine。
+func (c *DifyClient) ParseModify(ctx context.Context, req ParseModifyRequest) (*ModifyIntent, error) {
+	var out ModifyIntent
+	engine, hasFallback := c.fallbackEngine()
+	var fallback func() error
+	if hasFallback {
+		fallback = func() error {
+			result, err := engine.ParseModify(ctx, req)
+			if err == nil && result != nil {
+				out = *result
+			}
+			return err
+		}
+	}
+	if err := c.runDifyScene(ctx, difySceneParseModify, req, &out, fallback); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GenerateOutline 走 Dify 场景；Dify 未配置时降级到本地 AI Engine。
+func (c *DifyClient) GenerateOutline(ctx context.Context, req OutlineGenerateRequest) (*OutlineGenerateResponse, error) {
+	var out OutlineGenerateResponse
+	engine, hasFallback := c.fallbackEngine()
+	var fallback func() error
+	if hasFallback {
+		fallback = func() error {
+			result, err := engine.GenerateOutline(ctx, req)
+			if err == nil {
+				out = *result
+			}
+			return err
+		}
+	}
+	if err := c.runDifyScene(ctx, difySceneGenerateOutline, req, &out, fallback); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ReviseOutline 走 Dify 场景；Dify 未配置时降级到本地 AI Engine。
+func (c *DifyClient) ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error) {
+	var out OutlineReviseAIResponse
+	engine, hasFallback := c.fallbackEngine()
+	var fallback func() error
+	if hasFallback {
+		fallback = func() error {
+			result, err := engine.ReviseOutline(ctx, req)
+			if err == nil {
+				out = *result
+			}
+			return err
+		}
+	}
+	if err := c.runDifyScene(ctx, difySceneReviseOutline, req, &out, fallback); err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 
@@ -340,14 +415,14 @@ func (c *DifyClient) GenerationPreview(ctx context.Context, req GenerationPrevie
 	return &out, nil
 }
 
-func (c *DifyClient) GenerationModify(ctx context.Context, genID string, req GenerationModifyRequest) (*GenerationModifyResponse, error) {
+func (c *DifyClient) GenerationModify(ctx context.Context, req GenerationModifyRequest) (*GenerationModifyResponse, error) {
 	var out GenerationModifyResponse
-	inputs := map[string]any{"generation_id": genID, "request": req}
+	inputs := map[string]any{"generation_id": req.GenerationID, "request": req}
 	engine, hasFallback := c.fallbackEngine()
 	var fallback func() error
 	if hasFallback {
 		fallback = func() error {
-			result, err := engine.GenerationModify(ctx, genID, req)
+			result, err := engine.GenerationModify(ctx, req)
 			if err == nil {
 				out = *result
 			}
@@ -355,6 +430,26 @@ func (c *DifyClient) GenerationModify(ctx context.Context, genID string, req Gen
 		}
 	}
 	if err := c.runDifyScene(ctx, difySceneGenerationModify, inputs, &out, fallback); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *DifyClient) GenerationFinalize(ctx context.Context, req GenerationFinalizeRequest) (*GenerationFinalizeResponse, error) {
+	var out GenerationFinalizeResponse
+	inputs := map[string]any{"generation_id": req.GenerationID, "request": req}
+	engine, hasFallback := c.fallbackEngine()
+	var fallback func() error
+	if hasFallback {
+		fallback = func() error {
+			result, err := engine.GenerationFinalize(ctx, req)
+			if err == nil {
+				out = *result
+			}
+			return err
+		}
+	}
+	if err := c.runDifyScene(ctx, difySceneGenerationFinalize, inputs, &out, fallback); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -474,6 +569,23 @@ func (c *DifyClient) ExportStatus(ctx context.Context, jobID string) (*ExportSta
 		return nil, err
 	}
 	return &out, nil
+}
+
+// P1: 内容生成阶段 — 委托给 fallback engine（aiEngineClient）
+func (c *DifyClient) GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error) {
+	engine, hasFallback := c.fallbackEngine()
+	if !hasFallback {
+		return nil, errors.New("DifyClient 不支持内容生成，需要 AI Engine fallback")
+	}
+	return engine.GenerateContent(ctx, req)
+}
+
+func (c *DifyClient) ContentStatus(ctx context.Context, contentID string) (*GenContentStatusResponse, error) {
+	engine, hasFallback := c.fallbackEngine()
+	if !hasFallback {
+		return nil, errors.New("DifyClient 不支持内容状态查询，需要 AI Engine fallback")
+	}
+	return engine.ContentStatus(ctx, contentID)
 }
 
 var _ AIEngine = (*DifyClient)(nil)

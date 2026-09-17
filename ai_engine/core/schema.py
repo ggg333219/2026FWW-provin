@@ -23,6 +23,14 @@
     assert intent.is_complete  # 检查必填字段是否齐备
 """
 
+# -----------------------------------------------------------------------------
+# 唯一真值锚点（角色 A · 2026-09-02）
+# 本文件是"字段统一"的唯一真值；Go client 镜像见
+# backend/internal/service/ai_engine_client.go（TeachingNodeItem 等，json tag 只增不删）。
+# 跨层字段矩阵 / 旧别名注册表 / 状态机 / 清理决策见 docs/A0-schema统一-唯一真值-20260902.md。
+# 新增/改名对象字段：改这里 → 同步 Go 镜像 → 跑 scripts/smoke_p0_contract.py。
+# -----------------------------------------------------------------------------
+
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
@@ -122,6 +130,8 @@ class ExportFormat(str, Enum):
     BOTH = "both"
     INTERACTIVE = "interactive"
     PDF = "pdf"
+    LESSON_PLAN = "lesson_plan"
+    """Word 标准教案（A12 赛题 4b）：三维目标/教学过程表/课堂活动/课后作业等标准结构"""
 
 
 class ExportStatus(str, Enum):
@@ -353,6 +363,7 @@ class TeachingNode(BaseModel):
     page_ref: Optional[int] = None
     source_chunk_ids: list[str] = Field(default_factory=list)
     core_points: list[str] = Field(default_factory=list)
+    """核心要点（与 key_points 等效，兼容旧数据）"""
     examples: list[str] = Field(default_factory=list)
     key_difficulties: list[str] = Field(default_factory=list)
     expected_outcomes: list[str] = Field(default_factory=list)
@@ -364,12 +375,71 @@ class TeachingNode(BaseModel):
     prev_node_id: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    # -------------------------------------------------------------------------
+    # 业务扩展字段（对齐主流开源 AI-PPT 标准化规范）
+    # -------------------------------------------------------------------------
+    type: str = ""
+    """
+    渲染类型字段，对应前端渲染层的 type 识别。
+    与 node_type 等效：node_type 是枚举值，type 是字符串形式。
+    新增节点时自动写入，与 node_type 保持一致。
+    兼容旧数据：空字符串表示未设置，前端预览/导出时应优先读取 node_type。
+    """
+    key_points: list[str] = Field(default_factory=list)
+    """
+    要点列表，与 core_points 等效，兼容主流 AI-PPT 规范命名。
+    新增节点时自动从 core_points 复制，确保字段统一。
+    """
+    script: str = ""
+    """
+    节点完整讲稿正文（LLM 生成管道合并产物，见 main.py _run_generation_pipeline）。
+    字段只增不删：此前未声明导致 pydantic 序列化时静默丢弃（UserWarning），
+    前端轮询 /api/v1/gen/status 拿不到讲稿正文、版本快照与导出链路同步丢失。
+    """
+    segments: list[dict[str, Any]] = Field(default_factory=list)
+    """
+    内容分段列表，每段为 {title, content, duration_minutes} 结构。
+    用于精细化渲染控制。
+    """
+    questions: list[str] = Field(default_factory=list)
+    """
+    节点内嵌问答题目列表，每题为问题文本字符串。
+    与 interactive_questions 等效，用于互动环节渲染。
+    类型统一为 list[str]：所有 normalize 函数均写入字符串列表，前端 _slide_quiz 也期望字符串列表。
+    """
+
+    # -------------------------------------------------------------------------
+    # 排版元数字段（对齐主流开源 AI-PPT 标准化规范）
+    # -------------------------------------------------------------------------
+    layout_hint: Optional[str] = None
+    """
+    布局提示，可选值：title_only / text_only / text_with_media / media_only /
+    two_column / quiz / interactive 等。
+    告知渲染层优先使用的布局类型。
+    """
+    font_size_hint: Optional[str] = None
+    """
+    字号提示，可选值：large（标题页） / medium（正文） / small（注释）。
+    与 layout_hint 配合使用。
+    """
+    text_alignment: Optional[str] = None
+    """
+    文本对齐方式，可选值：left / center / right / justify。
+    """
+    slide_background: Optional[str] = None
+    """
+    幻灯片背景色/渐变/图片，CSS 值或预设名称。
+    如："#ffffff" / "linear-gradient(...)" / "preset_blue"。
+    """
+
 
 class GenerationTask(BaseModel):
     """S3 生成任务。"""
     task_id: str = ""
     session_id: str = ""
     generation_id: str = ""
+    outline_id: str = ""
+    outline_version: int = 0
     status: GenerationStatus = GenerationStatus.PENDING
     stage: GenerationStage = GenerationStage.INTENT_LOCKED
     progress_pct: float = 0.0
@@ -508,6 +578,9 @@ class SearchRequest(BaseModel):
     knowledge_base_ids: list[str] = Field(default_factory=list)
     top_k: int = 5
     min_score: float = 0.6
+    scope: str = "course"
+    node_id: Optional[str] = None
+    page_id: Optional[str] = None
 
 
 class SearchResponse(BaseModel):
@@ -535,6 +608,11 @@ class GenerationCreateRequest(BaseModel):
     intent: IntentSummary = Field(default_factory=IntentSummary)
     evidence_packet: Optional[EvidencePacket] = None
     template_id: str = "default"
+    outline_id: str = ""
+    outline_version: int = 0
+    outline_confirmed: bool = False
+    outline_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    generate_mode: str = "page_incremental"
 
 
 class GenerationCreateResponse(BaseModel):
@@ -542,10 +620,15 @@ class GenerationCreateResponse(BaseModel):
     generation_id: str = ""
     status: GenerationStatus = GenerationStatus.PENDING
     generation_type: str = "ppt"
+    outline_id: str = ""
+    outline_version: int = 0
 
 
 class GenerationStatusResponse(BaseModel):
     task_id: str = ""
+    generation_id: str = ""
+    outline_id: str = ""
+    outline_version: int = 0
     status: GenerationStatus = GenerationStatus.PENDING
     stage: GenerationStage = GenerationStage.INTENT_LOCKED
     progress_pct: float = 0.0
@@ -588,3 +671,7 @@ class ExportStatusResponse(BaseModel):
     status: ExportStatus = ExportStatus.PENDING
     download_url: Optional[str] = None
     error: Optional[str] = None
+    # 导出产物上传状态（字段只增不删）：uploaded / failed / skipped，None 表示尚未尝试
+    upload_status: Optional[str] = None
+    minio_path: Optional[str] = None
+    file_size: Optional[int] = None

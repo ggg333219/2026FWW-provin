@@ -52,6 +52,11 @@ ai_engine/parse/test4.mp4
 # Config files
 .env
 .env.local
+
+.env.*
+!.env.example
+!*.env.example
+
 backend/.env
 backend/.env.local
 backend/config/config.yaml
@@ -76,3 +81,17 @@ ai_engine/data/
 
 data/versions/
 data/exports/
+
+# S2 视频解析测试素材（本地生成，不入库）
+scripts/tmp_testvideo/
+
+.claude/
+lark_auth_qr.png
+
+# ---- 隐私/密钥防护（2026-09-11 安全止血）----
+# 会话记录文件（含历史对话，可能夹带密钥）不入库
+*-this-session-is-being-continued-*.txt
+# 会议讲稿曾含 ANTHROPIC_AUTH_TOKEN / API key，停止跟踪
+会议讲稿.md
+# 任何含本地 env 配置的临时导出
+*claude-settings*.json

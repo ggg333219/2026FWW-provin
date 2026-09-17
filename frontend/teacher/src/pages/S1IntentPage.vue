@@ -12,12 +12,11 @@
             <router-link :to="{ name: 'S2Material' }" class="pill">S2 资料</router-link>
             <router-link :to="{ name: 'S3Studio' }" class="pill">S3 生成</router-link>
             <router-link :to="{ name: 'S4Version' }" class="pill">S4 版本</router-link>
+            <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
           </div>
         </div>
       </div>
-      <div class="page-body">
-        <TeacherIntentPanel />
-      </div>
+      <TeacherIntentPanel />
       <!-- 下一步：S1 → S2 -->
       <div class="next-step-bar">
         <router-link :to="{ name: 'S2Material' }" class="next-step-btn">
@@ -96,7 +95,7 @@ watch(
   --muted: #718078;
   --forest: #244f49;
   --mint: #65a68f;
-  padding: clamp(22px, 3vw, 40px);
+  padding: 20px;
   min-height: calc(100vh - 140px);
   background:
     radial-gradient(circle at 86% -15%, rgba(175, 221, 203, .2), transparent 30%),
@@ -169,4 +168,22 @@ watch(
     flex-direction: column;
   }
 }
+  .pill.back-pill {
+    background: #e8f0ed;
+    border-color: #c6d9d0;
+    color: #3d6b60;
+  }
+  .pill.back-pill:hover {
+    background: #d6e8e0;
+  }
+  .page-header h2 {
+    margin: 0;
+    font-size: 22px;
+    color: #111827;
+  }
+  .page-header p {
+    margin: 6px 0 0;
+    font-size: 14px;
+    color: #607a71;
+  }
 </style>

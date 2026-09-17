@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -11,11 +13,22 @@ import (
 
 // GenerationHandler S3 课件生成 — HTTP 处理器
 type GenerationHandler struct {
-	aiClient service.AIEngine
+	aiClient       service.AIEngine
+	outlineService *service.OutlineService
+	projectService *service.CoursewareProjectService
 }
 
-func NewGenerationHandler(aiClient service.AIEngine) *GenerationHandler {
-	return &GenerationHandler{aiClient: aiClient}
+func NewGenerationHandler(aiClient service.AIEngine, outlineService *service.OutlineService, projectServices ...*service.CoursewareProjectService) *GenerationHandler {
+	var projectService *service.CoursewareProjectService
+	if len(projectServices) > 0 {
+		for _, candidate := range projectServices {
+			if candidate != nil {
+				projectService = candidate
+				break
+			}
+		}
+	}
+	return &GenerationHandler{aiClient: aiClient, outlineService: outlineService, projectService: projectService}
 }
 
 // Create  POST /api/v1/gen/create — 创建生成任务
@@ -25,10 +38,48 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
 		return
 	}
+	if req.ProjectID != "" && h.projectService != nil && c.GetString("userID") == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "缺少用户身份"})
+		return
+	}
+	if req.OutlineID != "" {
+		if !req.OutlineConfirmed || req.OutlineVersion <= 0 || h.outlineService == nil {
+			c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "必须使用后端已确认的大纲版本生成课件"})
+			return
+		}
+		outline, err := h.outlineService.GetConfirmed(c.Request.Context(), req.OutlineID, req.OutlineVersion)
+		if err != nil {
+			status := http.StatusConflict
+			if errors.Is(err, service.ErrOutlineNotFound) {
+				status = http.StatusNotFound
+			}
+			c.JSON(status, gin.H{"code": status, "message": err.Error()})
+			return
+		}
+		req.OutlineNodes = outline.Nodes
+	} else if req.OutlineConfirmed {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "outline_confirmed 需要 outline_id"})
+		return
+	}
 	resp, err := h.aiClient.GenerationCreate(c.Request.Context(), req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建生成任务失败: " + err.Error()})
 		return
+	}
+	if req.ProjectID != "" && h.projectService != nil {
+		ownerID := c.GetString("userID")
+		if err := h.projectService.AttachGeneration(c.Request.Context(), ownerID, req.ProjectID, resp.GenerationID); err != nil {
+			if errors.Is(err, service.ErrCoursewareProjectNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "课件项目不存在"})
+				return
+			}
+			if errors.Is(err, service.ErrCoursewareProjectArchived) {
+				c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "课件项目已归档"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "关联课件项目失败"})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
@@ -55,8 +106,8 @@ func (h *GenerationHandler) PreviewHTML(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
 		return
 	}
-	if len(req.Nodes) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "nodes 不能为空"})
+	if len(req.Nodes) == 0 && req.GenID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "nodes 或 gen_id 至少提供一个"})
 		return
 	}
 	previewClient, ok := h.aiClient.(interface {
@@ -74,17 +125,67 @@ func (h *GenerationHandler) PreviewHTML(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
 
-// Preview  GET /api/v1/gen/preview/:gen_id — 预览（当前简化：走 status 返回）
+// Modify  POST /api/v1/gen/modify — 应用编辑命令，生成新版本快照
+func (h *GenerationHandler) Modify(c *gin.Context) {
+	var req service.GenerationModifyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
+		return
+	}
+	resp, err := h.aiClient.GenerationModify(c.Request.Context(), req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "修改命令执行失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
+}
+
+// Preview  GET /api/v1/gen/preview/:gen_id — 读取版本快照并渲染预览 HTML（前端刷新后恢复预览）。
 func (h *GenerationHandler) Preview(c *gin.Context) {
 	genID := c.Param("gen_id")
 	if genID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 gen_id"})
 		return
 	}
-	// 预览本质上是一个已完成生成的 status 查询
-	resp, err := h.aiClient.GenerationStatus(c.Request.Context(), genID)
+	var version *int
+	if v := c.Query("version"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			version = &n
+		}
+	}
+	previewClient, ok := h.aiClient.(interface {
+		GetPreview(context.Context, string, *int) (*service.GenerationPreviewResponse, error)
+	})
+	if !ok {
+		c.JSON(http.StatusNotImplemented, gin.H{"code": 501, "message": "当前 AI 客户端不支持预览持久化"})
+		return
+	}
+	resp, err := previewClient.GetPreview(c.Request.Context(), genID, version)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "获取预览失败: " + err.Error()})
+		if httpErr, isHTTP := err.(*service.AIEngineHTTPError); isHTTP && httpErr.StatusCode == http.StatusNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "版本不存在，请先完成 S3 生成"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "获取预览失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
+}
+
+// Finalize POST /api/v1/gen/finalize — 从确认的内容节点创建版本快照（PPT 生成步骤）
+func (h *GenerationHandler) Finalize(c *gin.Context) {
+	var req service.GenerationFinalizeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
+		return
+	}
+	if len(req.Nodes) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "nodes 不能为空"})
+		return
+	}
+	resp, err := h.aiClient.GenerationFinalize(c.Request.Context(), req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "生成终稿失败: " + err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})

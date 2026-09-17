@@ -97,6 +97,13 @@ async def rag_search(req: SearchRequest):
     """
     if not req.query or not req.query.strip():
         raise HTTPException(status_code=400, detail="query 不能为空")
+    scope = (req.scope or "course").strip().lower()
+    if scope not in {"node", "page", "course"}:
+        raise HTTPException(status_code=400, detail="scope 必须是 node、page 或 course")
+    if scope == "node" and not (req.node_id or "").strip():
+        raise HTTPException(status_code=400, detail="scope=node 时 node_id 不能为空")
+    if scope == "page" and not (req.page_id or "").strip():
+        raise HTTPException(status_code=400, detail="scope=page 时 page_id 不能为空")
 
     try:
         retriever = _get_retriever()
@@ -105,6 +112,9 @@ async def rag_search(req: SearchRequest):
             top_k=req.top_k or 5,
             min_score=req.min_score or 0.6,
             knowledge_base_ids=req.knowledge_base_ids or None,
+            scope=scope,
+            node_id=req.node_id,
+            page_id=req.page_id,
         )
         return SearchResponse(
             results=results,
@@ -278,23 +288,26 @@ async def knowledge_upload(req: KnowledgeUploadRequest):
 
 # 进程内共享的 session→chunks 映射（S2 产出可供 KB 直接消费）
 # 实际生产环境应通过 Redis/DB 共享
-_session_parsed_chunks: dict[str, list[Chunk]] = {}
+# 格式: {session_id: {"chunks": [...], "intent_id": "..."}}
+_session_parsed_chunks: dict[str, dict] = {}
 
 
-def register_session_chunks(session_id: str, chunks: list[Chunk]) -> None:
+def register_session_chunks(session_id: str, chunks: list[Chunk], intent_id: Optional[str] = None) -> None:
     """
     供 S2 parse router 调用：注册解析完成的 chunks。
 
     S2 解析完成后调用此函数，KB 上传时可直接消费。
     """
-    if session_id not in _session_parsed_chunks:
-        _session_parsed_chunks[session_id] = []
-    _session_parsed_chunks[session_id].extend(chunks)
+    entry = _session_parsed_chunks.get(session_id, {"chunks": [], "intent_id": None})
+    entry["chunks"].extend(chunks)
+    if intent_id:
+        entry["intent_id"] = intent_id
+    _session_parsed_chunks[session_id] = entry
 
 
 def _find_session_chunks(session_id: str) -> list[Chunk]:
     """查找某 session 的已解析 chunks。"""
-    return _session_parsed_chunks.get(session_id, [])
+    return _session_parsed_chunks.get(session_id, {}).get("chunks", [])
 
 
 def _process_file(file_url: str) -> list[Chunk]:

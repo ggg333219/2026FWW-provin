@@ -105,7 +105,17 @@ export async function requestJson(path, options = {}) {
     // 不切换全局 mock、也不回退 Mock，避免“真实数据 → 假数据”跳变；
     // 交由调用方优雅降级（空态提示 / 轮询重试）。
     if (error && error.name === 'AbortError') {
-      throw error
+      // 超时中止：AbortError 自带的 message 不含可读信息（浏览器只给
+      // "The operation was aborted"），调用方兜底成「没反应」。这里补上
+      // 耗时与路径，让错误提示能明确区分「超时」和「网络不可达」。
+      const effectiveTimeoutMs = options?.timeoutMs || REQUEST_TIMEOUT_MS
+      const timeoutError = new Error(
+        `请求超时（${Math.round(effectiveTimeoutMs / 1000)} 秒未响应）: ${path}`
+      )
+      timeoutError.name = 'TimeoutError'
+      timeoutError.isTimeout = true
+      timeoutError.originalError = error
+      throw timeoutError
     }
     // 尝试 Mock 回退
     const mockPayload = handleMockRequest(path, options, error)

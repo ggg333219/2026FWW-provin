@@ -17,12 +17,13 @@ import (
 )
 
 type WeakPointHandler struct {
-	db       *gorm.DB
-	aiClient service.AIEngine
+	db                  *gorm.DB
+	aiClient            service.AIEngine
+	knowledgeMapService *service.KnowledgeMapService
 }
 
-func NewWeakPointHandler(db *gorm.DB, aiClient service.AIEngine) *WeakPointHandler {
-	return &WeakPointHandler{db: db, aiClient: aiClient}
+func NewWeakPointHandler(db *gorm.DB, aiClient service.AIEngine, kms *service.KnowledgeMapService) *WeakPointHandler {
+	return &WeakPointHandler{db: db, aiClient: aiClient, knowledgeMapService: kms}
 }
 
 func (h *WeakPointHandler) ParseKnowledge(c *gin.Context) {
@@ -165,10 +166,34 @@ func (h *WeakPointHandler) CheckAnswer(c *gin.Context) {
 	if isCorrect {
 		masteryDelta = 10
 	}
-	if strings.TrimSpace(req.StudentID) != "" {
-		_ = h.db.Create(&model.AnswerRecord{StudentID: req.StudentID, QuestionID: questionID, UserAnswer: req.UserAnswer, IsCorrect: isCorrect, MasteryDelta: masteryDelta}).Error
+
+	studentID := strings.TrimSpace(req.StudentID)
+
+	// 写入答题记录（前端展示用）
+	if studentID != "" {
+		_ = h.db.Create(&model.AnswerRecord{
+			StudentID:   studentID,
+			QuestionID:  questionID,
+			UserAnswer:  req.UserAnswer,
+			IsCorrect:   isCorrect,
+			MasteryDelta: masteryDelta,
+		}).Error
 	}
 
+	// ★ 核心修复：将 masteryDelta 真实写入 StudentKnowledgeMastery 表，形成掌握度更新闭环。
+	// WeakPointID → KnowledgePointID 映射：格式 "wp-page-{n}" → 以 page 为 knowledge_point_id。
+	knowledgePointID := questionID // 默认用 questionID 作为 knowledge_point_id
+	if strings.HasPrefix(question.WeakPointID, "wp-page-") {
+		knowledgePointID = strings.TrimPrefix(question.WeakPointID, "wp-page-")
+	} else if question.WeakPointID != "" {
+		knowledgePointID = question.WeakPointID
+	}
+	if studentID != "" && h.knowledgeMapService != nil {
+		responseTimeMs := 0 // 暂时不透传，前端有需要可扩展
+		_ = h.knowledgeMapService.UpdateMasteryScore(studentID, knowledgePointID, isCorrect, responseTimeMs)
+	}
+
+	// newMastery 为参考值（前端用），真实值以 DB 为准
 	apiresp.OK(c, "请求成功", gin.H{"isCorrect": isCorrect, "correctAnswer": correctAnswer, "explanation": question.Explanation, "masteryDelta": masteryDelta, "newMastery": 65 + masteryDelta})
 }
 

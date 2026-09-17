@@ -11,7 +11,8 @@ func RegisterStudentRoutes(api *gin.RouterGroup,
 	studentHandler *handler.StudentHandler,
 	compatHandler *handler.CompatibilityHandler,
 	weakPointHandler *handler.WeakPointHandler,
-	courseHandler *handler.CourseHandler) {
+	courseHandler *handler.CourseHandler,
+	knowledgeMapHandler *handler.KnowledgeMapHandler) {
 
 	// Health Check
 	api.GET("/health", func(c *gin.Context) {
@@ -75,6 +76,19 @@ func RegisterStudentRoutes(api *gin.RouterGroup,
 				coursewareAI.GET("/:courseId/knowledge-graph", compatHandler.GetKnowledgeGraphV1)
 				coursewareAI.POST("/:courseId/ask", compatHandler.AskCoursewareV1)
 			}
+		}
+
+		// ★ P1修复：知识图谱路由（薄弱点→掌握度查询完整闭环）
+		// 所有方法通过 c.Query() 读取参数，故使用 ?studentId=xxx 查询参数风格。
+		knowledge := v1.Group("/knowledge")
+		{
+			knowledge.GET("/map", knowledgeMapHandler.GetKnowledgeMap)
+			knowledge.GET("/mastery", knowledgeMapHandler.GetKnowledgePointMastery)
+			knowledge.POST("/mastery", knowledgeMapHandler.UpdateMasteryScore)
+			knowledge.GET("/weak", knowledgeMapHandler.GetWeakKnowledgePoints)
+			knowledge.GET("/strong", knowledgeMapHandler.GetStrongKnowledgePoints)
+			knowledge.GET("/progress", knowledgeMapHandler.AnalyzeLearningProgress)
+			knowledge.GET("/recommend", knowledgeMapHandler.RecommendNextStudy)
 		}
 	}
 }

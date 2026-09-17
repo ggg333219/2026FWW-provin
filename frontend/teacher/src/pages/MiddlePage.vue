@@ -7,7 +7,7 @@
         <div class="middle-username">{{ authStore.username || '教师' }}</div>
         <div class="middle-subtitle">教学中间页</div>
 
-        <button class="middle-side-btn" @click="switchView('home')">课程中间页</button>
+        <button class="middle-side-btn primary" @click="enterNewFlow">📋 新建课件</button>
         <button class="middle-side-btn" @click="switchView('platform')">平台管理</button>
       </aside>
 
@@ -61,12 +61,22 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/authStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
+import { useIntentStore } from '../stores/intentStore'
+import { useMaterialStore } from '../stores/materialStore'
+import { useOutlineStore } from '../stores/outlineStore'
+import { useGenerationStore } from '../stores/generationStore'
+import { useVersionStore } from '../stores/versionStore'
 import AppShell from '../components/layout/AppShell.vue'
 import PlatformManagementPanel from '../components/teacher/PlatformManagementPanel.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
 const workspaceStore = useWorkspaceStore()
+const intentStore = useIntentStore()
+const materialStore = useMaterialStore()
+const outlineStore = useOutlineStore()
+const generationStore = useGenerationStore()
+const versionStore = useVersionStore()
 const shellRef = ref(null)
 
 const currentView = ref('home')
@@ -106,6 +116,39 @@ const openTile = (tile) => {
   if (!tile) return
   workspaceStore.enterWorkspace()
   router.push({ name: 'Workspace', query: { courseId: tile.id } })
+}
+
+const enterNewFlow = () => {
+  // 重置所有与旧课件相关的 store 状态，防止缓存遗留
+  intentStore.reset()
+  materialStore.clearEvidencePackets()
+  outlineStore.reset()
+  generationStore.reset()
+  versionStore.reset()
+  // 清空可能残留的其他 localStorage 键
+  if (typeof window !== 'undefined') {
+    const keysToRemove = [
+      'fuww_s2_evidence_packet',
+      'fuww_s2_generation_mode:*',
+      'fuww_s3_outline_info',
+      'fuww_s1_confirmed_intent',
+      'fuww_workflow_intent_id'
+    ]
+    keysToRemove.forEach(key => {
+      if (key.includes('*')) {
+        // 对于通配符，遍历所有 localStorage 键
+        const pattern = key.replace('*', '')
+        Object.keys(window.localStorage).forEach(k => {
+          if (k.startsWith(pattern)) {
+            window.localStorage.removeItem(k)
+          }
+        })
+      } else {
+        window.localStorage.removeItem(key)
+      }
+    })
+  }
+  router.push({ name: 'S1Intent' })
 }
 
 onMounted(async () => {
@@ -176,6 +219,15 @@ onMounted(async () => {
 .middle-side-btn:hover {
   border-color: #8fbcae;
   background: #f4fbf7;
+}
+.middle-side-btn.primary {
+  background: #2f605a;
+  color: #fff;
+  border-color: #2f605a;
+}
+.middle-side-btn.primary:hover {
+  background: #3d7a70;
+  border-color: #3d7a70;
 }
 
 .middle-main-panel {

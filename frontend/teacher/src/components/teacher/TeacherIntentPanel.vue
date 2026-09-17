@@ -85,10 +85,16 @@
             <span><kbd>Enter</kbd> 发送</span>
             <span><kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</span>
           </div>
-          <button class="send-button" type="submit" :disabled="!draft.trim() || store.isAnalyzing || store.isConfirmed">
-            <span>{{ store.isAnalyzing ? '理解中' : '发送' }}</span>
-            <svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
-          </button>
+          <div class="composer-actions">
+            <VoiceInputButton
+              :disabled="store.isAnalyzing || store.isConfirmed"
+              @transcript="appendTranscript"
+            />
+            <button class="send-button" type="submit" :disabled="!draft.trim() || store.isAnalyzing || store.isConfirmed">
+              <span>{{ store.isAnalyzing ? '理解中' : '发送' }}</span>
+              <svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+            </button>
+          </div>
         </div>
       </form>
     </div>
@@ -237,6 +243,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useIntentStore } from '../../stores/intentStore'
+import VoiceInputButton from '../voice/VoiceInputButton.vue'
 
 const store = useIntentStore()
 const router = useRouter()
@@ -366,6 +373,13 @@ const send = async () => {
   await store.sendMessage(content)
   await scrollToLatest()
   composerInput.value?.focus()
+}
+
+// 语音输入：把 VoiceInputButton 识别出的最终文本片段追加进输入框。
+// 中间结果只在按钮气泡里预览，只有 isFinal 的片段才会进入草稿，避免反复回改。
+const appendTranscript = (text) => {
+  if (!text) return
+  draft.value = draft.value ? `${draft.value}${text}` : text
 }
 
 const useStarter = (prompt) => {
@@ -562,6 +576,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .composer textarea { width: 100%; min-height: 48px; padding: 2px 3px; border: 0; outline: 0; resize: none; color: #27372f; background: transparent; font-size: 12px; line-height: 1.6; }
 .composer textarea::placeholder { color: #a2ada7; }
 .composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.composer-actions { display: flex; align-items: center; gap: 8px; }
 .input-hints { display: flex; gap: 11px; color: #a2aca7; font-size: 8px; }
 .input-hints kbd { padding: 1px 4px; border: 1px solid #e0e6e3; border-radius: 4px; color: #7f8c86; background: #f7f9f8; font-size: 8px; }
 .send-button { display: flex; align-items: center; gap: 6px; padding: 8px 13px; border: 0; border-radius: 11px; color: #fff; background: #2c5b52; font-size: 10px; font-weight: 700; cursor: pointer; box-shadow: 0 6px 14px rgba(44, 91, 82, .18); }

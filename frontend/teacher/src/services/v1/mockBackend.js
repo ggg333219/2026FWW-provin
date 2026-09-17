@@ -516,6 +516,7 @@ function buildDefaultStore() {
     parseTasks: {},
     ragDocuments: [],
     genTasks: {},
+    intentSessions: {},
     versionSnapshots: {},
     exportJobs: {}
   }
@@ -523,6 +524,249 @@ function buildDefaultStore() {
 
 function ok(data) {
   return { code: 200, message: 'ok (mock)', data }
+}
+
+// ================================================================
+// Mock 导出文件生成（PPTX / DOCX 最小可打开包，STORED ZIP）
+// 让离线演示的「下载文件」真正产出可打开的 Office 文件，而不是 404。
+// 生成逻辑独立验证：python-pptx / python-docx 均可解析。
+// ================================================================
+
+const MOCK_XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+
+let _mockCrcTable = null
+function mockCrc32(bytes) {
+  if (!_mockCrcTable) {
+    _mockCrcTable = new Uint32Array(256)
+    for (let n = 0; n < 256; n += 1) {
+      let c = n
+      for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+      _mockCrcTable[n] = c >>> 0
+    }
+  }
+  let crc = 0xffffffff
+  for (let i = 0; i < bytes.length; i += 1) {
+    crc = (crc >>> 8) ^ _mockCrcTable[(crc ^ bytes[i]) & 0xff]
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+/** 最小 ZIP 打包器（method=0 STORED，无需压缩算法，浏览器可直接生成） */
+function mockZipStore(entries) {
+  const encoder = new TextEncoder()
+  const chunks = []
+  const central = []
+  let offset = 0
+  for (const entry of entries) {
+    const name = encoder.encode(entry.name)
+    const data = entry.data
+    const crc = mockCrc32(data)
+    const local = new DataView(new ArrayBuffer(30))
+    local.setUint32(0, 0x04034b50, true)
+    local.setUint16(4, 20, true)
+    local.setUint16(6, 0x0800, true) // UTF-8 文件名
+    local.setUint16(8, 0, true) // method = STORED
+    local.setUint16(10, 0, true)
+    local.setUint16(12, 0x21, true)
+    local.setUint32(14, crc, true)
+    local.setUint32(18, data.length, true)
+    local.setUint32(22, data.length, true)
+    local.setUint16(26, name.length, true)
+    local.setUint16(28, 0, true)
+    chunks.push(new Uint8Array(local.buffer), name, data)
+    central.push({ name, crc, size: data.length, offset })
+    offset += 30 + name.length + data.length
+  }
+  const cdStart = offset
+  for (const c of central) {
+    const h = new DataView(new ArrayBuffer(46))
+    h.setUint32(0, 0x02014b50, true)
+    h.setUint16(4, 20, true)
+    h.setUint16(6, 20, true)
+    h.setUint16(8, 0x0800, true)
+    h.setUint16(10, 0, true)
+    h.setUint16(12, 0, true)
+    h.setUint16(14, 0x21, true)
+    h.setUint32(16, c.crc, true)
+    h.setUint32(20, c.size, true)
+    h.setUint32(24, c.size, true)
+    h.setUint16(28, c.name.length, true)
+    h.setUint16(30, 0, true)
+    h.setUint16(32, 0, true)
+    h.setUint16(34, 0, true)
+    h.setUint16(36, 0, true)
+    h.setUint32(38, 0, true)
+    h.setUint32(42, c.offset, true)
+    chunks.push(new Uint8Array(h.buffer), c.name)
+  }
+  const cdSize = central.reduce((s, c) => s + 46 + c.name.length, 0)
+  const eocd = new DataView(new ArrayBuffer(22))
+  eocd.setUint32(0, 0x06054b50, true)
+  eocd.setUint16(4, 0, true)
+  eocd.setUint16(6, 0, true)
+  eocd.setUint16(8, central.length, true)
+  eocd.setUint16(10, central.length, true)
+  eocd.setUint32(12, cdSize, true)
+  eocd.setUint32(16, cdStart, true)
+  eocd.setUint16(20, 0, true)
+  chunks.push(new Uint8Array(eocd.buffer))
+  const total = chunks.reduce((s, c) => s + c.length, 0)
+  const out = new Uint8Array(total)
+  let pos = 0
+  for (const c of chunks) {
+    out.set(c, pos)
+    pos += c.length
+  }
+  return out
+}
+
+function mockEscXml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+}
+
+const MOCK_CORE_PROPS = `${MOCK_XML_DECL}<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>课件导出</dc:title><dc:creator>Teacher Frontend (Mock)</dc:creator><cp:lastModifiedBy>Teacher Frontend</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">2026-01-01T00:00:00Z</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">2026-01-01T00:00:00Z</dcterms:modified></cp:coreProperties>`
+
+const MOCK_PPTX_THEME = `${MOCK_XML_DECL}<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light" panose="020F0302020204030204"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri" panose="020F0502020204030204"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:tint val="50000"/><a:satMod val="300000"/></a:schemeClr></a:gs><a:gs pos="35000"><a:schemeClr val="phClr"><a:tint val="37000"/><a:satMod val="300000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:tint val="15000"/><a:satMod val="350000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="16200000" scaled="1"/></a:gradFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:shade val="51000"/><a:satMod val="130000"/></a:schemeClr></a:gs><a:gs pos="80000"><a:schemeClr val="phClr"><a:shade val="93000"/><a:satMod val="130000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:shade val="94000"/><a:satMod val="135000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="16200000" scaled="0"/></a:gradFill></a:fillStyleLst><a:lnStyleLst><a:ln w="6350" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln><a:ln w="12700" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln><a:ln w="19050" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"><a:tint val="95000"/><a:satMod val="170000"/></a:schemeClr></a:solidFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:tint val="93000"/><a:satMod val="150000"/><a:shade val="98000"/><a:lumMod val="102000"/></a:schemeClr></a:gs><a:gs pos="50000"><a:schemeClr val="phClr"><a:tint val="98000"/><a:satMod val="130000"/><a:shade val="90000"/><a:lumMod val="103000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:shade val="63000"/><a:satMod val="120000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="16200000" scaled="0"/></a:gradFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>`
+
+/** 从 mock 版本快照（或生成任务）取导出节点 */
+function mockExportNodesFrom(store, genId) {
+  const snapshots = (store.versionSnapshots && store.versionSnapshots[genId]) || []
+  const latest = snapshots[snapshots.length - 1]
+  if (Array.isArray(latest?.nodes_snapshot)) return latest.nodes_snapshot
+  const tasks = store.genTasks || {}
+  for (const task of Object.values(tasks)) {
+    if (task.generation_id === genId && Array.isArray(task.nodes) && task.nodes.length) return task.nodes
+  }
+  return []
+}
+
+function mockNormalizeNode(node, index) {
+  return {
+    title: node.title || node.node_title || `页面 ${index + 1}`,
+    content: node.content || node.scriptText || node.script || node.summary || '',
+    points: Array.isArray(node.key_points)
+      ? node.key_points
+      : Array.isArray(node.children)
+        ? node.children
+        : []
+  }
+}
+
+function mockBuildPptxBytes(nodes) {
+  const slides = (Array.isArray(nodes) && nodes.length ? nodes : [{ title: '课件', content: '（暂无内容）' }])
+    .map((n, i) => mockNormalizeNode(n, i))
+
+  const contentTypes = `${MOCK_XML_DECL}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>${slides.map((_, i) => `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`).join('')}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`
+
+  const rootRels = `${MOCK_XML_DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`
+
+  const presentationRels = `${MOCK_XML_DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>${slides.map((_, i) => `<Relationship Id="rId${i + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${i + 1}.xml"/>`).join('')}</Relationships>`
+
+  const presentation = `${MOCK_XML_DECL}<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst>${slides.map((_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 2}"/>`).join('')}</p:sldIdLst><p:sldSz cx="12192000" cy="6858000"/><p:notesSz cx="6858000" cy="9144000"/><p:defaultTextStyle/></p:presentation>`
+
+  const slideMaster = `${MOCK_XML_DECL}<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst><p:txStyles><p:titleStyle/><p:bodyStyle/><p:otherStyle/></p:txStyles></p:sldMaster>`
+
+  const slideMasterRels = `${MOCK_XML_DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/></Relationships>`
+
+  const slideLayout = `${MOCK_XML_DECL}<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank" preserve="1"><p:cSld name="Blank"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`
+
+  const slideLayoutRels = `${MOCK_XML_DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>`
+
+  const slideXmls = slides.map((s) => {
+    const title = mockEscXml(s.title)
+    const content = mockEscXml(s.content)
+    const points = s.points.length
+      ? `<a:p><a:r><a:rPr lang="zh-CN" sz="1600" dirty="0"><a:solidFill><a:srgbClr val="2F605A"/></a:solidFill><a:latin typeface="Microsoft YaHei"/><a:ea typeface="Microsoft YaHei"/></a:rPr><a:t>${s.points.map((p) => `• ${mockEscXml(p)}`).join('\n')}</a:t></a:r></a:p>`
+      : ''
+    return `${MOCK_XML_DECL}<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="457200" y="304800"/><a:ext cx="11277600" cy="1371600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr wrap="none"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="4000" b="1" dirty="0"><a:solidFill><a:srgbClr val="2F605A"/></a:solidFill><a:latin typeface="Microsoft YaHei"/><a:ea typeface="Microsoft YaHei"/></a:rPr><a:t>${title}</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="Content"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="457200" y="1828800"/><a:ext cx="11277600" cy="4525500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="2000" dirty="0"><a:solidFill><a:srgbClr val="333333"/></a:solidFill><a:latin typeface="Microsoft YaHei"/><a:ea typeface="Microsoft YaHei"/></a:rPr><a:t>${content}</a:t></a:r></a:p>${points}</p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`
+  })
+
+  const slideRels = slides.map(
+    () => `${MOCK_XML_DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>`
+  )
+
+  const appProps = `${MOCK_XML_DECL}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Teacher Frontend (Mock)</Application><Slides>${slides.length}</Slides></Properties>`
+
+  const encoder = new TextEncoder()
+  const entries = [
+    { name: '[Content_Types].xml', data: encoder.encode(contentTypes) },
+    { name: '_rels/.rels', data: encoder.encode(rootRels) },
+    { name: 'docProps/core.xml', data: encoder.encode(MOCK_CORE_PROPS) },
+    { name: 'docProps/app.xml', data: encoder.encode(appProps) },
+    { name: 'ppt/presentation.xml', data: encoder.encode(presentation) },
+    { name: 'ppt/_rels/presentation.xml.rels', data: encoder.encode(presentationRels) },
+    { name: 'ppt/slideMasters/slideMaster1.xml', data: encoder.encode(slideMaster) },
+    { name: 'ppt/slideMasters/_rels/slideMaster1.xml.rels', data: encoder.encode(slideMasterRels) },
+    { name: 'ppt/slideLayouts/slideLayout1.xml', data: encoder.encode(slideLayout) },
+    { name: 'ppt/slideLayouts/_rels/slideLayout1.xml.rels', data: encoder.encode(slideLayoutRels) },
+    { name: 'ppt/theme/theme1.xml', data: encoder.encode(MOCK_PPTX_THEME) }
+  ]
+  slides.forEach((_, i) => {
+    entries.push({ name: `ppt/slides/slide${i + 1}.xml`, data: encoder.encode(slideXmls[i]) })
+    entries.push({ name: `ppt/slides/_rels/slide${i + 1}.xml.rels`, data: encoder.encode(slideRels[i]) })
+  })
+  return mockZipStore(entries)
+}
+
+function mockBuildDocxBytes(nodes) {
+  const encoder = new TextEncoder()
+  const items = Array.isArray(nodes) && nodes.length ? nodes : [{ title: '课件', content: '（暂无内容）' }]
+  const bodyXml = items
+    .map((n, i) => {
+      const title = mockEscXml(n.title || n.node_title || `页面 ${i + 1}`)
+      const content = mockEscXml(n.content || n.scriptText || n.script || n.summary || '')
+      const points = (Array.isArray(n.key_points) ? n.key_points : Array.isArray(n.children) ? n.children : [])
+        .map((p) => `<w:p><w:r><w:t>• ${mockEscXml(p)}</w:t></w:r></w:p>`)
+        .join('')
+      return `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>${title}</w:t></w:r></w:p><w:p><w:r><w:t>${content}</w:t></w:r></w:p>${points}`
+    })
+    .join('')
+
+  const documentXml = `${MOCK_XML_DECL}<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${bodyXml}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>`
+  const stylesXml = `${MOCK_XML_DECL}<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/><w:color w:val="2F605A"/></w:rPr></w:style></w:styles>`
+  const contentTypes = `${MOCK_XML_DECL}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`
+  const rootRels = `${MOCK_XML_DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`
+  const docRels = `${MOCK_XML_DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`
+  const appProps = `${MOCK_XML_DECL}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Teacher Frontend (Mock)</Application><Pages>${items.length}</Pages></Properties>`
+
+  return mockZipStore([
+    { name: '[Content_Types].xml', data: encoder.encode(contentTypes) },
+    { name: '_rels/.rels', data: encoder.encode(rootRels) },
+    { name: 'docProps/core.xml', data: encoder.encode(MOCK_CORE_PROPS) },
+    { name: 'docProps/app.xml', data: encoder.encode(appProps) },
+    { name: 'word/document.xml', data: encoder.encode(documentXml) },
+    { name: 'word/styles.xml', data: encoder.encode(stylesXml) },
+    { name: 'word/_rels/document.xml.rels', data: encoder.encode(docRels) }
+  ])
+}
+
+/** 按 job 缓存 Blob URL（会话内复用，避免轮询时重复创建造成内存泄漏） */
+const _mockExportBlobCache = new Map()
+
+/** 导出任务 → 可下载地址：浏览器环境返回 Blob URL（真实可打开文件），否则回退后端下载路径 */
+function mockBuildExportDownloadUrl(store, job) {
+  const fmt = job.format || 'pptx'
+  const fallback = `/download/${job.job_id}.${fmt}`
+  const canBlob = typeof URL !== 'undefined' && typeof Blob !== 'undefined' && typeof URL.createObjectURL === 'function'
+  if (!canBlob) return fallback
+  if (_mockExportBlobCache.has(job.job_id)) return _mockExportBlobCache.get(job.job_id)
+  try {
+    const nodes = mockExportNodesFrom(store, job.generation_id)
+    const isDocx = fmt === 'docx'
+    const bytes = isDocx ? mockBuildDocxBytes(nodes) : mockBuildPptxBytes(nodes)
+    const blobUrl = URL.createObjectURL(new Blob([bytes], { type: isDocx ? DOCX_MIME : PPTX_MIME }))
+    _mockExportBlobCache.set(job.job_id, blobUrl)
+    return blobUrl
+  } catch (error) {
+    return fallback
+  }
 }
 
 function listCoursewares(store) {
@@ -2146,6 +2390,219 @@ function seedChunksForFileRich(fileName, materialId) {
   ]
 }
 
+// ================================================================
+// S1 意图理解 Mock（与 ai_engine/intent/service.py 行为对齐的规则版）
+// ================================================================
+
+const INTENT_CORE_FIELDS = ['topic', 'duration_minutes']
+const INTENT_QUALITY_FIELDS = ['style', 'target_student', 'knowledge_points']
+const INTENT_WEIGHTS = { topic: 25, duration_minutes: 25, style: 15, target_student: 15, knowledge_points: 20 }
+const INTENT_FOLLOWUP_QUESTIONS = {
+  topic: '这节课最想讲清楚的主题是什么？',
+  duration_minutes: '这节课计划安排多少分钟？',
+  style: '你更偏好案例驱动、讲练结合，还是项目式教学？',
+  target_student: '这节课主要面向哪个年级、专业或基础层次的学生？',
+  knowledge_points: '希望重点覆盖哪些知识点？列出 2–5 个即可。'
+}
+
+function parseIntentFromMessages(messages = []) {
+  const teacherText = (messages || [])
+    .filter((m) => m && m.role === 'teacher')
+    .map((m) => String(m.content || ''))
+    .join('\n')
+    .trim()
+  const summary = {
+    topic: '',
+    duration_minutes: null,
+    style: '',
+    target_student: '',
+    knowledge_points: [],
+    output_format: ['ppt'],
+    with_interactive: false,
+    key_difficulties: [],
+    expected_outcomes: [],
+    missing_fields: []
+  }
+  if (!teacherText) return summary
+
+  // 主题：优先「主题：X」/「课程主题：X」契约，否则取首句去掉语气词前缀并按标点截断
+  let topic = ''
+  const topicMatch = teacherText.match(/(?:课程)?主题[:：]\s*([^\n；;。]+)/)
+  if (topicMatch) {
+    topic = topicMatch[1].trim()
+  } else {
+    const firstLine = teacherText.split('\n').map((s) => s.trim()).filter(Boolean)[0] || ''
+    topic = firstLine
+      .replace(/^(请|帮我|我想|这节课)?(讲|讲解|讲授|做|制(作)?|生成|设计|做一个|一份|一节)?/, '')
+      .split(/[，。；;,]/)[0]
+      .trim()
+      .slice(0, 30)
+  }
+  summary.topic = topic
+
+  // 授课时长
+  const dur = teacherText.match(/(\d{1,3})\s*(分钟|min|课时)/i)
+  summary.duration_minutes = dur ? Math.min(Number(dur[1]), 240) : null
+
+  // 教学风格（兼容「教学风格：X」契约与风格关键词）
+  const styleContract = teacherText.match(/教学风格[:：]\s*([^\n；;。]+)/)
+  const styleKeyword = teacherText.match(/(案例驱动|讲练结合|项目式|项目制|理论为主|启发式|互动式)/)
+  summary.style = styleContract ? styleContract[1].trim() : (styleKeyword ? styleKeyword[1] : '')
+
+  // 授课对象（兼容「授课对象：X」契约与「面向X」自然表述）
+  const stuContract = teacherText.match(/(?:授课对象|面向)\s*[:：]?\s*([^\n；;。，,]{2,20})/)
+  summary.target_student = stuContract ? stuContract[1].trim().replace(/(学生|年级|专业)?$/, '') : ''
+
+  // 知识点
+  let kps = []
+  const kpMatch = teacherText.match(/知识点[:：]\s*([^\n]+)/)
+  if (kpMatch) kps = kpMatch[1].split(/[、，,；;]/)
+  if (!kps.length) {
+    kps = teacherText.split('\n').map((s) => s.trim()).filter((s) => /(重点|知识点|掌握)/.test(s))
+  }
+  summary.knowledge_points = kps.map((k) => String(k).trim()).filter((k) => k && k.length <= 30).slice(0, 5)
+
+  // 互动 / 难点 / 成果
+  const interactiveContract = teacherText.match(/互动设计[:：]\s*(需要|不需要|是|否)/)
+  summary.with_interactive = interactiveContract
+    ? /需要|是/.test(interactiveContract[1])
+    : /互动|测验|投票|讨论/.test(teacherText)
+  const diff = teacherText.match(/难点[:：]\s*([^\n]+)/)
+  if (diff) summary.key_difficulties = diff[1].split(/[、，,；;]/).map((k) => k.trim()).filter(Boolean).slice(0, 5)
+  const out = teacherText.match(/成果[:：]\s*([^\n]+)/)
+  if (out) summary.expected_outcomes = out[1].split(/[、，,；;]/).map((k) => k.trim()).filter(Boolean).slice(0, 5)
+
+  return summary
+}
+
+function inferIntentMissingFields(summary) {
+  return [...INTENT_CORE_FIELDS, ...INTENT_QUALITY_FIELDS].filter((field) => {
+    const value = summary[field]
+    return Array.isArray(value) ? value.length === 0 : (value === null || String(value || '').trim() === '')
+  })
+}
+
+function intentCompletionPct(summary) {
+  return Object.entries(INTENT_WEIGHTS).reduce((total, [field, weight]) => {
+    const value = summary[field]
+    const empty = Array.isArray(value) ? value.length === 0 : (value === null || String(value || '').trim() === '')
+    return total + (empty ? 0 : weight)
+  }, 0)
+}
+
+function renderIntentHumanSummary(summary) {
+  const parts = []
+  if (summary.topic) parts.push(`主题：${summary.topic}`)
+  if (summary.duration_minutes) parts.push(`时长：${summary.duration_minutes}分钟`)
+  if (summary.style) parts.push(`风格：${summary.style}`)
+  if (summary.target_student) parts.push(`对象：${summary.target_student}`)
+  if (summary.knowledge_points.length) parts.push(`知识点：${summary.knowledge_points.join('、')}`)
+  parts.push(`互动：${summary.with_interactive ? '需要' : '不需要'}`)
+  return parts.join('；')
+}
+
+function handleIntentExtractRequest(store, options) {
+  const body = parseJsonBody(options)
+  const sessionId = cleanText(body.session_id)
+  store.intentSessions = store.intentSessions || {}
+  const previous = store.intentSessions[sessionId] || { summary: null, turn_count: 0 }
+  const teacherTurns = Math.max(previous.turn_count || 0, (body.messages || []).filter((m) => m && m.role === 'teacher').length)
+
+  // 增量补全：合并历史摘要与本次解析，避免多轮对话丢失已收集字段
+  const parsed = parseIntentFromMessages(body.messages)
+  const prev = previous.summary || {}
+  const merged = {
+    topic: parsed.topic || prev.topic || '',
+    duration_minutes: parsed.duration_minutes ?? prev.duration_minutes ?? null,
+    style: parsed.style || prev.style || '',
+    target_student: parsed.target_student || prev.target_student || '',
+    knowledge_points: [...(prev.knowledge_points || []), ...parsed.knowledge_points].filter((v, i, arr) => v && arr.indexOf(v) === i),
+    output_format: parsed.output_format,
+    with_interactive: parsed.with_interactive || Boolean(prev.with_interactive),
+    key_difficulties: parsed.key_difficulties.length ? parsed.key_difficulties : (prev.key_difficulties || []),
+    expected_outcomes: parsed.expected_outcomes.length ? parsed.expected_outcomes : (prev.expected_outcomes || []),
+    missing_fields: []
+  }
+  merged.missing_fields = inferIntentMissingFields(merged)
+
+  const maxTurns = 8
+  const coreMissing = merged.missing_fields.filter((f) => INTENT_CORE_FIELDS.includes(f))
+  const canConfirm = coreMissing.length === 0
+  let status
+  if (canConfirm || teacherTurns >= maxTurns) status = 'confirming'
+  else if (teacherTurns <= 1) status = 'collecting'
+  else status = 'clarifying'
+
+  const followups = [...INTENT_CORE_FIELDS, ...INTENT_QUALITY_FIELDS]
+    .filter((f) => merged.missing_fields.includes(f))
+    .slice(0, 2)
+    .map((f) => INTENT_FOLLOWUP_QUESTIONS[f] || '请补充一下相关信息。')
+  const response = followups.length
+    ? `我已经更新了教学意图，请补充：${followups[0]}`
+    : '教学意图已经完整，我已整理成右侧方案卡。确认后即可进入资料融合。'
+
+  store.intentSessions[sessionId] = {
+    summary: merged,
+    status,
+    turn_count: teacherTurns,
+    updated_at: nowIso()
+  }
+  persistMockStore()
+
+  return ok({
+    session_id: sessionId,
+    intent_summary: merged,
+    session_status: status,
+    response,
+    need_followup: followups.length > 0,
+    followup_questions: followups,
+    human_summary: renderIntentHumanSummary(merged),
+    completion_pct: intentCompletionPct(merged),
+    turn_count: teacherTurns,
+    max_turns: maxTurns,
+    can_confirm: canConfirm,
+    engine: 'rule',
+    used_fallback: false
+  })
+}
+
+function handleIntentConfirmRequest(store, options) {
+  const body = parseJsonBody(options)
+  const sessionId = cleanText(body.session_id)
+  store.intentSessions = store.intentSessions || {}
+  const session = store.intentSessions[sessionId]
+  const intentId = `intent_${String(sessionId || '').replace(/[^a-z0-9]/gi, '').slice(0, 12)}_${Date.now().toString(36)}`
+
+  if (!session || !session.summary) {
+    // 无会话仍返回确认状态，保证演示环境 S1→S2 不被阻塞
+    return ok({
+      session_id: sessionId,
+      intent_id: intentId,
+      confirmed: true,
+      intent_summary: { topic: '', missing_fields: ['topic'] },
+      session_status: 'confirmed',
+      completion_pct: 20,
+      next_step: 'material_upload'
+    })
+  }
+
+  const summary = session.summary || {}
+  session.status = 'confirmed'
+  session.intent_id = intentId
+  store.intentSessions[sessionId] = session
+  persistMockStore()
+
+  return ok({
+    session_id: sessionId,
+    intent_id: intentId,
+    confirmed: true,
+    intent_summary: summary,
+    session_status: 'confirmed',
+    completion_pct: 100,
+    next_step: 'material_upload'
+  })
+}
+
 export function handleMockRequest(path, options = {}, originalError = null) {
   const { pathname, searchParams } = splitPath(path)
   const method = String(options?.method || 'GET').toUpperCase()
@@ -2179,6 +2636,222 @@ export function handleMockRequest(path, options = {}, originalError = null) {
       return handleRagEvidenceRequest(store, options)
     }
 
+    if (pathname === '/api/v1/intent/extract' && method === 'POST') {
+      return handleIntentExtractRequest(store, options)
+    }
+
+    if (pathname === '/api/v1/intent/confirm' && method === 'POST') {
+      return handleIntentConfirmRequest(store, options)
+    }
+
+    // ================================================================
+    // 预览渲染（与后端 ai_engine/gen/preview.py 保持一致的 JS 镜像）
+    // ================================================================
+
+    const TYPE_ALIASES = {
+      cover: 'cover', title: 'cover',
+      section: 'section', divider: 'section', toc: 'section', chapter: 'section',
+      quiz: 'quiz', qa: 'quiz', interactive: 'quiz', question: 'quiz',
+      summary: 'summary', recap: 'summary',
+      content: 'content', slide: 'content'
+    }
+
+    function escHtml(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[ch]))
+    }
+
+    function resolveType(node) {
+      let raw = node.type
+      if (raw === undefined || raw === null || String(raw).trim() === '') raw = node.node_type
+      if (raw === undefined || raw === null || String(raw).trim() === '') return 'content'
+      return TYPE_ALIASES[String(raw).trim().toLowerCase()] || 'content'
+    }
+
+    function toList(value) {
+      if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean)
+      if (typeof value === 'string' && value.trim()) {
+        return value.split('\n').map((s) => s.trim()).filter(Boolean)
+      }
+      return []
+    }
+
+    function extractKeyPoints(node) {
+      for (const key of ['key_points', 'core_points', 'key_difficulties', 'expected_outcomes']) {
+        const pts = toList(node[key])
+        if (pts.length) return pts
+      }
+      const content = String(node.content || node.script || node.summary || '').trim()
+      if (!content) return []
+      const lines = content.split('\n').map((s) => s.trim().replace(/^[•\-*#·]+\s*/, '')).filter(Boolean)
+      if (lines.length >= 2) return lines.slice(0, 8)
+      return content.split(/[。；;！？!?]\s*/).filter(Boolean).slice(0, 8)
+    }
+
+    function renderKeyPoints(points, cls, withIndex) {
+      return points.slice(0, 10).map((p, i) => {
+        const idx = withIndex ? `<span class="kp-idx">${i + 1}</span>` : ''
+        return `<li>${idx}${escHtml(p)}</li>`
+      }).join('')
+    }
+
+    function renderKnowledgeCard(kc) {
+      if (!kc || typeof kc !== 'object') return ''
+      const term = escHtml(String(kc.term || '知识卡片'))
+      const def = String(kc.definition || '').trim()
+        ? `<p class="kc-def">${escHtml(kc.definition)}</p>` : ''
+      const formula = String(kc.formula || '').trim()
+        ? `<pre class="kc-formula">${escHtml(kc.formula)}</pre>` : ''
+      const tags = Array.isArray(kc.tags) && kc.tags.length
+        ? `<div class="kc-tags">${kc.tags.map(escHtml).map((t) => `<span>${t}</span>`).join('')}</div>` : ''
+      if (!def && !formula && !tags) return ''
+      return `<div class="knowledge-card"><strong class="kc-term">📘 ${term}</strong>${def}${formula}${tags}</div>`
+    }
+
+    function renderSegments(node) {
+      const segs = Array.isArray(node.segments) ? node.segments : []
+      const items = []
+      for (const s of segs) {
+        if (!s || typeof s !== 'object') continue
+        const text = String(s.text || '').trim()
+        if (!text) continue
+        const segType = String(s.segment_type || '').trim().toLowerCase()
+        const badge = segType ? `<span class="seg-badge seg-badge-${escHtml(segType)}">${escHtml(segType)}</span>` : ''
+        const dur = s.estimated_seconds ? `<span class="seg-dur">⏱ ${s.estimated_seconds}s</span>` : ''
+        const diff = String(s.difficulty || '').trim().toLowerCase()
+        const diffHtml = diff ? `<span class="seg-diff diff-${escHtml(diff)}">${escHtml(diff)}</span>` : ''
+        const hint = String(s.interaction_hint || '').trim()
+        const hintHtml = hint ? `<p class="seg-hint">💬 ${escHtml(hint)}</p>` : ''
+        items.push(`<li class="seg-item">${badge}${dur}${diffHtml}<p class="seg-text">${escHtml(text)}</p>${hintHtml}${renderKnowledgeCard(s.knowledge_card)}</li>`)
+      }
+      if (!items.length) return ''
+      return `<section class="segments-block"><h4>讲授分段</h4><ol class="segments">${items.join('')}</ol></section>`
+    }
+
+    function renderSlide(node, index) {
+      const type = resolveType(node)
+      const title = escHtml(node.title || `第${index}页`)
+      const points = extractKeyPoints(node)
+      const num = `<div class="slide-num">${index}</div>`
+
+      if (type === 'cover') {
+        const sub = escHtml(String(node.subtitle || node.content || node.summary || '').trim())
+        const inner = `<div class="cover-inner"><h1>${title}</h1>${sub ? `<p class="subtitle">${sub}</p>` : ''}${points.length ? `<ul class="cover-points">${renderKeyPoints(points, 'cover-points', false)}</ul>` : ''}</div>`
+        return `<div class="slide cover-slide">${num}${inner}</div>`
+      }
+      if (type === 'section') {
+        const children = toList(node.children)
+        const items = children.length ? children : points
+        const sub = escHtml(String(node.content || node.summary || '').trim())
+        const inner = `<div class="section-inner"><h2>${title}</h2><div class="divider"></div>${sub ? `<p class="section-sub">${sub}</p>` : ''}${items.length ? `<ul class="section-list">${renderKeyPoints(items, 'section-list', true)}</ul>` : ''}</div>`
+        return `<div class="slide section-slide">${num}${inner}</div>`
+      }
+      if (type === 'quiz') {
+        let qs = toList(node.questions || node.interactive_questions)
+        if (!qs.length) qs = points.length ? points : extractKeyPoints(node)
+        return `<div class="slide quiz-slide">${num}<h2>💡 ${title}</h2><ol class="questions">${qs.map((q) => `<li class="q-item">${escHtml(q)}</li>`).join('')}</ol></div>`
+      }
+      if (type === 'summary') {
+        return `<div class="slide summary-slide">${num}<h2>📌 ${title}</h2><ul class="key-points">${renderKeyPoints(points.slice(0, 10), 'key-points', false)}</ul>${renderSegments(node)}</div>`
+      }
+      // content（通用）
+      const bodyParts = []
+      for (const key of ['content', 'script', 'summary']) {
+        const val = node[key]
+        if (typeof val === 'string' && val.trim()) bodyParts.push(`<p>${escHtml(val)}</p>`)
+        else if (Array.isArray(val) && val.length) {
+          bodyParts.push(`<ul>${val.map((v) => `<li>${escHtml(v)}</li>`).join('')}</ul>`)
+        }
+      }
+      return `<div class="slide content-slide">${num}<h2>${title}</h2>${points.length ? `<ul class="key-points">${renderKeyPoints(points, 'key-points', false)}</ul>` : ''}${bodyParts.length ? `<div class="body">${bodyParts.join('')}</div>` : ''}${renderSegments(node)}</div>`
+    }
+
+    const PREVIEW_CSS = `
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f0f2f5; color: #1a1a2e; padding: 20px; }
+  .presentation { max-width: 1100px; margin: 0 auto; }
+  .slide { background: #fff; border-radius: 14px; box-shadow: 0 2px 14px rgba(0,0,0,0.08); padding: 44px 52px 48px; margin-bottom: 24px; position: relative; min-height: 320px; overflow: hidden; }
+  .slide-num { position: absolute; top: 16px; right: 20px; z-index: 2; font-size: 13px; color: rgba(0,0,0,0.4); background: rgba(0,0,0,0.06); padding: 2px 10px; border-radius: 999px; }
+  .slide h1, .slide h2 { padding-right: 52px; }
+  h1 { font-size: 34px; line-height: 1.3; }
+  h2 { font-size: 24px; margin-bottom: 16px; color: #1a1a2e; line-height: 1.4; }
+  .cover-slide, .title-slide { background: linear-gradient(135deg, #4361ee 0%, #7209b7 100%); color: #fff; display: flex; align-items: center; justify-content: center; text-align: center; }
+  .cover-slide .slide-num, .title-slide .slide-num { color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.16); }
+  .cover-inner { max-width: 720px; margin: 0 auto; }
+  .cover-slide h1, .title-slide h1 { color: #fff; margin-bottom: 18px; }
+  .cover-slide .subtitle, .title-slide .subtitle { font-size: 19px; color: rgba(255,255,255,0.85); }
+  .cover-points { list-style: none; margin: 28px auto 0; display: grid; gap: 10px; max-width: 520px; }
+  .cover-points li { background: rgba(255,255,255,0.14); border-radius: 10px; padding: 10px 18px; font-size: 15px; line-height: 1.6; }
+  .section-slide { background: linear-gradient(135deg, #f72585 0%, #b5179e 100%); color: #fff; }
+  .section-slide .slide-num { color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.16); }
+  .section-inner { max-width: 720px; margin: 0 auto; }
+  .section-slide h2 { color: #fff; }
+  .section-slide .divider { width: 60px; height: 4px; background: rgba(255,255,255,0.9); margin: 20px 0; border-radius: 2px; }
+  .section-sub { font-size: 16px; color: rgba(255,255,255,0.85); margin-bottom: 18px; line-height: 1.6; }
+  .section-list { list-style: none; display: grid; gap: 10px; margin-top: 8px; }
+  .section-list li { display: flex; align-items: center; gap: 12px; background: rgba(255,255,255,0.14); border-radius: 10px; padding: 10px 16px; font-size: 15px; line-height: 1.5; }
+  .section-list .kp-idx { flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; background: #fff; color: #b5179e; font-weight: 700; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+  .quiz-slide { border-left: 5px solid #f72585; background: linear-gradient(180deg, #fff, #fff5f9); }
+  .questions { list-style: none; counter-reset: q; margin-top: 8px; display: grid; gap: 12px; }
+  .questions .q-item { counter-increment: q; position: relative; padding: 14px 18px 14px 52px; background: #fff; border: 1px solid #f0d7e6; border-radius: 12px; font-size: 15px; line-height: 1.6; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
+  .questions .q-item::before { content: counter(q); position: absolute; left: 16px; top: 14px; width: 24px; height: 24px; border-radius: 50%; background: #f72585; color: #fff; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+  .summary-slide { border-left: 5px solid #4361ee; background: linear-gradient(180deg, #f8f9ff, #fff); }
+  .key-points { list-style: none; display: grid; gap: 10px; margin-top: 12px; }
+  .key-points li { position: relative; padding: 10px 16px 10px 40px; background: #eef1ff; border-radius: 10px; font-size: 15px; line-height: 1.6; }
+  .key-points li::before { content: "\\2713"; position: absolute; left: 14px; top: 10px; color: #4361ee; font-weight: 700; }
+  .body { font-size: 15px; line-height: 1.85; color: #333; margin-top: 10px; }
+  .body p { margin-bottom: 8px; }
+  .body ul { padding-left: 22px; }
+  .body li { margin-bottom: 4px; }
+  .segments-block { margin-top: 20px; padding-top: 16px; border-top: 1px dashed #d4d9e4; }
+  .segments-block h4 { font-size: 14px; color: #5f6c84; margin-bottom: 10px; letter-spacing: 0.02em; }
+  .segments { list-style: none; display: grid; gap: 10px; }
+  .seg-item { padding: 12px 16px; background: #f6f8fb; border-radius: 10px; border-left: 3px solid #a9b4c8; }
+  .seg-badge { display: inline-block; font-size: 11px; padding: 2px 10px; border-radius: 999px; font-weight: 600; text-transform: capitalize; }
+  .seg-badge-opening { background: #e3f2fd; color: #1565c0; }
+  .seg-badge-explanation { background: #f3e5f5; color: #7b1fa2; }
+  .seg-badge-example { background: #e8f5e9; color: #2e7d32; }
+  .seg-badge-interaction { background: #fff3e0; color: #e65100; }
+  .seg-badge-transition { background: #fce4ec; color: #c62828; }
+  .seg-badge-summary { background: #e8eaf6; color: #283593; }
+  .seg-dur { display: inline-block; font-size: 12px; color: #667; margin-left: 8px; }
+  .seg-diff { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; margin-left: 6px; text-transform: capitalize; }
+  .diff-easy { background: #e8f5e9; color: #2e7d32; }
+  .diff-medium { background: #fff8e1; color: #f57f17; }
+  .diff-hard { background: #ffebee; color: #c62828; }
+  .seg-text { margin-top: 6px; font-size: 14px; line-height: 1.7; color: #2b3140; }
+  .seg-hint { margin-top: 6px; font-size: 12px; color: #7a5b00; background: #fff8e1; display: inline-block; padding: 3px 10px; border-radius: 8px; }
+  .knowledge-card { margin-top: 8px; padding: 10px 12px; background: #fff; border: 1px solid #dfe6f0; border-radius: 10px; }
+  .kc-term { font-size: 13px; color: #2f5d8f; display: block; margin-bottom: 4px; }
+  .kc-def { font-size: 13px; color: #445; line-height: 1.6; }
+  .kc-formula { font-size: 12px; background: #f4f6fa; padding: 6px 10px; border-radius: 6px; overflow-x: auto; margin-top: 4px; }
+  .kc-tags { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .kc-tags span { font-size: 11px; background: #eef3fa; color: #445; padding: 1px 8px; border-radius: 999px; }
+  .empty-state { text-align: center; padding: 60px 20px; color: #94a3b8; font-size: 15px; }
+`
+
+    function renderPreviewHtml(nodes, courseName) {
+      const slides = (Array.isArray(nodes) ? nodes : []).map(renderSlide).join('\n')
+        || '<div class="empty-state">暂无节点数据，请先完成 S3 讲稿生成。</div>'
+      return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escHtml(courseName || '课件预览')}</title>
+<style>
+${PREVIEW_CSS}
+</style>
+</head>
+<body>
+<div class="presentation">
+${slides}
+</div>
+</body>
+</html>`
+    }
+
     // ================================================================
     // gen API（S3 生成 + 修改 + 预览）
     // ================================================================
@@ -2197,6 +2870,9 @@ export function handleMockRequest(path, options = {}, originalError = null) {
         progress: 0,
         stage_text: '正在构建大纲…',
         nodes: [],
+        // 回显 S1 意图 / S2 证据（供测试断言 S1→S4 链路透传）
+        intent: body.intent || null,
+        evidence_packet: body.evidence_packet || null,
         created_at: nowIso()
       }
 
@@ -2221,9 +2897,9 @@ export function handleMockRequest(path, options = {}, originalError = null) {
           task.progress = 1
           task.stage_text = '生成完成'
           task.nodes = [
-            { node_id: 'node_001', title: '课程导入', summary: '概念引入与学习目标', content: '本节课我们将学习核心概念，了解其在实际中的应用场景。', status: 'completed' },
-            { node_id: 'node_002', title: '核心知识点', summary: '通过示例讲解核心知识点', content: '核心知识点包括定义、性质和常见应用，下面通过具体案例来说明。', status: 'completed' },
-            { node_id: 'node_003', title: '练习与总结', summary: '做题演练并总结易错点', content: '通过两道练习题巩固所学内容，并总结常见易错点。', status: 'completed' }
+            { node_id: 'node_001', title: '课程导入', node_type: 'cover', summary: '概念引入与学习目标', subtitle: 'AI-PPT 课件演示', content: '本节课我们将学习核心概念，了解其在实际中的应用场景。', status: 'completed', key_points: ['掌握核心概念', '了解应用场景', '完成课堂练习'] },
+            { node_id: 'node_002', title: '核心知识点', node_type: 'section', summary: '通过示例讲解核心知识点', content: '核心知识点包括定义、性质和常见应用，下面通过具体案例来说明。', status: 'completed', children: ['定义与性质', '典型示例', '易错提醒'] },
+            { node_id: 'node_003', title: '练习与总结', node_type: 'summary', summary: '做题演练并总结易错点', content: '通过两道练习题巩固所学内容，并总结常见易错点。', status: 'completed', core_points: ['易错点一：单位换算', '易错点二：符号混淆', '解题思路三步走'], segments: [{ segment_id: 'seg_1', text: '先回顾上节概念，进入练习环节。', node_id: 'node_003', segment_type: 'opening', estimated_seconds: 25, difficulty: 'easy', interaction_hint: '提问：上节课的关键公式是什么？', knowledge_card: { term: '易错提醒', definition: '计算时注意单位统一', formula: '', tags: ['exam'] } }] }
           ]
           // 同步更新版本快照（供 S4 版本管理/导出使用）
           if (store.versionSnapshots?.[genId]?.length > 0) {
@@ -2257,26 +2933,41 @@ export function handleMockRequest(path, options = {}, originalError = null) {
         progress: task.progress,
         stage_text: task.stage_text,
         nodes: task.nodes || [],
+        intent: task.intent || null,
+        evidence_packet: task.evidence_packet || null,
         error: task.error || null
       })
     }
 
     if (pathname === '/api/v1/gen/preview' && method === 'POST') {
       const body = parseJsonBody(options)
-      const nodes = Array.isArray(body.nodes) ? body.nodes : []
+      const genId = cleanText(body.gen_id)
       const courseName = cleanText(body.course_name) || '课件预览'
-      const items = nodes.map((n, i) => {
-        const t = n.title || `节点 ${i + 1}`
-        const c = (n.content || n.scriptText || n.script || n.summary || '').substring(0, 200)
-        return `<div class="slide"><h2>${t}</h2><p>${c.replace(/\n/g, '<br>')}</p></div>`
-      }).join('\n')
-      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${courseName}</title>
-<style>body{font-family:-apple-system,sans-serif;max-width:800px;margin:0 auto;padding:20px;background:#f8fafc;}
-.slide{background:#fff;border-radius:12px;padding:32px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.1);}
-.slide h2{color:#111827;font-size:20px;margin:0 0 12px;}
-.slide p{color:#475569;line-height:1.6;margin:0;}
-</style></head><body><h1>${courseName}</h1>${items}</body></html>`
-      return ok({ html })
+      let nodes = Array.isArray(body.nodes) ? body.nodes : []
+      let versionNumber = null
+      let snapshotSummary = ''
+
+      // 版本快照预览：按 gen_id 从 mock 版本快照恢复节点（缺省最新版）
+      if (genId && !nodes.length) {
+        const snapshots = (store.versionSnapshots && store.versionSnapshots[genId]) || []
+        const target = body.version
+          ? snapshots.find((s) => s.version_number === Number(body.version))
+          : snapshots[snapshots.length - 1]
+        if (target) {
+          nodes = Array.isArray(target.nodes_snapshot) ? deepClone(target.nodes_snapshot) : []
+          versionNumber = target.version_number
+          snapshotSummary = target.summary || ''
+        }
+      }
+
+      const html = renderPreviewHtml(nodes, snapshotSummary && snapshotSummary !== '初始版本' ? snapshotSummary : courseName)
+      return ok({
+        html,
+        node_count: nodes.length,
+        generation_id: genId || null,
+        version_number: versionNumber,
+        nodes
+      })
     }
 
     if (pathname === '/api/v1/gen/modify' && method === 'POST') {
@@ -2433,18 +3124,17 @@ export function handleMockRequest(path, options = {}, originalError = null) {
         generation_id: genId,
         format: body.format || 'pptx',
         status: 'pending',
-        download_url: null,
+        download_url: '',
         error: null,
         created_at: nowIso()
       }
 
-      // 模拟异步完成
+      // 模拟异步完成；下载文件在 status 轮询时按需生成（Blob URL，刷新后自动重建，不持久化死链）
       if (typeof window !== 'undefined') {
         setTimeout(() => {
           const job = store.exportJobs[jobId]
           if (!job) return
           job.status = 'done'
-          job.download_url = `/download/${jobId}.${body.format || 'pptx'}`
           persistMockStore()
         }, 2000)
       }
@@ -2464,15 +3154,17 @@ export function handleMockRequest(path, options = {}, originalError = null) {
       if (!job) {
         return ok({
           job_id: jobId,
-          status: 'done',
-          download_url: `/download/${jobId}.pptx`,
-          error: null
+          status: 'failed',
+          download_url: null,
+          error: '导出任务不存在'
         })
       }
+      // 完成时按需生成真实可下载文件（浏览器返回 Blob URL；无 Blob 环境回退后端下载路径）
+      const downloadUrl = job.status === 'done' ? mockBuildExportDownloadUrl(store, job) : ''
       return ok({
         job_id: job.job_id,
         status: job.status,
-        download_url: job.download_url,
+        download_url: downloadUrl,
         error: job.error || null
       })
     }

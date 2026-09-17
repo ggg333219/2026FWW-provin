@@ -226,21 +226,8 @@ func (ns *NotificationService) SendImmediateNotification(studentID, title, conte
 }
 
 // BatchSendNotifications 批量发送通知
-func (ns *NotificationService) BatchSendNotifications() error {
-	var notifications []model.Notification
-	err := ns.db.Where("status = ? AND sent_at IS NULL", "unread").
-		Find(&notifications).Error
-	if err != nil {
-		return err
-	}
-
-	for _, notification := range notifications {
-		if err := ns.SendPushNotification(&notification); err != nil {
-			continue
-		}
-	}
-	return nil
-}
+// Deprecated: 无调用方，业务已停用。保留签名以避免破坏性API变更。
+func (ns *NotificationService) BatchSendNotifications() error { return nil }
 
 func marshalNotificationChannels(channels []string) string {
 	if len(channels) == 0 {

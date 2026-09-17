@@ -134,7 +134,9 @@ class CommandParser:
             if nid and nid not in valid_node_ids:
                 errors.append(f"节点 {nid} 不存在")
         elif cmd.type == CommandType.SWAP_NODES:
-            for key in ("node_ids", "ids"):
+            # canonical 主名 target_node_ids（对齐 schema.py ModifyCommand / Go ModifyCommandItem），
+            # 兼容旧键 node_ids/ids（legacy，勿扩散）。
+            for key in ("target_node_ids", "node_ids", "ids"):
                 ids = cmd.params.get(key, [])
                 for nid in ids:
                     if nid not in valid_node_ids:

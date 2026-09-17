@@ -293,49 +293,12 @@ func (ts *TaskSchedulerService) GetTaskStatus(statusID string) (*model.TaskStatu
 }
 
 // ScheduleReviewReminders 调度复习提醒
-func (ts *TaskSchedulerService) ScheduleReviewReminders() {
-	var plans []model.ReviewPlan
-	if err := ts.db.Where("status = ? AND next_review_date IS NOT NULL", "active").Find(&plans).Error; err != nil {
-		return
-	}
-
-	for _, plan := range plans {
-		if plan.NextReviewDate != nil && plan.NextReviewDate.After(time.Now()) {
-			remindAt := plan.NextReviewDate.Add(-time.Hour)
-			taskData := map[string]interface{}{
-				"plan_id":    plan.ID,
-				"plan_name":  plan.Name,
-				"student_id": plan.StudentID,
-			}
-			_ = ts.ScheduleTask("review_plan", taskData, remindAt, plan.StudentID)
-		}
-	}
-}
+// Deprecated: 无调用方，业务已停用。保留签名以避免破坏性API变更。
+func (ts *TaskSchedulerService) ScheduleReviewReminders() {}
 
 // SchedulePracticeGeneration 调度练习题生成
-func (ts *TaskSchedulerService) SchedulePracticeGeneration() {
-	var weakPoints []model.WeakPoint
-	if err := ts.db.Where("mastery_level < ?", 70).Find(&weakPoints).Error; err != nil {
-		return
-	}
-
-	for _, wp := range weakPoints {
-		taskData := map[string]interface{}{
-			"weak_point_id": wp.ID,
-			"student_id":    wp.StudentID,
-			"course_id":     wp.CourseID,
-			"difficulty":    3,
-			"count":         5,
-		}
-
-		now := time.Now()
-		scheduledAt := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, now.Location())
-		if scheduledAt.Before(now) {
-			scheduledAt = scheduledAt.Add(24 * time.Hour)
-		}
-		_ = ts.ScheduleTask("practice_generation", taskData, scheduledAt, wp.StudentID)
-	}
-}
+// Deprecated: 无调用方，业务已停用。保留签名以避免破坏性API变更。
+func (ts *TaskSchedulerService) SchedulePracticeGeneration() {}
 
 func (ts *TaskSchedulerService) worker() {
 	for {

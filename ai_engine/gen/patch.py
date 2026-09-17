@@ -105,7 +105,10 @@ class NodePatcher:
     def _handle_swap(self, nodes: list, cmd: EditCommand, valid_ids: set,
                      regenerate_fn) -> dict:
         """交换两个节点顺序"""
-        ids = cmd.params.get("node_ids") or cmd.params.get("ids") or []
+        # canonical 主名 target_node_ids（对齐 schema.py ModifyCommand / Go ModifyCommandItem），
+        # 兼容旧键 node_ids/ids（legacy，勿扩散）。
+        ids = (cmd.params.get("target_node_ids")
+               or cmd.params.get("node_ids") or cmd.params.get("ids") or [])
         if len(ids) < 2:
             return {"error": "swap 需要至少两个节点 ID"}
         id_a, id_b = ids[0], ids[1]
@@ -125,16 +128,50 @@ class NodePatcher:
         """新增节点"""
         after_id = cmd.params.get("after_node_id", "")
         content = cmd.params.get("content", "新节点")
+
+        # 解析 node_type：优先使用原生 node_type 字段，其次 type 字段，默认 slide
+        raw_type = cmd.params.get("node_type") or cmd.params.get("type", "slide")
+        node_type_map = {
+            "slide": "SLIDE", "section": "SECTION", "quiz": "QUIZ",
+            "interactive": "INTERACTIVE", "cover": "COVER", "divider": "DIVIDER",
+        }
+        node_type_val = node_type_map.get(raw_type, "SLIDE")
+
         new_node = {
+            # 基础标识
             "node_id": cmd.params.get("node_id", f"node_{len(nodes) + 1:03d}"),
-            "title": cmd.params.get("title", content[:20]),
+            "title": cmd.params.get("title", content[:20] if isinstance(content, str) else "新节点"),
             "summary": content if isinstance(content, str) else str(content),
+            "content": content,
+            # 原生 node_type 字段（枚举字符串形式）
+            "node_type": node_type_val,
+            # 渲染 type 字段（与 node_type 保持一致）
+            "type": raw_type,
+            # 业务扩展字段（key_points/core_points 对齐）
+            "key_points": [],
+            "core_points": cmd.params.get("core_points", []),
+            "segments": [],
+            "questions": [],
+            # 排版元数字段
+            "layout_hint": None,
+            "font_size_hint": None,
+            "text_alignment": None,
+            "slide_background": None,
+            # 完整字段补齐
+            "page_ref": None,
+            "source_chunk_ids": [],
+            "examples": [],
+            "key_difficulties": [],
+            "expected_outcomes": [],
+            "estimated_duration_minutes": 5.0,
+            "interactive_questions": [],
+            "citation_refs": [],
+            "next_node_id": None,
+            "prev_node_id": None,
+            "metadata": {},
             "source_span": "",
             "prerequisites": [],
-            "content": content,
         }
-        if "type" in cmd.params:
-            new_node["type"] = cmd.params["type"]
         if after_id:
             idx = next((i for i, n in enumerate(nodes) if n["node_id"] == after_id), -1)
             if idx == -1:
@@ -174,7 +211,8 @@ class NodePatcher:
     def _handle_merge(self, nodes: list, cmd: EditCommand, valid_ids: set,
                       regenerate_fn) -> dict:
         """合并多个节点"""
-        ids = cmd.params.get("node_ids") or cmd.params.get("raw_match", [])
+        ids = (cmd.params.get("target_node_ids")
+               or cmd.params.get("node_ids") or cmd.params.get("raw_match", []))
         if isinstance(ids, str):
             ids = [ids]
         if len(ids) < 2:
