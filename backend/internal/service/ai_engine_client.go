@@ -48,6 +48,9 @@ type AIEngine interface {
 	GenerateOutline(ctx context.Context, req OutlineGenerateRequest) (*OutlineGenerateResponse, error)
 	ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error)
 
+	// ---- B5: 修改意图理解（Python /api/v1/ai/parse_modify）----
+	ParseModify(ctx context.Context, req ParseModifyRequest) (*ModifyIntent, error)
+
 	// ---- P1: S3 大纲 → 内容生成（独立阶段）----
 	GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error)
 	ContentStatus(ctx context.Context, contentID string) (*GenContentStatusResponse, error)
@@ -797,6 +800,10 @@ type GenContentRequest struct {
 	Enhanced         bool               `json:"enhanced"`
 	OutlineID        string             `json:"outline_id"`
 	OutlineVersion   int                `json:"outline_version"`
+	// B6: 局部重生成（mode=partial 时生效）
+	TargetNodeIDs     []string `json:"target_node_ids,omitempty"`
+	ModifyAction      string   `json:"modify_action,omitempty"`
+	ModifyConstraints []string `json:"modify_constraints,omitempty"`
 }
 
 type GenContentStatusResponse struct {
@@ -1075,6 +1082,18 @@ func (c *aiEngineClient) ReviseOutline(ctx context.Context, req OutlineReviseAIR
 		return nil, err
 	}
 	return &result, nil
+}
+
+// ParseModify [B5] 调 Python /api/v1/ai/parse_modify 解析修改意图。
+func (c *aiEngineClient) ParseModify(ctx context.Context, req ParseModifyRequest) (*ModifyIntent, error) {
+	var result struct {
+		ModifyIntent
+	}
+	// Python 返回扁平 intent 对象，直接反序列化
+	if err := c.postJSON(ctx, "/api/v1/ai/parse_modify", req, &result); err != nil {
+		return nil, err
+	}
+	return &result.ModifyIntent, nil
 }
 
 func (c *aiEngineClient) GenerationStatus(ctx context.Context, taskID string) (*GenerationStatusResponse, error) {

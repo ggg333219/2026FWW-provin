@@ -137,6 +137,12 @@ func main() {
 	versionHandler := handler.NewVersionHandler(aiClient)
 	exportHandler := handler.NewExportHandler(aiClient)
 	contentHandler := handler.NewContentHandler(aiClient)
+	// A6/A7: 课件项目 + 修改对话 + 版本快照
+	if err := service.AutoMigrateCourseware(db); err != nil {
+		applogger.Warn("courseware 表迁移失败", zap.Error(err))
+	}
+	coursewareService := service.NewCoursewareServiceWithDB(aiClient, db)
+	coursewareHandler := handler.NewCoursewareHandler(coursewareService)
 
 	r := newBaseEngine(cfg.Server.Mode)
 
@@ -153,7 +159,7 @@ func main() {
 	skillV1 := api.Group("/v1")
 	router.RegisterNewSkillRoutes(skillV1,
 		convHandler, parseHandler, knowledgeHandler, outlineHandler,
-		genHandler, versionHandler, exportHandler, contentHandler,
+		genHandler, versionHandler, exportHandler, contentHandler, coursewareHandler,
 	)
 
 	applogger.Info("教师端服务运行中", zap.Int("port", 8082))
@@ -206,10 +212,26 @@ func runS1Standalone(mode string, aiClient service.AIEngine) {
 	versionHandler := handler.NewVersionHandler(aiClient)
 	exportHandler := handler.NewExportHandler(aiClient)
 	contentHandler := handler.NewContentHandler(aiClient)
+	coursewareService := service.NewCoursewareService(aiClient)
+	coursewareHandler := handler.NewCoursewareHandler(coursewareService)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "UP", "mode": "s1-standalone"})
 	})
+
+	// A6/A7: 课件项目 + 修改对话 + 版本快照（内存存储降级）
+	coursewares := r.Group("/api/v1/coursewares")
+	{
+		coursewares.POST("", coursewareHandler.Create)
+		coursewares.GET("", coursewareHandler.List)
+		coursewares.PUT("/:project_id/step", coursewareHandler.UpdateStep)
+		coursewares.PUT("/:project_id/draft", coursewareHandler.SaveDraft)
+		coursewares.GET("/:project_id/draft", coursewareHandler.GetDraft)
+		coursewares.POST("/:project_id/modify", coursewareHandler.Modify)
+		coursewares.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
+		coursewares.GET("/:project_id/versions", coursewareHandler.Versions)
+		coursewares.POST("/:project_id/rollback", coursewareHandler.Rollback)
+	}
 
 	// S1: 意图理解
 	intent := r.Group("/api/v1/intent")

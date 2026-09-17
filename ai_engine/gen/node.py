@@ -119,10 +119,13 @@ class NodeGenerator:
             return {"scripts": scripts or fallback["scripts"], "used_fallback": True}
 
     def generate_single(self, node: dict[str, Any], course_name: str | None = None,
-                        max_attempts: Optional[int] = None) -> dict[str, Any]:
+                        max_attempts: Optional[int] = None,
+                        extra_instruction: str = "") -> dict[str, Any]:
         """生成单个节点的讲稿（供 S4 修补时部分重生成使用）
 
         max_attempts: 收紧 LLM 重试次数（1 = 不重试），None 时按环境变量/默认值。
+        extra_instruction: [B6] 局部重生成时的修改指令（如"精简内容，增加生活案例"），
+                           追加到 user_prompt，不传则行为与原版完全一致。
         """
         node_id = str(node.get("node_id") or "node_unknown")
         title = str(node.get("title") or "未命名节点")
@@ -152,6 +155,8 @@ class NodeGenerator:
                 f"示例: {json.dumps(examples, ensure_ascii=False)}\n"
                 f"易错点: {json.dumps(confusions, ensure_ascii=False)}\n"
             )
+            if extra_instruction:
+                user_prompt += f"\n【修改要求】\n{extra_instruction}\n"
             result = self._get_llm(max_attempts).chat_json(system_prompt, user_prompt,
                                                            temperature=self.config.temperature)
             return {

@@ -67,6 +67,9 @@
       </div>
 
       <!-- ==================== 大纲阶段 ==================== -->
+      <!-- ==================== 大纲阶段 ==================== -->
+      <!-- C6: AI 修改对话面板（右侧浮动；projectId 绑定后显示） -->
+      <ModifyPanel />
       <div v-if="currentPhase === 'outline'" class="phase-panel">
         <OutlineEditor
           :session-id="intentStore.sessionId"
@@ -302,10 +305,12 @@
 import { ref, computed, onMounted, watch } from "vue";
 import AppShell from "../components/layout/AppShell.vue";
 import OutlineEditor from "../components/teacher/OutlineEditor.vue";
+import ModifyPanel from "../components/teacher/ModifyPanel.vue";
 import { useGenerationStore } from "../stores/generationStore";
 import { useOutlineStore } from "../stores/outlineStore";
 import { useInteractiveStore } from "../stores/interactiveStore";
 import { useIntentStore } from "../stores/intentStore";
+import { useModifyStore } from "../stores/modifyStore";
 import { teacherV1Api } from "../services/v1";
 import { API_BASE, AI_API_BASE } from "../config/api";
 
@@ -313,6 +318,7 @@ const generationStore = useGenerationStore();
 const outlineStore = useOutlineStore();
 const interactiveStore = useInteractiveStore();
 const intentStore = useIntentStore();
+const modifyStore = useModifyStore();
 
 // 阶段：outline | generating | pages
 const currentPhase = ref("outline");
@@ -349,6 +355,17 @@ onMounted(async () => {
       window.localStorage.getItem(
         `fuww_s2_generation_mode:${intentStore.sessionId}`,
       ) || "";
+  }
+
+  // C6: 绑定修改面板到当前课件项目
+  // 优先用 generation_id（S3 生成后产生），其次用 localStorage 持久化的 last_gen_id
+  const lastGenId =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem("fuww_last_gen_id") || ""
+      : "";
+  if (lastGenId) {
+    modifyStore.bindProject(lastGenId);
+    await modifyStore.loadVersionHistory();
   }
   // 尝试从 localStorage 恢复大纲
   const restored = outlineStore.restore();

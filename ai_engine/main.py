@@ -26,6 +26,7 @@ from ai_engine.core.llm import resolve_llm_timeout, _is_retryable_error
 from ai_engine.reconstructor import LessonReconstructor, ReconstructionConfig
 from ai_engine.recommendation.service import router as recommendation_router
 from ai_engine.gen.outline import OutlineBuilder, OutlineConfig
+from ai_engine.gen.modify_intent import ModifyIntentParser
 from ai_engine.gen.node import NodeGenerator, NodeGenConfig
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
@@ -610,6 +611,24 @@ class GenOutlineReviseRequest(BaseModel):
     message: str
 
 
+class ParseModifyRequest(BaseModel):
+    """[B5] /api/v1/ai/parse_modify 请求体。"""
+    project_id: str = ""
+    instruction: str
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+
+
+_modify_intent_parser: ModifyIntentParser | None = None
+
+
+def get_modify_intent_parser() -> ModifyIntentParser:
+    """[B5] 单例：LLM 客户端复用。"""
+    global _modify_intent_parser
+    if _modify_intent_parser is None:
+        _modify_intent_parser = ModifyIntentParser()
+    return _modify_intent_parser
+
+
 class GenNodesRequest(BaseModel):
     """生成节点讲稿请求"""
     nodes: list[dict[str, Any]]
@@ -701,6 +720,12 @@ class GenContentRequest(BaseModel):
     enhanced: bool = False
     outline_id: str = ""
     outline_version: int = 0
+    # B6: 局部重生成
+    target_node_ids: list[str] = Field(default_factory=list, description="[B6] 局部重生成目标节点ID；非空时进入 partial 模式")
+    modify_action: str = ""
+    """[B6] 修改动作：simplify/expand/rewrite/restyle 等"""
+    modify_constraints: list[str] = Field(default_factory=list)
+    """[B6] 教师修改约束"""
 
 
 class GenContentStatusResponse(BaseModel):
@@ -790,13 +815,42 @@ async def generate_content(req: GenContentRequest):
 
 
 def _run_content_pipeline(content_id: str, req: GenContentRequest):
-    """后台内容生成管道：逐节点生成讲稿（同步，daemon 线程）"""
+    """后台内容生成管道：逐节点生成讲稿（同步，daemon 线程）
+
+    [B6] mode=partial 或 target_node_ids 非空时走局部重生成：
+    只重新生成目标节点，其余节点内容与引用关系不变。
+    """
     with _content_tasks_lock:
         task = _content_tasks.get(content_id)
         if not task:
             return
 
     try:
+        # ---- B6: 局部重生成分支 ----
+        if req.target_node_ids and req.mode == "partial":
+            from gen.partial_content import run_partial_pipeline
+            generator = NodeGenerator()
+            updated_nodes = run_partial_pipeline(
+                nodes=req.nodes,
+                target_node_ids=req.target_node_ids,
+                modify_action=req.modify_action or "rewrite",
+                modify_constraints=req.modify_constraints,
+                context_markdown=req.context_markdown,
+                course_name=req.course_name,
+                generator=generator,
+            )
+            with _content_tasks_lock:
+                task = _content_tasks.get(content_id)
+                if task:
+                    task["nodes"] = updated_nodes
+                    task["status"] = "done"
+                    task["progress_pct"] = 100.0
+                    task["completed_nodes"] = len(req.target_node_ids)
+                    task["total_nodes"] = len(req.nodes)
+                    _content_tasks[content_id] = task
+                _persist_content_task_sync(content_id, task)
+            return
+
         generator = NodeGenerator()
         nodes = req.nodes
         total = len(nodes)
@@ -1992,6 +2046,20 @@ class AuthResponse(BaseModel):
     code: int = 200
     message: str = "ok"
     data: Optional[dict] = None
+
+@app.post("/api/v1/ai/parse_modify")
+async def ai_parse_modify(req: ParseModifyRequest):
+    """[B5] 修改意图理解与节点定位：自然语言 → 结构化修改操作。
+
+    对应 Go 端：A6 modify 编排的第一步；低置信度返回 clarification_needed=true。
+    """
+    try:
+        parser = get_modify_intent_parser()
+        result = await asyncio.to_thread(parser.parse, req.instruction, req.nodes)
+        return result
+    except Exception as e:
+        raise _llm_endpoint_error(e, "修改指令解析失败")
+
 
 @app.post("/api/v1/auth/register")
 def auth_register(req: AuthRegisterRequest):

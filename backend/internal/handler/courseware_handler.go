@@ -1,0 +1,199 @@
+package handler
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+
+	"smart-teaching-backend/internal/service"
+)
+
+// CoursewareHandler 课件项目 + 修改对话 + 版本快照（A1 最小基础 / A6 / A7）。
+//
+// 路由（backend/internal/router/teacher.go）：
+//   POST /api/v1/coursewares                          — 新建项目（A1）
+//   GET  /api/v1/coursewares                          — 我的课件列表（A1）
+//   PUT  /api/v1/coursewares/:project_id/step         — 持久化步骤（A3）
+//   PUT  /api/v1/coursewares/:project_id/draft        — 保存草稿（A2）
+//   GET  /api/v1/coursewares/:project_id/draft        — 读取草稿（A2）
+//   POST /api/v1/coursewares/:project_id/modify       — 修改编排（A6）
+//   GET  /api/v1/coursewares/:project_id/modify-history — 修改记录（A6）
+//   GET  /api/v1/coursewares/:project_id/versions     — 版本列表（A7）
+//   POST /api/v1/coursewares/:project_id/rollback     — 回滚（A7）
+type CoursewareHandler struct {
+	svc *service.CoursewareService
+}
+
+func NewCoursewareHandler(svc *service.CoursewareService) *CoursewareHandler {
+	return &CoursewareHandler{svc: svc}
+}
+
+// Create POST /api/v1/coursewares —— 新建课件项目。
+func (h *CoursewareHandler) Create(c *gin.Context) {
+	var req struct {
+		OwnerID string `json:"owner_id"`
+		Title   string `json:"title"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
+		return
+	}
+	if req.OwnerID == "" {
+		// 教师端当前为本地登录态，未强制 JWT；缺省归入 demo 教师避免 400 阻断联调
+		req.OwnerID = "teacher_demo"
+	}
+	p, err := h.svc.CreateProject(c.Request.Context(), req.OwnerID, req.Title)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": p})
+}
+
+// List GET /api/v1/coursewares —— 我的课件列表。
+func (h *CoursewareHandler) List(c *gin.Context) {
+	ownerID := c.Query("owner_id")
+	if ownerID == "" {
+		ownerID = "teacher_demo"
+	}
+	items, err := h.svc.ListProjects(c.Request.Context(), ownerID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"items": items}})
+}
+
+// UpdateStep PUT /:project_id/step —— 持久化当前步骤。
+func (h *CoursewareHandler) UpdateStep(c *gin.Context) {
+	projectID := c.Param("project_id")
+	var req struct {
+		Step string `json:"step"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Step == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "step 必填"})
+		return
+	}
+	if err := h.svc.UpdateStep(c.Request.Context(), projectID, req.Step); err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"project_id": projectID, "step": req.Step}})
+}
+
+// SaveDraft PUT /:project_id/draft —— 保存草稿。
+func (h *CoursewareHandler) SaveDraft(c *gin.Context) {
+	projectID := c.Param("project_id")
+	var req struct {
+		DraftJSON string `json:"draft_json"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
+		return
+	}
+	if err := h.svc.SaveDraft(c.Request.Context(), projectID, req.DraftJSON); err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"saved": true}})
+}
+
+// GetDraft GET /:project_id/draft —— 读取草稿（draft_json 为原始 JSON 字符串）。
+func (h *CoursewareHandler) GetDraft(c *gin.Context) {
+	projectID := c.Param("project_id")
+	draft, err := h.svc.GetDraft(c.Request.Context(), projectID)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"draft_json": draft}})
+}
+
+// Modify POST /:project_id/modify —— A6 修改编排（意图解析 → 局部生成 → 快照）。
+func (h *CoursewareHandler) Modify(c *gin.Context) {
+	projectID := c.Param("project_id")
+	var req struct {
+		Instruction string                   `json:"instruction"`
+		Nodes       []service.TeachingNodeItem `json:"nodes"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
+		return
+	}
+	if req.Instruction == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "instruction 不能为空"})
+		return
+	}
+	result, err := h.svc.Modify(c.Request.Context(), projectID, req.Instruction, req.Nodes)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": result})
+}
+
+// ModifyHistory GET /:project_id/modify-history —— 修改记录列表。
+func (h *CoursewareHandler) ModifyHistory(c *gin.Context) {
+	projectID := c.Param("project_id")
+	versions, err := h.svc.ModifyHistory(c.Request.Context(), projectID)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	type versionItem struct {
+		VersionID         string `json:"version_id"`
+		VersionNo         int    `json:"version_no"`
+		ModifyInstruction string `json:"modify_instruction"`
+		CreatedAt         string `json:"created_at"`
+	}
+	items := make([]versionItem, 0, len(versions))
+	for _, v := range versions {
+		items = append(items, versionItem{
+			VersionID: v.VersionID, VersionNo: v.VersionNo,
+			ModifyInstruction: v.ModifyInstr, CreatedAt: v.CreatedAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"items": items}})
+}
+
+// Versions GET /:project_id/versions —— 版本列表（含修改指令摘要）。
+func (h *CoursewareHandler) Versions(c *gin.Context) {
+	h.ModifyHistory(c) // 同一数据源，字段一致
+}
+
+// Rollback POST /:project_id/rollback —— A7 回滚（克隆式，不覆盖历史）。
+func (h *CoursewareHandler) Rollback(c *gin.Context) {
+	projectID := c.Param("project_id")
+	var req struct {
+		VersionNo int `json:"version_no"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.VersionNo <= 0 {
+		// 兼容 path 参数
+		if v := c.Param("version_no"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				req.VersionNo = n
+			}
+		}
+		if req.VersionNo <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "version_no 必填"})
+			return
+		}
+	}
+	result, err := h.svc.Rollback(c.Request.Context(), projectID, req.VersionNo)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": result})
+}
+
+func (h *CoursewareHandler) mapError(c *gin.Context, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, service.ErrProjectNotFound), errors.Is(err, service.ErrVersionNotFound):
+		status = http.StatusNotFound
+	}
+	c.JSON(status, gin.H{"code": status, "message": err.Error()})
+}

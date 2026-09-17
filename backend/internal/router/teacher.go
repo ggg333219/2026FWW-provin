@@ -127,7 +127,22 @@ func RegisterNewSkillRoutes(
 	versionHandler *handler.VersionHandler,
 	exportHandler *handler.ExportHandler,
 	contentHandler *handler.ContentHandler,
+	coursewareHandler *handler.CoursewareHandler,
 ) {
+	// ---- A1/A6/A7: 课件项目 + 修改对话 + 版本快照 ----
+	coursewares := v1.Group("/coursewares")
+	{
+		coursewares.POST("", coursewareHandler.Create)
+		coursewares.GET("", coursewareHandler.List)
+		coursewares.PUT("/:project_id/step", coursewareHandler.UpdateStep)
+		coursewares.PUT("/:project_id/draft", coursewareHandler.SaveDraft)
+		coursewares.GET("/:project_id/draft", coursewareHandler.GetDraft)
+		coursewares.POST("/:project_id/modify", coursewareHandler.Modify)
+		coursewares.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
+		coursewares.GET("/:project_id/versions", coursewareHandler.Versions)
+		coursewares.POST("/:project_id/rollback", coursewareHandler.Rollback)
+	}
+
 	// ---- S1: 意图理解 ----
 	intent := v1.Group("/intent")
 	{
