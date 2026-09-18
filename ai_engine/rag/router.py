@@ -20,6 +20,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import re
 import uuid
 from typing import Any, Optional
@@ -39,6 +40,7 @@ from ai_engine.core.schema import (
 from .chunker import DocumentChunker
 from .embed import EmbeddingService
 from .store import InMemoryVectorStore
+from .store_pgvector import PGVectorStore
 from .retrieve import HybridRetriever
 from .rerank import ReRanker
 from .evidence import EvidenceSynthesizer
@@ -52,7 +54,15 @@ router = APIRouter(prefix="/api/v1", tags=["KB-RAG"])
 
 _chunker = DocumentChunker()
 _embed_service = EmbeddingService()
-_store = InMemoryVectorStore()
+def _build_store():
+    """生产环境显式启用 pgvector；测试和无数据库场景保持零依赖内存实现。"""
+    backend = (os.getenv("RAG_STORE_BACKEND") or "memory").strip().lower()
+    if backend in {"pg", "pgvector", "postgres", "postgresql"}:
+        return PGVectorStore()
+    return InMemoryVectorStore()
+
+
+_store = _build_store()
 _retriever = HybridRetriever(store=_store, embed_service=_embed_service)
 _reranker = ReRanker()
 _synthesizer = EvidenceSynthesizer(llm_client=LLMClient(temperature=0.1))
@@ -60,7 +70,7 @@ _synthesizer = EvidenceSynthesizer(llm_client=LLMClient(temperature=0.1))
 
 # ---- 辅助函数 ----
 
-def _get_store() -> InMemoryVectorStore:
+def _get_store():
     """获取全局 store 实例。"""
     return _store
 
@@ -264,6 +274,13 @@ async def knowledge_upload(req: KnowledgeUploadRequest):
 
         # ---- 嵌入 → 存储 ----
         doc_id = f"doc_{uuid.uuid4().hex[:12]}"
+        # 将资料归属写入 chunk 元数据；检索端据此执行 knowledge_base_ids 隔离。
+        if req.knowledge_base_id:
+            for chunk in all_chunks:
+                chunk.metadata = {
+                    **(chunk.metadata or {}),
+                    "knowledge_base_id": req.knowledge_base_id,
+                }
         embedded = _embed_service.embed_chunks(all_chunks)
         _store.insert_batch(embedded, doc_id=doc_id)
 

@@ -206,6 +206,7 @@ export const useModifyStore = defineStore('modifyPanel', {
             instruction,
             previousVersionNo: data.previous_version_no,
             newVersionNo: data.new_version_no,
+            presentation: data.presentation || intent.presentation || null,
           }))
         }
 

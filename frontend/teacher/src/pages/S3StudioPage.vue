@@ -696,12 +696,21 @@ async function applyPresentationStyle() {
   currentPhase.value = "style";
 }
 
-async function handleStyleRequest({ instruction = '' } = {}) {
+async function handleStyleRequest({ instruction = '', presentation = {} } = {}) {
   const text = String(instruction).toLowerCase();
-  if (/商务|business|简洁/.test(text)) { templateId.value = 'deck-swiss-edu'; density.value = 'minimal'; }
-  if (/蓝|blue/.test(text)) palette.value = 'klein-blue';
-  if (/图|视觉|visual/.test(text)) layoutMode.value = 'visual';
-  if (/文字|内容优先/.test(text)) layoutMode.value = 'text';
+  const style = presentation && typeof presentation === 'object' ? presentation : {};
+  if (style.template_id) templateId.value = style.template_id;
+  if (style.palette) palette.value = style.palette;
+  if (style.layout) layoutMode.value = style.layout;
+  if (style.font_family) fontFamily.value = style.font_family;
+  if (style.density) density.value = style.density;
+  // 兼容旧 AI 响应：仅当结构化字段为空时才使用本地兜底映射。
+  if (!Object.values(style).some(Boolean)) {
+    if (/商务|business|简洁/.test(text)) { templateId.value = 'deck-swiss-edu'; density.value = 'minimal'; }
+    if (/蓝|blue/.test(text)) palette.value = 'klein-blue';
+    if (/图|视觉|visual/.test(text)) layoutMode.value = 'visual';
+    if (/文字|内容优先/.test(text)) layoutMode.value = 'text';
+  }
   currentPhase.value = 'style';
   await applyPresentationStyle();
 }

@@ -203,7 +203,7 @@ class HybridRetriever:
             query: 查询文本。
             top_k: 返回结果数。
             min_score: 最低分数阈值（低于此值丢弃）。
-            knowledge_base_ids: 限定知识库范围（目前未实现过滤）。
+            knowledge_base_ids: 限定知识库范围。
             source_type: 限定来源类型。
 
         Returns:
@@ -226,11 +226,12 @@ class HybridRetriever:
         vector_hits = [
             hit for hit in vector_hits
             if self._matches_scope(hit.chunk, scope, node_id, page_id)
+            and self._matches_knowledge_base(hit.chunk, knowledge_base_ids)
         ]
 
         # 向量不可用 → 纯 BM25 检索
         if not vector_available:
-            return self._bm25_only_search(query, top_k, min_score, source_type, scope, node_id, page_id)
+            return self._bm25_only_search(query, top_k, min_score, source_type, scope, node_id, page_id, knowledge_base_ids)
 
         if not vector_hits:
             return []
@@ -329,6 +330,7 @@ class HybridRetriever:
         scope: str = "course",
         node_id: Optional[str] = None,
         page_id: Optional[str] = None,
+        knowledge_base_ids: Optional[list[str]] = None,
     ) -> list[SearchResult]:
         """
         Embedding 不可用时的纯 BM25 兜底检索。
@@ -351,6 +353,8 @@ class HybridRetriever:
             if source_type is not None and indexed.source_type != source_type:
                 continue
             if not self._matches_scope(indexed, scope, node_id, page_id):
+                continue
+            if not self._matches_knowledge_base(indexed, knowledge_base_ids):
                 continue
             results.append(SearchResult(
                 chunk_id=indexed.chunk_id,
@@ -384,6 +388,14 @@ class HybridRetriever:
             candidate = metadata.get("page_id") or metadata.get("page_ref") or indexed.page_ref
             return bool(page_id) and str(candidate or "") == str(page_id)
         return False
+
+    @staticmethod
+    def _matches_knowledge_base(indexed, knowledge_base_ids: Optional[list[str]]) -> bool:
+        """按上传时写入的 knowledge_base_id 做租户/资料范围过滤。"""
+        if not knowledge_base_ids:
+            return True
+        candidate = str((indexed.metadata or {}).get("knowledge_base_id") or "")
+        return candidate in {str(item) for item in knowledge_base_ids}
 
     @staticmethod
     def _normalize_scores(scored: dict[str, float]) -> dict[str, float]:

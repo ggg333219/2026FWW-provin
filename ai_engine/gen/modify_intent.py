@@ -54,6 +54,18 @@ def build_modify_intent_schema() -> dict[str, Any]:
                 "confidence": {"type": "number"},
                 "clarification_needed": {"type": "boolean"},
                 "clarification_question": {"type": "string"},
+                "presentation": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "template_id": {"type": "string"},
+                        "palette": {"type": "string"},
+                        "layout": {"type": "string"},
+                        "font_family": {"type": "string"},
+                        "density": {"type": "string"},
+                    },
+                    "required": ["template_id", "palette", "layout", "font_family", "density"],
+                },
             },
             "required": [
                 "target_type",
@@ -64,6 +76,7 @@ def build_modify_intent_schema() -> dict[str, Any]:
                 "confidence",
                 "clarification_needed",
                 "clarification_question",
+                "presentation",
             ],
         },
     }
@@ -86,6 +99,7 @@ _SYSTEM_PROMPT = """你是课件修改指令解析器。教师会用自然语言
 5. constraints：教师给出的约束（保留什么/必须包含什么/风格倾向）。
 6. confidence：0~1，指令含糊（无明确目标/互相矛盾）时给低分。
 7. clarification_needed：confidence 不足或存在歧义时为 true，并给 clarification_question（一句追问）。
+8. presentation：只有 restyle 时填写样式层字段；不确定的字段返回空字符串，禁止修改正文内容。
 
 判断示例：
 - "第三页太复杂，减少文字，增加一个生活案例" → target=node_3, action=simplify, secondary=[expand], constraints=["增加生活案例"]
@@ -165,7 +179,16 @@ class ModifyIntentParser:
             "confidence": 0.0,
             "clarification_needed": True,
             "clarification_question": question,
+            "presentation": {key: "" for key in ("template_id", "palette", "layout", "font_family", "density")},
         }
+
+    @staticmethod
+    def _normalize_presentation(value: Any, action: str) -> dict[str, str]:
+        """只允许呈现层字段通过边界，避免把自然语言样式指令混入正文。"""
+        keys = ("template_id", "palette", "layout", "font_family", "density")
+        if action != "restyle" or not isinstance(value, dict):
+            return {key: "" for key in keys}
+        return {key: str(value.get(key) or "").strip() for key in keys}
 
     def _normalize(self, result: Any, nodes: list[dict[str, Any]]) -> dict[str, Any]:
         """LLM 返回容错归一：非 dict / 枚举外值 / 越界 node_id 收敛到安全值。"""
@@ -212,4 +235,5 @@ class ModifyIntentParser:
             "confidence": confidence,
             "clarification_needed": clarification_needed,
             "clarification_question": question,
+            "presentation": self._normalize_presentation(result.get("presentation"), action),
         }
