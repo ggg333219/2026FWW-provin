@@ -15,15 +15,16 @@ import (
 // CoursewareHandler 课件项目 + 修改对话 + 版本快照（A1 最小基础 / A6 / A7）。
 //
 // 路由（backend/internal/router/teacher.go）：
-//   POST /api/v1/coursewares                          — 新建项目（A1）
-//   GET  /api/v1/coursewares                          — 我的课件列表（A1）
-//   PUT  /api/v1/coursewares/:project_id/step         — 持久化步骤（A3）
-//   PUT  /api/v1/coursewares/:project_id/draft        — 保存草稿（A2）
-//   GET  /api/v1/coursewares/:project_id/draft        — 读取草稿（A2）
-//   POST /api/v1/coursewares/:project_id/modify       — 修改编排（A6）
-//   GET  /api/v1/coursewares/:project_id/modify-history — 修改记录（A6）
-//   GET  /api/v1/coursewares/:project_id/versions     — 版本列表（A7）
-//   POST /api/v1/coursewares/:project_id/rollback     — 回滚（A7）
+//
+//	POST /api/v1/coursewares                          — 新建项目（A1）
+//	GET  /api/v1/coursewares                          — 我的课件列表（A1）
+//	PUT  /api/v1/coursewares/:project_id/step         — 持久化步骤（A3）
+//	PUT  /api/v1/coursewares/:project_id/draft        — 保存草稿（A2）
+//	GET  /api/v1/coursewares/:project_id/draft        — 读取草稿（A2）
+//	POST /api/v1/coursewares/:project_id/modify       — 修改编排（A6）
+//	GET  /api/v1/coursewares/:project_id/modify-history — 修改记录（A6）
+//	GET  /api/v1/coursewares/:project_id/versions     — 版本列表（A7）
+//	POST /api/v1/coursewares/:project_id/rollback     — 回滚（A7）
 type CoursewareHandler struct {
 	svc *service.CoursewareService
 }
@@ -203,16 +204,20 @@ func (h *CoursewareHandler) ModifyHistory(c *gin.Context) {
 		return
 	}
 	type versionItem struct {
-		VersionID         string `json:"version_id"`
-		VersionNo         int    `json:"version_no"`
-		ModifyInstruction string `json:"modify_instruction"`
-		CreatedAt         string `json:"created_at"`
+		VersionID         string                     `json:"version_id"`
+		VersionNo         int                        `json:"version_no"`
+		ModifyInstruction string                     `json:"modify_instruction"`
+		CreatedAt         string                     `json:"created_at"`
+		Nodes             []service.TeachingNodeItem `json:"nodes"`
 	}
 	items := make([]versionItem, 0, len(versions))
 	for _, v := range versions {
+		var nodes []service.TeachingNodeItem
+		_ = json.Unmarshal([]byte(v.NodesJSON), &nodes)
 		items = append(items, versionItem{
 			VersionID: v.VersionID, VersionNo: v.VersionNo,
 			ModifyInstruction: v.ModifyInstr, CreatedAt: v.CreatedAt.Format("2006-01-02 15:04:05"),
+			Nodes: nodes,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"items": items}})

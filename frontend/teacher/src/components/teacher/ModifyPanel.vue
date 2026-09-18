@@ -48,20 +48,53 @@
       </button>
     </div>
 
+    <section v-if="liveNodes.length" class="live-preview" aria-label="节点局部预览">
+      <div class="preview-head">
+        <strong>局部预览</strong>
+        <span>仅更新发生变化的节点</span>
+      </div>
+      <article v-for="(node, index) in liveNodes" :key="node.node_id || index"
+        :class="['preview-node', { modified: isRecentlyModified(node) }]">
+        <div class="preview-node-head">
+          <span>第 {{ index + 1 }} 页 · {{ node.title || '未命名节点' }}</span>
+          <span v-if="isRecentlyModified(node)" class="modified-badge">已修改</span>
+        </div>
+        <p>{{ node.summary || node.content || node.script || '暂无内容' }}</p>
+      </article>
+    </section>
+
     <!-- 版本时间线（C7，展开后显示） -->
     <details v-if="modifyStore.versionHistory.length > 0" class="version-timeline">
       <summary>📜 修改历史（{{ modifyStore.versionHistory.length }} 条）</summary>
-      <div v-for="v in modifyStore.versionHistory" :key="v.version_no" class="timeline-item">
+      <button v-for="v in modifyStore.versionHistory" :key="v.version_no" type="button"
+        class="timeline-item" @click="previewVersion(v)">
         <span class="tl-version">v{{ v.version_no }}</span>
+        <span :class="['change-kind', changeKind(v)]">{{ changeKind(v) === 'style' ? '样式' : '内容' }}</span>
         <span class="tl-instr">{{ v.modify_instruction || '(初始版本)' }}</span>
         <span class="tl-time">{{ v.created_at }}</span>
-      </div>
+      </button>
     </details>
+
+    <div v-if="selectedVersion" class="history-preview" role="dialog" aria-modal="true" aria-label="历史版本只读预览">
+      <div class="history-card">
+        <div class="history-head">
+          <div><strong>v{{ selectedVersion.version_no }} 只读预览</strong><p>{{ selectedVersion.modify_instruction || '初始版本' }}</p></div>
+          <button type="button" class="icon-btn" @click="selectedVersion = null" aria-label="关闭">✕</button>
+        </div>
+        <div class="history-nodes">
+          <article v-for="(node, index) in selectedVersion.nodes || []" :key="node.node_id || index">
+            <strong>第 {{ index + 1 }} 页 · {{ node.title || '未命名节点' }}</strong>
+            <p>{{ node.summary || node.content || node.script || '暂无内容' }}</p>
+          </article>
+          <p v-if="!selectedVersion.nodes?.length" class="empty-hint">该历史记录暂无可预览的节点快照。</p>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { useModifyStore } from '../../stores/modifyStore'
 import { useOutlineStore } from '../../stores/outlineStore'
 import { useGenerationStore } from '../../stores/generationStore'
@@ -70,6 +103,14 @@ const modifyStore = useModifyStore()
 const outlineStore = useOutlineStore()
 const generationStore = useGenerationStore()
 const messagesEl = ref(null)
+const selectedVersion = ref(null)
+const emit = defineEmits(['style-request'])
+const liveNodes = computed(() => generationStore.currentScriptNodes?.length
+  ? generationStore.currentScriptNodes
+  : outlineStore.nodes)
+const isRecentlyModified = (node) => modifyStore.recentlyModifiedIds.includes(node.node_id)
+const previewVersion = (version) => { selectedVersion.value = version }
+const changeKind = (version) => /风格|样式|模板|配色|字体|版式|style|template/i.test(version?.modify_instruction || '') ? 'style' : 'content'
 
 // 节点转 TeachingNodeItem 格式（outlineStore.nodes → Go TeachingNodeItem JSON）
 function nodesForApi() {
@@ -92,9 +133,17 @@ function nodesForApi() {
 }
 
 // 生成后优先写回 PPT 节点并用 inline 节点刷新预览；生成前才回写大纲。
-async function applyResult(allNodes) {
+async function applyResult({ allNodes, modifiedNodes, intent, instruction }) {
   if (!Array.isArray(allNodes)) return
-  const normalized = allNodes.map((n) => ({
+  if (intent?.action === 'restyle' || intent?.target_type === 'style') {
+    emit('style-request', { instruction, intent })
+    return
+  }
+  const current = liveNodes.value || []
+  const currentById = new Map(current.map((node) => [node.node_id, node]))
+  const normalize = (n) => ({
+    ...(currentById.get(n.node_id) || {}),
+    ...n,
     node_id: n.node_id,
     title: n.title,
     summary: n.summary,
@@ -107,13 +156,23 @@ async function applyResult(allNodes) {
     citation_refs: n.citation_refs || [],
     source_chunk_ids: n.source_chunk_ids || [],
     interactive_plan: n.interactive_plan || null,
-  }))
+  })
+  const normalized = allNodes.map(normalize)
   if (generationStore.currentScriptNodes?.length || generationStore.lastGenId) {
-    generationStore.setNodes(normalized)
+    const changedById = new Map((modifiedNodes || []).map((node) => [node.node_id, normalize(node)]))
+    const structuralChange = normalized.length !== generationStore.currentScriptNodes.length
+      || normalized.some((node, index) => generationStore.currentScriptNodes[index]?.node_id !== node.node_id)
+    if (structuralChange) {
+      generationStore.setNodes(normalized)
+    } else {
+      generationStore.currentScriptNodes.forEach((node, index) => {
+        const changed = changedById.get(node.node_id)
+        if (changed) generationStore.updateNode(index, changed)
+      })
+    }
     generationStore.setScript(
       normalized.map((node) => node.script || node.content || node.summary || '').filter(Boolean).join('\n\n'),
     )
-    await generationStore.renderCoursewarePreview('AI 迭代课件', { genId: '' })
   } else {
     outlineStore.nodes = normalized
     outlineStore._reorder()
@@ -309,13 +368,36 @@ watch(() => modifyStore.messages.length, scrollToBottom)
 }
 
 .timeline-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   display: flex;
   gap: 8px;
   font-size: 11px;
   padding: 3px 0;
   align-items: center;
 }
+.timeline-item:hover { background: #f2f6ff; }
 .tl-version { font-weight: 600; color: #4a90d9; min-width: 30px; }
+.change-kind { padding:1px 5px; border-radius:999px; font-size:10px; background:#eaf6f0; color:#26715f; }
+.change-kind.style { background:#f1edff; color:#6845aa; }
 .tl-instr { flex: 1; color: #555; }
 .tl-time { color: #aaa; white-space: nowrap; }
+.live-preview { border-top: 1px solid #e0e0e0; padding: 10px 12px; max-height: 250px; overflow-y: auto; }
+.preview-head,.preview-node-head,.history-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.preview-head { margin-bottom:8px; font-size:12px; }
+.preview-head span { color:#78828c; font-size:11px; }
+.preview-node { margin:6px 0; padding:8px; border:1px solid #e0e7e4; border-radius:8px; background:#fff; transition:border-color .25s,box-shadow .25s,background .25s; }
+.preview-node.modified { border-color:#24a36f; background:#edfff7; box-shadow:0 0 0 3px rgba(36,163,111,.14); animation:modifiedPulse 2s ease-out; }
+.preview-node-head { color:#33443e; font-size:12px; font-weight:650; }
+.preview-node p,.history-nodes p { margin:5px 0 0; color:#66736f; font-size:11px; line-height:1.45; white-space:pre-wrap; }
+.modified-badge { padding:2px 6px; border-radius:999px; background:#24a36f; color:#fff; font-size:10px; }
+.history-preview { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; padding:20px; background:rgba(17,31,27,.42); }
+.history-card { width:min(720px,calc(100vw - 40px)); max-height:80vh; overflow:hidden; border-radius:14px; background:#fff; box-shadow:0 24px 80px rgba(0,0,0,.2); }
+.history-head { padding:16px 18px; border-bottom:1px solid #e5ebe8; }
+.history-head p { margin:4px 0 0; color:#68746f; font-size:12px; }
+.history-nodes { max-height:60vh; overflow-y:auto; padding:14px 18px; }
+.history-nodes article { padding:10px 0; border-bottom:1px solid #edf1ef; }
+@keyframes modifiedPulse { 0% { transform:scale(.99); } 25% { transform:scale(1); } 100% { box-shadow:none; } }
 </style>

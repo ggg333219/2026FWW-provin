@@ -18,6 +18,7 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
     error: '',
     _timer: 0,
     _lastDraft: null,
+    _pendingSave: false,
   }),
   getters: {
     saveLabel: (state) => ({
@@ -42,6 +43,17 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
       try {
         const data = unwrap(await projectModifyApi.list())
         this.items = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : [])
+        await Promise.all(this.items.map(async (item) => {
+          const id = item.id || item.project_id
+          if (!id || item.version_no != null) return
+          try {
+            const history = unwrap(await projectModifyApi.versions(id))
+            const versions = Array.isArray(history.items) ? history.items : []
+            item.version_no = versions.reduce((latest, version) => Math.max(latest, Number(version.version_no || 0)), 0) || 1
+          } catch {
+            item.version_no = 1
+          }
+        }))
         return this.items
       } catch (error) { this.error = error?.message || '课件列表加载失败'; throw error }
       finally { this.loading = false }
@@ -77,15 +89,28 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
       this._timer = setTimeout(() => this.saveNow(), delay)
     },
     async saveNow(draft = this._lastDraft) {
-      if (!this.projectId || !draft || this.saving) return
+      if (!this.projectId || !draft) return
+      this._lastDraft = draft
+      if (this.saving) {
+        this._pendingSave = true
+        this.saveState = 'dirty'
+        return
+      }
       if (this._timer) { clearTimeout(this._timer); this._timer = 0 }
       this.saving = true; this.saveState = 'saving'; this.error = ''
       try {
         const data = unwrap(await projectModifyApi.saveDraft(this.projectId, draft))
+        this.draft = draft
         this.savedAt = data.saved_at || data.project?.updated_at || new Date().toISOString()
         this.saveState = 'saved'
       } catch (error) { this.error = error?.message || '草稿保存失败'; this.saveState = 'error'; throw error }
-      finally { this.saving = false }
+      finally {
+        this.saving = false
+        if (this._pendingSave) {
+          this._pendingSave = false
+          await this.saveNow(this._lastDraft)
+        }
+      }
     },
   },
 })

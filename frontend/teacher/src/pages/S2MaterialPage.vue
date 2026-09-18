@@ -44,8 +44,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onBeforeUnmount, onMounted, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import AppShell from '../components/layout/AppShell.vue'
 import S2MaterialWorkspace from '../components/teacher/S2MaterialWorkspace.vue'
 import { useMaterialStore, isEvidencePacketUsable } from '../stores/materialStore'
@@ -53,11 +53,20 @@ import { useIntentStore } from '../stores/intentStore'
 import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
 
 const router = useRouter()
+const route = useRoute()
 const materialStore = useMaterialStore()
 const intentStore = useIntentStore()
 const projectStore = useCoursewareProjectStore()
 intentStore.initialize()
-projectStore.restoreActiveId()
+projectStore.setActive(String(route.query.project_id || projectStore.restoreActiveId() || ''))
+
+const materialDraft = () => ({
+  ...(projectStore.draft || {}),
+  intent: intentStore.intentSummary,
+  materials: materialStore.materials,
+  selected_materials: materialStore.selectedMaterials,
+  evidence_packet: materialStore.s3EvidencePayload,
+})
 
 const showNoEvidenceConfirm = ref(false)
 const navigatingToS3 = ref(false)
@@ -100,11 +109,21 @@ const confirmWithoutEvidence = () => {
 /** Mock 模式检测与退出 */
 const isMockModeActive = ref(false)
 
-onMounted(() => {
+onMounted(async () => {
+  if (projectStore.projectId && !projectStore.draft) await projectStore.resume(projectStore.projectId).catch(() => {})
+  await projectStore.updateStep('s2_material').catch(() => {})
   if (typeof window !== 'undefined') {
     isMockModeActive.value = window.localStorage.getItem('fuww_mock_mode') === 'true'
   }
 })
+
+watch(
+  () => [materialStore.materials, materialStore.selectedMaterials, materialStore.evidencePackets],
+  () => projectStore.scheduleSave(materialDraft()),
+  { deep: true }
+)
+onBeforeUnmount(() => projectStore.saveNow(materialDraft()).catch(() => {}))
+onBeforeRouteLeave(async () => { await projectStore.saveNow(materialDraft()).catch(() => {}) })
 
 const exitMockMode = () => {
   if (typeof window !== 'undefined') {

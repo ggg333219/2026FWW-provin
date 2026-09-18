@@ -28,8 +28,12 @@ export const useModifyStore = defineStore('modifyPanel', {
     modifying: false,
     /** 最近一次修改返回的完整意图（供追问上下文） */
     lastIntent: null,
+    /** 低置信度追问上下文；下一条教师回复会和原指令合并后再次解析。 */
+    pendingClarification: null,
     /** 当前版本号（每次成功修改自增） */
     currentVersionNo: 0,
+    /** 当前版本由哪个版本修改而来。 */
+    basedOnVersionNo: 0,
     /** 版本历史 [{ version_no, modify_instruction, created_at }] */
     versionHistory: [],
     /** 本次修改的节点（C7 高亮用；2s 后清除） */
@@ -47,8 +51,12 @@ export const useModifyStore = defineStore('modifyPanel', {
     canUndo: (state) => state.undoStack.length > 0,
     canRedo: (state) => state.redoStack.length > 0,
     /** 版本标签文案 */
-    versionLabel: (state) =>
-      state.currentVersionNo > 0 ? `当前 v${state.currentVersionNo}` : '尚未生成版本',
+    versionLabel: (state) => {
+      if (state.currentVersionNo <= 0) return '尚未生成版本'
+      return state.basedOnVersionNo > 0
+        ? `当前 v${state.currentVersionNo} · 基于 v${state.basedOnVersionNo} 修改`
+        : `当前 v${state.currentVersionNo}`
+    },
     /** 快捷指令 chips（C6） */
     quickChips: () => [
       { label: '精简这页', text: '精简当前选中页面的内容，减少文字量' },
@@ -66,6 +74,18 @@ export const useModifyStore = defineStore('modifyPanel', {
         this.messages = []
         this.currentVersionNo = 0
         this.versionHistory = []
+        return
+      }
+      try {
+        const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || 'null')
+        if (saved?.projectId === this.projectId) {
+          this.messages = Array.isArray(saved.messages) ? saved.messages : []
+          this.currentVersionNo = Number(saved.currentVersionNo || 0)
+          this.basedOnVersionNo = Number(saved.basedOnVersionNo || 0)
+          this.pendingClarification = saved.pendingClarification || null
+        }
+      } catch {
+        // 本地缓存损坏不影响服务端版本链恢复。
       }
     },
 
@@ -76,7 +96,9 @@ export const useModifyStore = defineStore('modifyPanel', {
       this.inputText = ''
       this.modifying = false
       this.lastIntent = null
+      this.pendingClarification = null
       this.currentVersionNo = 0
+      this.basedOnVersionNo = 0
       this.versionHistory = []
       this.recentlyModifiedIds = []
       this.undoStack = []
@@ -101,12 +123,17 @@ export const useModifyStore = defineStore('modifyPanel', {
      * @param {Function} onApplied 修改应用回调（all_nodes 写回 outlineStore）
      */
     async sendModify(nodes, onApplied) {
-      const instruction = this.inputText.trim()
-      if (!this.projectId || !instruction || this.modifying) return
+      const teacherReply = this.inputText.trim()
+      if (!this.projectId || !teacherReply || this.modifying) return
+
+      const clarificationContext = this.pendingClarification
+      const instruction = clarificationContext
+        ? `${clarificationContext.originalInstruction}\n补充说明：${teacherReply}\n请结合以上两轮信息完成修改。`
+        : teacherReply
 
       this.modifying = true
       this.error = ''
-      this._pushMessage('teacher', instruction)
+      this._pushMessage('teacher', teacherReply)
       this.inputText = ''
 
       try {
@@ -116,9 +143,17 @@ export const useModifyStore = defineStore('modifyPanel', {
         // 追问分支：AI 置信度低，返回澄清问题，不执行修改
         if (data.clarification) {
           this.lastIntent = data.intent || null
+          this.pendingClarification = {
+            originalInstruction: clarificationContext?.originalInstruction || teacherReply,
+            intent: data.intent || clarificationContext?.intent || null,
+            question: data.clarification,
+          }
           this._pushMessage('ai', `❓ ${data.clarification}`, { isClarification: true })
+          this._persist()
           return
         }
+
+        this.pendingClarification = null
 
         // 成功分支：解析结果 + 修改摘要 + 版本标签
         const intent = data.intent || {}
@@ -134,27 +169,47 @@ export const useModifyStore = defineStore('modifyPanel', {
           versionNo: data.new_version_no,
         })
 
-        const modifiedCount = (data.modified_nodes || []).length
-        this._pushMessage('ai', `本次修改了 ${modifiedCount} 个节点`, { isSummary: true })
+        const modifiedNodes = Array.isArray(data.modified_nodes) ? data.modified_nodes : []
+        const modifiedTitles = modifiedNodes
+          .map((node) => node.title || node.node_title || node.node_id)
+          .filter(Boolean)
+        const summary = modifiedTitles.length
+          ? `已更新：${modifiedTitles.join('、')}`
+          : (intent.action === 'restyle' ? '已更新 PPT 呈现样式，正文与引用保持不变' : '本次未改动正文节点')
+        this._pushMessage('ai', summary, { isSummary: true })
 
         // 版本推进 + 撤销栈
         if (data.new_version_no > this.currentVersionNo) {
           this.undoStack.push(this.currentVersionNo || 0)
           this.redoStack = []
+          this.basedOnVersionNo = Math.max(Number(data.new_version_no || 0) - 1, 0)
           this.currentVersionNo = data.new_version_no
         }
 
         // C7 高亮集合
-        this.recentlyModifiedIds = (intent.target_ids || []).slice()
+        this.recentlyModifiedIds = modifiedNodes
+          .map((node) => node.node_id)
+          .filter(Boolean)
+        if (!this.recentlyModifiedIds.length) {
+          this.recentlyModifiedIds = (intent.target_ids || []).slice()
+        }
         if (this.recentlyModifiedIds.length) {
           setTimeout(() => { this.recentlyModifiedIds = [] }, 2000)
         }
 
         // 应用修改结果
         if (typeof onApplied === 'function' && Array.isArray(data.all_nodes)) {
-          await Promise.resolve(onApplied(data.all_nodes))
+          await Promise.resolve(onApplied({
+            allNodes: data.all_nodes,
+            modifiedNodes,
+            intent,
+            instruction,
+            previousVersionNo: data.previous_version_no,
+            newVersionNo: data.new_version_no,
+          }))
         }
 
+        await this.loadVersionHistory()
         this._persist()
       } catch (e) {
         this.error = e?.message || '修改失败，请重试'
@@ -181,12 +236,13 @@ export const useModifyStore = defineStore('modifyPanel', {
         const resp = await projectModifyApi.rollback(this.projectId, rollbackTo)
         const data = resp.data || resp
         this.redoStack.push(this.currentVersionNo)
+        this.basedOnVersionNo = rollbackTo
         this.currentVersionNo = data.new_version_no || this.currentVersionNo
         this._pushMessage('ai', `↩️ 已回滚到 v${rollbackTo} 的内容（新版本 v${this.currentVersionNo}）`, {
           versionNo: this.currentVersionNo,
         })
         if (typeof onApplied === 'function' && Array.isArray(data.nodes)) {
-          await Promise.resolve(onApplied(data.nodes))
+          await Promise.resolve(onApplied({ allNodes: data.nodes, modifiedNodes: data.nodes, intent: { action: 'rollback', target_ids: [] } }))
         }
         this._persist()
       } catch (e) {
@@ -207,12 +263,13 @@ export const useModifyStore = defineStore('modifyPanel', {
         const resp = await projectModifyApi.rollback(this.projectId, targetNo)
         const data = resp.data || resp
         this.undoStack.push(this.currentVersionNo)
+        this.basedOnVersionNo = targetNo
         this.currentVersionNo = data.new_version_no || this.currentVersionNo
         this._pushMessage('ai', `↪️ 已恢复到 v${targetNo} 的内容（新版本 v${this.currentVersionNo}）`, {
           versionNo: this.currentVersionNo,
         })
         if (typeof onApplied === 'function' && Array.isArray(data.nodes)) {
-          await Promise.resolve(onApplied(data.nodes))
+          await Promise.resolve(onApplied({ allNodes: data.nodes, modifiedNodes: data.nodes, intent: { action: 'rollback', target_ids: [] } }))
         }
         this._persist()
       } catch (e) {
@@ -229,6 +286,11 @@ export const useModifyStore = defineStore('modifyPanel', {
         const resp = await projectModifyApi.versions(this.projectId)
         const data = resp.data || resp
         this.versionHistory = data.items || []
+        const latest = this.versionHistory.reduce((max, item) => Math.max(max, Number(item.version_no || 0)), 0)
+        if (latest > this.currentVersionNo) {
+          this.currentVersionNo = latest
+          this.basedOnVersionNo = Math.max(latest - 1, 0)
+        }
       } catch {
         this.versionHistory = []
       }
@@ -242,6 +304,8 @@ export const useModifyStore = defineStore('modifyPanel', {
             JSON.stringify({
               projectId: this.projectId,
               currentVersionNo: this.currentVersionNo,
+              basedOnVersionNo: this.basedOnVersionNo,
+              pendingClarification: this.pendingClarification,
               messages: this.messages.slice(-30),
             }),
           )

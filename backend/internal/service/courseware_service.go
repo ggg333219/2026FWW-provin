@@ -43,6 +43,10 @@ type CoursewareProject struct {
 
 // coursewareProjectRow —— gorm 表映射。
 type coursewareProjectRow struct {
+	// ID is the canonical key used by the persistent project workspace (A1-A5).
+	// ProjectID is retained for the earlier A6/A7 schema; reads accept either so
+	// projects created by the workspace can enter the AI modification flow.
+	ID          string    `gorm:"column:id;size:36"`
 	ProjectID   string    `gorm:"column:project_id;size:64;primaryKey"`
 	OwnerID     string    `gorm:"column:owner_id;size:64;index"`
 	Title       string    `gorm:"column:title;size:500"`
@@ -662,7 +666,7 @@ func newGormCoursewareStore(db *gorm.DB) *gormCoursewareStore {
 
 func (g *gormCoursewareStore) CreateProject(ctx context.Context, p *CoursewareProject) error {
 	return g.db.WithContext(ctx).Create(&coursewareProjectRow{
-		ProjectID: p.ProjectID, OwnerID: p.OwnerID, Title: p.Title,
+		ID: p.ProjectID, ProjectID: p.ProjectID, OwnerID: p.OwnerID, Title: p.Title,
 		CurrentStep: p.CurrentStep, GenID: p.GenID, Status: p.Status,
 		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	}).Error
@@ -670,14 +674,18 @@ func (g *gormCoursewareStore) CreateProject(ctx context.Context, p *CoursewarePr
 
 func (g *gormCoursewareStore) GetProject(ctx context.Context, projectID string) (*CoursewareProject, error) {
 	var row coursewareProjectRow
-	if err := g.db.WithContext(ctx).Where("project_id = ?", projectID).First(&row).Error; err != nil {
+	if err := g.db.WithContext(ctx).Where("project_id = ? OR id = ?", projectID, projectID).First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrProjectNotFound
 		}
 		return nil, err
 	}
+	resolvedID := row.ProjectID
+	if resolvedID == "" {
+		resolvedID = row.ID
+	}
 	return &CoursewareProject{
-		ProjectID: row.ProjectID, OwnerID: row.OwnerID, Title: row.Title,
+		ProjectID: resolvedID, OwnerID: row.OwnerID, Title: row.Title,
 		CurrentStep: row.CurrentStep, GenID: row.GenID, Status: row.Status,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil
@@ -691,8 +699,12 @@ func (g *gormCoursewareStore) ListProjects(ctx context.Context, ownerID string) 
 	}
 	out := make([]*CoursewareProject, 0, len(rows))
 	for _, r := range rows {
+		resolvedID := r.ProjectID
+		if resolvedID == "" {
+			resolvedID = r.ID
+		}
 		out = append(out, &CoursewareProject{
-			ProjectID: r.ProjectID, OwnerID: r.OwnerID, Title: r.Title,
+			ProjectID: resolvedID, OwnerID: r.OwnerID, Title: r.Title,
 			CurrentStep: r.CurrentStep, GenID: r.GenID, Status: r.Status,
 			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 		})
@@ -708,7 +720,7 @@ func (g *gormCoursewareStore) DeleteProject(ctx context.Context, projectID strin
 		if err := tx.Where("project_id = ?", projectID).Delete(&coursewareDraftRow{}).Error; err != nil {
 			return err
 		}
-		res := tx.Where("project_id = ?", projectID).Delete(&coursewareProjectRow{})
+		res := tx.Where("project_id = ? OR id = ?", projectID, projectID).Delete(&coursewareProjectRow{})
 		if res.Error != nil {
 			return res.Error
 		}
@@ -721,7 +733,7 @@ func (g *gormCoursewareStore) DeleteProject(ctx context.Context, projectID strin
 
 func (g *gormCoursewareStore) UpdateProjectStep(ctx context.Context, projectID, step string) error {
 	res := g.db.WithContext(ctx).Model(&coursewareProjectRow{}).
-		Where("project_id = ?", projectID).
+		Where("project_id = ? OR id = ?", projectID, projectID).
 		Updates(map[string]any{"current_step": step, "updated_at": time.Now()})
 	if res.Error != nil {
 		return res.Error
@@ -734,7 +746,7 @@ func (g *gormCoursewareStore) UpdateProjectStep(ctx context.Context, projectID, 
 
 func (g *gormCoursewareStore) UpdateProjectGenID(ctx context.Context, projectID, genID string) error {
 	res := g.db.WithContext(ctx).Model(&coursewareProjectRow{}).
-		Where("project_id = ?", projectID).
+		Where("project_id = ? OR id = ?", projectID, projectID).
 		Updates(map[string]any{"gen_id": genID, "updated_at": time.Now()})
 	if res.Error != nil {
 		return res.Error
@@ -747,7 +759,7 @@ func (g *gormCoursewareStore) UpdateProjectGenID(ctx context.Context, projectID,
 
 func (g *gormCoursewareStore) UpdateProjectStatus(ctx context.Context, projectID, status string) error {
 	res := g.db.WithContext(ctx).Model(&coursewareProjectRow{}).
-		Where("project_id = ?", projectID).
+		Where("project_id = ? OR id = ?", projectID, projectID).
 		Updates(map[string]any{"status": status, "updated_at": time.Now()})
 	if res.Error != nil {
 		return res.Error

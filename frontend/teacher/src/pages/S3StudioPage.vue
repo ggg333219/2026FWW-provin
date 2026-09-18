@@ -80,7 +80,7 @@
         @apply="handleEvidenceApply"
       />
       <!-- C6: AI 修改对话面板（右侧浮动；projectId 绑定后显示） -->
-      <ModifyPanel class="s3-ai-panel" />
+      <ModifyPanel class="s3-ai-panel" @style-request="handleStyleRequest" />
       <div v-if="currentPhase === 'outline'" class="phase-panel">
         <OutlineEditor
           :session-id="intentStore.sessionId"
@@ -234,11 +234,12 @@
             v-for="page in generationPages"
             :key="page.page_id"
             class="page-item"
-            :class="`page-status-${page.status}`"
+            :class="[`page-status-${page.status}`, { 'page-modified': modifyStore.recentlyModifiedIds.includes(page.node_id) }]"
           >
             <div class="page-item-left">
               <span class="page-order">第 {{ page.page_order }} 页</span>
-              <span class="page-node">关联节点：{{ page.node_id }}</span>
+              <span class="page-node">{{ page.title || page.node_title || `关联节点：${page.node_id}` }}</span>
+              <span v-if="modifyStore.recentlyModifiedIds.includes(page.node_id)" class="changed-badge">已修改</span>
             </div>
             <div class="page-item-right">
               <span class="page-status-badge">{{
@@ -326,7 +327,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import AppShell from "../components/layout/AppShell.vue";
 import OutlineEditor from "../components/teacher/OutlineEditor.vue";
 import ModifyPanel from "../components/teacher/ModifyPanel.vue";
@@ -453,10 +454,24 @@ onMounted(async () => {
 });
 
 watch(() => [outlineStore.nodes, generationStore.currentScriptNodes, templateId.value, palette.value, layoutMode.value, fontFamily.value, density.value], () => projectStore.scheduleSave(draftSnapshot()), { deep: true });
+watch(() => generationStore.currentScriptNodes, (nodes) => {
+  if (!Array.isArray(nodes) || !nodes.length) return;
+  generationPages.value = nodes.map((node, index) => {
+    const existing = generationPages.value.find((page) => page.node_id === node.node_id) || {};
+    return {
+      ...existing,
+      ...node,
+      page_id: existing.page_id || node.page_id || node.node_id || `page_${index + 1}`,
+      page_order: Number(node.page_order || node.order || index + 1),
+      status: node.status || existing.status || 'done',
+    };
+  });
+}, { deep: true });
 watch(() => generationStore.previewHtml, (html) => {
   previewFrameSrc.value = html ? `data:text/html;charset=utf-8,${encodeURIComponent(html)}` : "";
 });
 onBeforeUnmount(() => { projectStore.saveNow(draftSnapshot()).catch(() => {}); });
+onBeforeRouteLeave(async () => { await projectStore.saveNow(draftSnapshot()).catch(() => {}); });
 
 function statusLabel(status) {
   return (
@@ -678,7 +693,17 @@ async function applyPresentationStyle() {
     { genId: "" },
   );
   projectStore.scheduleSave(draftSnapshot(), 0);
-  currentPhase.value = "generating";
+  currentPhase.value = "style";
+}
+
+async function handleStyleRequest({ instruction = '' } = {}) {
+  const text = String(instruction).toLowerCase();
+  if (/商务|business|简洁/.test(text)) { templateId.value = 'deck-swiss-edu'; density.value = 'minimal'; }
+  if (/蓝|blue/.test(text)) palette.value = 'klein-blue';
+  if (/图|视觉|visual/.test(text)) layoutMode.value = 'visual';
+  if (/文字|内容优先/.test(text)) layoutMode.value = 'text';
+  currentPhase.value = 'style';
+  await applyPresentationStyle();
 }
 
 async function handleEvidenceSearch(query) {
@@ -1079,6 +1104,24 @@ function handleError(msg) {
   background: #fff;
   border: 1.5px solid #e2ece6;
   border-radius: 10px;
+}
+.page-item.page-modified {
+  border-color: #24a36f;
+  background: #effdf7;
+  box-shadow: 0 0 0 3px rgba(36, 163, 111, .12);
+  animation: pageModified 2s ease-out;
+}
+.changed-badge {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #24a36f;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+@keyframes pageModified {
+  from { transform: translateY(-2px); }
+  to { transform: translateY(0); box-shadow: none; }
 }
 .page-status-done {
   border-color: #6ee7b7;
