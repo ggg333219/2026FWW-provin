@@ -35,7 +35,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # =============================================================================
@@ -362,6 +362,15 @@ class TeachingNode(BaseModel):
     summary: str = ""
     page_ref: Optional[int] = None
     source_chunk_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("source_chunk_ids", mode="before")
+    @classmethod
+    def normalize_source_chunk_ids(cls, value: Any) -> list[str]:
+        """兼容旧大纲中的 null 引用列表，统一为空列表。"""
+        if value is None:
+            return []
+        return value
+
     core_points: list[str] = Field(default_factory=list)
     """核心要点（与 key_points 等效，兼容旧数据）"""
     examples: list[str] = Field(default_factory=list)

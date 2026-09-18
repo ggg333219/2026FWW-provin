@@ -8,9 +8,15 @@ from ai_engine.generator import LessonGenerator
 from ai_engine.parser import DocumentParser
 from ai_engine.qa import QAResponder, QAConfig
 from ai_engine.reconstructor import LessonReconstructor
+from ai_engine.core.schema import TeachingNode
 
 
 class ParserAndGeneratorTests(unittest.TestCase):
+    def test_teaching_node_normalizes_null_source_chunk_ids(self):
+        node = TeachingNode.model_validate({"node_id": "node_001", "source_chunk_ids": None})
+
+        self.assertEqual(node.source_chunk_ids, [])
+
     def test_pdf_parser_keeps_paragraph_boundaries(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             pdf_path = Path(tmp_dir) / "sample.pdf"
