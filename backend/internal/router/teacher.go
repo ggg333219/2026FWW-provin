@@ -124,6 +124,7 @@ func RegisterNewSkillRoutes(
 	knowledgeHandler *handler.KnowledgeHandler,
 	outlineHandler *handler.OutlineHandler,
 	genHandler *handler.GenerationHandler,
+	interactiveHandler *handler.InteractiveHandler,
 	versionHandler *handler.VersionHandler,
 	exportHandler *handler.ExportHandler,
 	contentHandler *handler.ContentHandler,
@@ -207,6 +208,12 @@ func RegisterNewSkillRoutes(
 		gen.GET("/preview/:gen_id", genHandler.Preview)
 		gen.POST("/modify", genHandler.Modify)
 		gen.POST("/finalize", genHandler.Finalize)
+	}
+	if interactiveHandler != nil {
+		generations := v1.Group("/generations")
+		generations.POST("/:generation_id/nodes/:node_id/interactive", interactiveHandler.Generate)
+		generations.POST("/:generation_id/pages/:page_id/interactive-link", interactiveHandler.LinkToPage)
+		v1.GET("/interactive/assets/:interactive_asset_id", interactiveHandler.Get)
 	}
 
 	// ---- P1: S3 大纲 → 内容生成（独立阶段）----

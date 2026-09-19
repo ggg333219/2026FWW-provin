@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { teacherV1Api } from '../services/v1'
 
+export const AUTH_TOKEN_KEY = 'fuww_teacher_auth_token'
+
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     isLoggedIn: false,
@@ -28,6 +30,8 @@ export const useAuthStore = defineStore('auth', {
         localStorage.setItem('fuww_teacher_logged_in', '1')
         localStorage.setItem('fuww_teacher_username', this.username)
         localStorage.setItem('fuww_teacher_role', this.role)
+        if (user.token) localStorage.setItem(AUTH_TOKEN_KEY, user.token)
+        else localStorage.removeItem(AUTH_TOKEN_KEY)
       }
     },
 
@@ -42,6 +46,7 @@ export const useAuthStore = defineStore('auth', {
         localStorage.removeItem('fuww_teacher_logged_in')
         localStorage.removeItem('fuww_teacher_username')
         localStorage.removeItem('fuww_teacher_role')
+        localStorage.removeItem(AUTH_TOKEN_KEY)
       }
     },
 
@@ -64,11 +69,12 @@ export const useAuthStore = defineStore('auth', {
       const loggedIn = localStorage.getItem('fuww_teacher_logged_in')
       const username = localStorage.getItem('fuww_teacher_username')
       const role = localStorage.getItem('fuww_teacher_role')
+      const token = localStorage.getItem(AUTH_TOKEN_KEY)
       if (loggedIn && username) {
         this.isLoggedIn = true
         this.username = username
         this.role = role || 'teacher'
-        this.token = `local_${Date.now()}`
+        this.token = token || `local_${Date.now()}`
         return true
       }
       return false

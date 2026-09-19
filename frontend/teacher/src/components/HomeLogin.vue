@@ -318,7 +318,12 @@ const handleLogin = async () => {
       throw new Error(payload.message || `登录失败 (${res.status})`)
     }
     const data = payload.data || {}
-    emit('login-success', { username: data.username || username.value, role: data.role || 'teacher' })
+    emit('login-success', {
+      username: data.username || username.value,
+      role: data.role || 'teacher',
+      userId: String(data.id || ''),
+      token: data.authToken || ''
+    })
   } catch (err) {
     if (String(err?.message || '').includes('Failed to fetch')) {
       try {
