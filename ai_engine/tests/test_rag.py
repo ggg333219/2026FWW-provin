@@ -47,7 +47,10 @@ class TestDocumentChunker(unittest.TestCase):
         chunks = chunker.chunk_text(text, source_ref="test", source_type=SourceType.TEXT)
         self.assertGreaterEqual(len(chunks), 1)
         for c in chunks:
-            self.assertTrue(c.chunk_id.startswith("chunk_"))
+            # chunk_id 改为基于 (source_ref, seq_index) 的确定性 ID；
+            # 测试用例源是单测期间的稳定字符串，确保格式可断言。
+            # 详细不变量见 TestChunkIdDeterminism。
+            self.assertRegex(c.chunk_id, r"^test::s\d{4}$", msg=f"非确定性 chunk_id: {c.chunk_id}")
             self.assertEqual(c.source_type, SourceType.TEXT)
             self.assertEqual(c.source_ref, "test")
 
@@ -706,6 +709,207 @@ class TestS2ToKBBridge(unittest.TestCase):
 
         # 清理
         _session_parsed_chunks.pop(session_id, None)
+
+
+# =============================================================================
+# 9. SearchRequest 默认值（min_score 修复）
+# =============================================================================
+
+class TestSearchRequestDefaults(unittest.TestCase):
+    """SearchRequest 默认值回归测试。
+
+    历史：旧版 min_score 默认 0.6 偏高，用户侧易误判"知识库没生效"。
+    修复后默认值降到 0.2，且 SearchRequest 接受 0-1 间任意阈值覆盖。
+    """
+
+    def test_min_score_default_is_lowered(self):
+        from ai_engine.core.schema import SearchRequest
+        req = SearchRequest(query="hello")
+        self.assertEqual(req.min_score, 0.2)
+
+    def test_min_score_override_accepted(self):
+        from ai_engine.core.schema import SearchRequest
+        req = SearchRequest(query="hello", min_score=0.5)
+        self.assertEqual(req.min_score, 0.5)
+
+    def test_min_score_zero_means_no_filter(self):
+        """min_score=0 应被允许（用于调试与 RAG 召回探查）。"""
+        from ai_engine.core.schema import SearchRequest
+        req = SearchRequest(query="hello", min_score=0.0)
+        self.assertEqual(req.min_score, 0.0)
+
+
+# =============================================================================
+# 10. chunker chunk_id 确定性（idempotent 灌库前置）
+# =============================================================================
+
+class TestChunkIdDeterminism(unittest.TestCase):
+    """chunk_id 必须是 (source_ref, seq_index) 决定，与执行次数无关。
+
+    这是 idempotent 灌库的前置条件：每次启动语料扫描必须复用同一组
+    chunk_id，否则 store.insert_batch 会累积重复切片。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from ai_engine.rag.chunker import DocumentChunker
+        cls.DocumentChunker = DocumentChunker
+
+    def test_same_source_ref_produces_same_chunk_id(self):
+        """同 source_ref + 文本 → 同 chunk_id 序列。"""
+        chunker = self.DocumentChunker()
+        text = "段落1\n\n段落2\n\n段落3"
+        chunks1 = chunker.chunk_text(text, source_ref="教材.pdf", source_type=SourceType.PDF)
+        chunks2 = chunker.chunk_text(text, source_ref="教材.pdf", source_type=SourceType.PDF)
+        ids1 = [c.chunk_id for c in chunks1]
+        ids2 = [c.chunk_id for c in chunks2]
+        self.assertEqual(ids1, ids2, msg="同输入两次必须产出同 chunk_id")
+
+    def test_different_seq_produces_different_id(self):
+        """同 source_ref 不同 seq_index 必须产生不同 chunk_id。
+
+        PARAGRAPH 默认 chunk_size=512 token。短文本会被合并成 1 个窗口，
+        所以必须给出能突破窗口大小的输入才能产生 ≥2 个 chunk。
+        """
+        from ai_engine.rag.chunker import ChunkingStrategy
+        # 用 WINDOW 策略 + 小 chunk_size，强制分出多块
+        chunker = self.DocumentChunker(
+            strategy=ChunkingStrategy.WINDOW, chunk_size=64, overlap=8,
+        )
+        paragraphs = [f"第{i}段内容：" + "x" * 80 for i in range(12)]
+        ids = [c.chunk_id for c in chunker.chunk_text(
+            "\n\n".join(paragraphs), source_ref="y", source_type=SourceType.TEXT,
+        )]
+        self.assertGreaterEqual(len(ids), 2, msg=f"期望 ≥2 chunks，实际 {len(ids)}")
+        # 同 source_ref 但不同 seq_index → 必须产生不同 chunk_id
+        self.assertEqual(len(set(ids)), len(ids), msg=f"chunk_id 出现重复: {ids}")
+
+    def test_chunk_id_uses_safe_chars(self):
+        """chunk_id 仅含 [A-Za-z0-9._-] + ::s + 数字；避免 PG/Redis 解析异常。"""
+        chunker = self.DocumentChunker()
+        # 故意用含空格、中文、特殊字符的 source_ref
+        weird_ref = r"D:\path\to\file 1 (中文).pdf"
+        chunks = chunker.chunk_text("内容", source_ref=weird_ref, source_type=SourceType.PDF)
+        for c in chunks:
+            self.assertRegex(
+                c.chunk_id, r"^[A-Za-z0-9._\-]+::s\d{4}$",
+                msg=f"非安全字符 chunk_id: {c.chunk_id!r}",
+            )
+
+    def test_chunk_id_within_64_chars(self):
+        """chunk_id 必须 ≤64 chars（PG VARCHAR(64) 列宽限制）。"""
+        chunker = self.DocumentChunker()
+        chunks = chunker.chunk_text(
+            "内容", source_ref="a" * 200 + ".pdf", source_type=SourceType.PDF
+        )
+        for c in chunks:
+            self.assertLessEqual(len(c.chunk_id), 64, msg=f"超长 chunk_id: {c.chunk_id!r}")
+
+    def test_chunk_id_no_random_per_call(self):
+        """两次调用不应出现 chunk_{uuid} 形式的随机 ID（旧版格式）。"""
+        import re as _re
+        chunker = self.DocumentChunker()
+        ids = [c.chunk_id for c in chunker.chunk_text("a\n\nb", source_ref="x", source_type=SourceType.TEXT)]
+        for cid in ids:
+            self.assertNotRegex(cid, r"^chunk_[0-9a-f]{12}$", msg=f"仍含随机 chunk_id: {cid}")
+
+
+# =============================================================================
+# 11. InMemoryVectorStore: idempotent upsert + list_chunk_ids 抽象方法
+# =============================================================================
+
+class TestInMemoryStoreUpsertAndListIds(unittest.TestCase):
+    """幂等 upsert：同 chunk_id 二次 insert 不应产生重复切片。
+
+    与此前的实现差异：旧 insert_batch 直接覆盖 self._chunks[key]，但
+    新增 _doc_chunks 追加新 doc_id 映射，会导致 list_documents() 返回
+    多次同名文档。本次测试同时覆盖 list_chunk_ids(doc_id) 这条新抽象
+    接口（为 PGVectorStore 接入做准备）。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from ai_engine.rag.store import InMemoryVectorStore, VectorStore
+        cls.InMemoryVectorStore = InMemoryVectorStore
+        cls.VectorStore = VectorStore
+
+    def setUp(self):
+        self.store = self.InMemoryVectorStore()
+
+    def _make_chunk(self, cid, content="hi", embedding=None):
+        return Chunk(
+            chunk_id=cid, source_type=SourceType.TEXT, source_ref="src",
+            content=content, embedding=embedding or [0.1] * 1024,
+        )
+
+    def test_insert_batch_is_idempotent(self):
+        """同 chunk_id 二次 insert_batch：count 不变、最新内容胜出。"""
+        ch = self._make_chunk("abc::s0001", content="first")
+        self.store.insert_batch([ch], doc_id="doc1")
+        self.assertEqual(self.store.count(), 1)
+
+        ch2 = self._make_chunk("abc::s0001", content="second")
+        self.store.insert_batch([ch2], doc_id="doc2")
+        # count 不变（幂等）；最新内容胜出
+        self.assertEqual(self.store.count(), 1)
+        fetched = self.store.get_chunk("abc::s0001")
+        self.assertEqual(fetched.content, "second")
+
+    def test_insert_batch_idempotent_keeps_single_doc_view(self):
+        """二次灌同源 → count 不变；list_documents 列出两个 doc 但 chunk 不重复。"""
+        chunks = [self._make_chunk(f"src::s{i:04d}", content=f"c{i}") for i in range(3)]
+        self.store.insert_batch(chunks, doc_id="doc1")
+        self.store.insert_batch(chunks, doc_id="doc2")  # 同 chunk_ids
+        self.assertEqual(self.store.count(), 3)
+        self.assertEqual(len(self.store.list_documents()), 2)
+
+    def test_list_chunk_ids_returns_chunk_ids_for_doc(self):
+        """list_chunk_ids(doc_id) 返回该 doc 下的 chunk_id 列表。"""
+        chunks = [self._make_chunk(f"x::s{i:04d}", content=f"c{i}") for i in range(3)]
+        self.store.insert_batch(chunks, doc_id="doc1")
+        ids = self.store.list_chunk_ids("doc1")
+        self.assertEqual(sorted(ids), ["x::s0000", "x::s0001", "x::s0002"])
+
+    def test_list_chunk_ids_unknown_doc_returns_empty(self):
+        """list_chunk_ids 不存在的 doc 返回空列表（不抛异常）。"""
+        self.assertEqual(self.store.list_chunk_ids("ghost_doc"), [])
+
+    def test_list_chunk_ids_is_abstract_on_vector_store(self):
+        """list_chunk_ids 必须是 VectorStore 抽象方法 —— PG 实现必须实现。"""
+        self.assertTrue(
+            hasattr(self.VectorStore, "list_chunk_ids"),
+            msg="VectorStore 必须暴露 list_chunk_ids 抽象方法",
+        )
+        # VectorStore 本身应仍是抽象类（不能直接实例化）
+        import inspect
+        self.assertTrue(inspect.isabstract(self.VectorStore))
+
+    def test_rebuild_bm25_does_not_touch_private_attr(self):
+        """HybridRetriever.rebuild_bm25 不再读取 store._doc_chunks 私有属性。
+
+        旧实现 hasattr(store, '_doc_chunks') 摸私有属性，PG 接入后返回
+        空导致 BM25 静默退化。新实现应通过抽象 list_chunk_ids(doc_id) 拿。
+        """
+        from ai_engine.rag.retrieve import HybridRetriever
+        from ai_engine.rag.embed import EmbeddingService
+
+        # 1. 先正常灌入 chunks（走 insert_batch 接口）
+        chunks = [
+            self._make_chunk(f"y::s{i:04d}", content=f"排序算法内容 {i}")
+            for i in range(5)
+        ]
+        self.store.insert_batch(chunks, doc_id="doc1")
+
+        # 2. 模拟 PG 实现：抹掉私有 _doc_chunks，让旧 hasattr 分支退化
+        #    （旧实现走 hasattr 摸私有属性 → BM25 索引为空 → 静默失败）
+        if hasattr(self.store, "_doc_chunks"):
+            del self.store._doc_chunks  # 让 hasattr 返回 False
+
+        # 3. rebuild_bm25 / search 应仍能正常返回结果
+        retriever = HybridRetriever(store=self.store, embed_service=EmbeddingService())
+        retriever.rebuild_bm25()  # 不应抛 AttributeError 或退化
+        results = retriever.search("排序算法", top_k=3, min_score=0.0)
+        self.assertGreater(len(results), 0, msg="BM25 应能通过 list_chunk_ids 重建索引")
 
 
 if __name__ == "__main__":

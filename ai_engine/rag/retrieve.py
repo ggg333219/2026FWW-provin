@@ -296,13 +296,11 @@ class HybridRetriever:
     # ---- 内部 ----
 
     def _get_doc_chunk_ids(self, doc_id: str) -> list[str]:
-        """获取文档下所有 chunk ID。HACK: 通过遍历 store 内部实现。"""
-        # InMemoryVectorStore 暴露了 _doc_chunks，但 VectorStore 接口没有
-        # 这里通过 list_documents + 内部属性访问
-        if hasattr(self.store, '_doc_chunks'):
-            return list(self.store._doc_chunks.get(doc_id, []))
-        # 回退：无法获取，BM25 索引为空
-        return []
+        """获取文档下所有 chunk ID。"""
+        # 通过抽象接口 list_chunk_ids(doc_id) 拿，InMemory / PGVectorStore 都实现。
+        # 旧实现 hasattr(self.store, '_doc_chunks') 摸 InMemory 私有属性，PG 接入
+        # 后直接返回空 → BM25 索引为空，混合检索静默退化为纯向量（带 cache）。
+        return self.store.list_chunk_ids(doc_id)
 
     def _bm25_scores(self, query: str) -> dict[str, float]:
         """计算 BM25 分数，返回 {chunk_id: normalized_score}。"""

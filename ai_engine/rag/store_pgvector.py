@@ -384,6 +384,22 @@ class PGVectorStore(VectorStore):
         finally:
             cur.close()
 
+    def list_chunk_ids(self, doc_id: str) -> list[str]:
+        """按 doc_id 列出该文档下的所有 chunk_id。
+
+        对不存在的 doc_id 返回空列表（SELECT 无行 → []）。
+        用于 BM25 重建等需要枚举分块的场景。
+        """
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                f"SELECT chunk_id FROM {self._t('rag_chunks')} WHERE doc_id = %s",
+                (doc_id,),
+            )
+            return [r[0] for r in cur.fetchall()]
+        finally:
+            cur.close()
+
     def close(self) -> None:
         """关闭数据库连接。"""
         if self._conn and not self._conn.closed:

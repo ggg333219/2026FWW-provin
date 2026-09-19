@@ -110,7 +110,7 @@ async def rag_search(req: SearchRequest):
         results = retriever.search(
             query=req.query.strip(),
             top_k=req.top_k or 5,
-            min_score=req.min_score or 0.6,
+            min_score=req.min_score or 0.2,
             knowledge_base_ids=req.knowledge_base_ids or None,
             scope=scope,
             node_id=req.node_id,

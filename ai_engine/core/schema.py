@@ -586,10 +586,18 @@ class SearchRequest(BaseModel):
     query: str = ""
     knowledge_base_ids: list[str] = Field(default_factory=list)
     top_k: int = 5
-    min_score: float = 0.6
+    min_score: float = 0.2
+    """相似度阈值，低于此分数的 chunk 不返回。默认 0.2（之前为 0.6 偏高，在 bm25
+    兜底路径或弱 embedding 场景下会把所有候选过滤掉，导致 RAG 静默失效）。"""
+
     scope: str = "course"
+    """检索作用域: course（默认，全库）/ node（限定 node_id）/ page（限定 page_id）。"""
+
     node_id: Optional[str] = None
+    """scope=node 时必填；元数据中含 node_id 的 chunk 才会返回。"""
+
     page_id: Optional[str] = None
+    """scope=page 时必填；元数据中含 page_id 的 chunk 才会返回。"""
 
 
 class SearchResponse(BaseModel):
