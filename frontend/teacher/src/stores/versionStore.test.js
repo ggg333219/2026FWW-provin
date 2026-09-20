@@ -17,7 +17,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 beforeEach(() => {
   const localStorage = createStorage()
   globalThis.window = { localStorage }
-  // 后端不可达 → requestJson 回退 Mock（/api/v1/export + /api/v1/export/status）
+  // 后端不可达 → requestJson 回退 Mock（契约路径 /api/v1/exp）
   globalThis.fetch = () => Promise.reject(new Error('backend unreachable'))
   setActivePinia(createPinia())
 })
@@ -67,6 +67,14 @@ describe('versionStore S4 导出闭环（Mock）', () => {
     expect(store.exportStatus).toBe('done')
     // Mock 用版本快照节点生成最小 PPTX 并以 Blob URL 返回，保证「下载文件」可点开
     expect(store.exportDownloadUrl.startsWith('blob:')).toBe(true)
+  })
+
+  it('导出创建响应符合契约：文件名、标题和版本号完整', async () => {
+    const response = await teacherV1Api.version.exportCreate('gen_contract', 'pptx', 3, 'TCP三次握手课件')
+    expect(response.ok).toBe(true)
+    expect(response.data.filename).toBe('TCP三次握手课件_v3.pptx')
+    expect(response.data.courseware_title).toBe('TCP三次握手课件')
+    expect(response.data.version_no).toBe(3)
   })
 
   it('同时导出返回 PPTX、DOCX、HTML5 三个独立下载入口', async () => {

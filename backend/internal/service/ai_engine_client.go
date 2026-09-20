@@ -756,14 +756,17 @@ type ExportCreateRequest struct {
 
 type ExportCreateResponse struct {
 	JobID           string   `json:"job_id"`
+	Filename        string   `json:"filename,omitempty"`
 	Status          string   `json:"status"`
 	CoursewareTitle string   `json:"courseware_title,omitempty"`
 	Version         int      `json:"version,omitempty"`
+	VersionNo       int      `json:"version_no,omitempty"`
 	Formats         []string `json:"formats,omitempty"`
 }
 
 type ExportStatusResponse struct {
 	JobID       string `json:"job_id"`
+	Filename    string `json:"filename,omitempty"`
 	Status      string `json:"status"`
 	DownloadURL string `json:"download_url,omitempty"`
 	Error       string `json:"error,omitempty"`
@@ -773,6 +776,7 @@ type ExportStatusResponse struct {
 	FileSize        int64             `json:"file_size,omitempty"`
 	CoursewareTitle string            `json:"courseware_title,omitempty"`
 	Version         int               `json:"version,omitempty"`
+	VersionNo       int               `json:"version_no,omitempty"`
 	Files           map[string]string `json:"files,omitempty"`
 }
 

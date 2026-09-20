@@ -523,7 +523,7 @@ function buildDefaultStore() {
 }
 
 function ok(data) {
-  return { code: 200, message: 'ok (mock)', data }
+  return { ok: true, data, error: '', code: 200, message: 'ok (mock)' }
 }
 
 // ================================================================
@@ -3245,17 +3245,27 @@ ${slides}
     // export API（S4 异步导出）
     // ================================================================
 
-    if (pathname.startsWith('/api/v1/export/') && method === 'POST') {
+    if ((pathname.startsWith('/api/v1/exp/') || pathname.startsWith('/api/v1/export/')) && method === 'POST') {
       const segments = pathname.split('/').filter(Boolean)
       const genId = segments[3] || ''
       const body = parseJsonBody(options)
       const jobId = uid('exp')
+      const format = body.format || 'pptx'
+      const versionNo = Number(body.version || store.versionSnapshots?.[genId]?.at(-1)?.version_number || 1)
+      const coursewareTitle = cleanText(body.courseware_title) || '课件'
+      const extension = format === 'docx' || format === 'lesson_plan' ? 'docx' : (format === 'interactive' ? 'html' : 'pptx')
+      const safeTitle = coursewareTitle.replace(/[\\/:*?"<>|]/g, '_').replace(/[. ]+$/g, '') || '课件'
+      const filename = `${safeTitle}_v${versionNo}.${extension}`
 
       store.exportJobs = store.exportJobs || {}
       store.exportJobs[jobId] = {
         job_id: jobId,
         generation_id: genId,
-        format: body.format || 'pptx',
+        format,
+        filename,
+        courseware_title: coursewareTitle,
+        version: versionNo,
+        version_no: versionNo,
         status: 'pending',
         download_url: '',
         error: null,
@@ -3275,13 +3285,17 @@ ${slides}
       persistMockStore()
       return ok({
         job_id: jobId,
+        filename,
+        courseware_title: coursewareTitle,
+        version: versionNo,
+        version_no: versionNo,
         status: 'pending',
         download_url: null,
         error: null
       })
     }
 
-    if (pathname.startsWith('/api/v1/export/status/') && method === 'GET') {
+    if ((pathname.startsWith('/api/v1/exp/status/') || pathname.startsWith('/api/v1/export/status/')) && method === 'GET') {
       const jobId = decodeURIComponent(pathname.split('/').pop() || '')
       const job = store.exportJobs?.[jobId]
       if (!job) {
@@ -3302,6 +3316,10 @@ ${slides}
         : {}
       return ok({
         job_id: job.job_id,
+        filename: job.filename,
+        courseware_title: job.courseware_title,
+        version: job.version,
+        version_no: job.version_no,
         status: job.status,
         download_url: downloadUrl,
         files,

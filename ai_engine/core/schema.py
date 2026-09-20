@@ -690,6 +690,7 @@ class ExportRequest(BaseModel):
 
 class ExportStatusResponse(BaseModel):
     job_id: str = ""
+    filename: str = ""
     status: ExportStatus = ExportStatus.PENDING
     download_url: Optional[str] = None
     error: Optional[str] = None
@@ -699,4 +700,5 @@ class ExportStatusResponse(BaseModel):
     file_size: Optional[int] = None
     courseware_title: Optional[str] = None
     version: Optional[int] = None
+    version_no: Optional[int] = None
     files: dict[str, str] = Field(default_factory=dict)

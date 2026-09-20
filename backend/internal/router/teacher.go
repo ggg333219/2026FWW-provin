@@ -244,6 +244,13 @@ func RegisterNewSkillRoutes(
 		exp.GET("/status/:job_id", exportHandler.Status)
 		exp.GET("/download/:job_id/:extension", exportHandler.Download)
 	}
+	// S2S3 新功能接口契约 v1.0：/exp 为规范路径；/export 保留一个迭代周期兼容旧前端。
+	contractExp := v1.Group("/exp")
+	{
+		contractExp.POST("/:gen_id", exportHandler.Create)
+		contractExp.GET("/status/:job_id", exportHandler.Status)
+		contractExp.GET("/download/:job_id/:extension", exportHandler.Download)
+	}
 	canonicalExports := v1.Group("/generations")
 	canonicalExports.Use(handler.JWTAuthMiddleware())
 	canonicalExports.POST("/:generation_id/exports", exportHandler.CreateV2)

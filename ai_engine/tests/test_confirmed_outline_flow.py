@@ -200,6 +200,36 @@ def test_gen_finalize_with_existing_generation_id():
     assert body["version_number"] == 1
 
 
+def test_exp_contract_returns_versioned_filename():
+    """契约路径 /exp 返回 filename/courseware_title/version_no，旧字段仍保留。"""
+    import uuid
+    generation_id = f"course_export_{uuid.uuid4().hex[:8]}"
+    finalized = client.post("/api/v1/gen/finalize", json={
+        "generation_id": generation_id,
+        "nodes": [{
+            "node_id": "node_tcp",
+            "title": "TCP 三次握手",
+            "node_type": "slide",
+            "content": "SYN、SYN-ACK、ACK",
+            "summary": "TCP 建连过程",
+        }],
+    })
+    assert finalized.status_code == 200
+
+    exported = client.post(f"/api/v1/exp/{generation_id}", json={
+        "format": "pptx",
+        "version": 1,
+        "courseware_title": "TCP三次握手课件",
+    })
+
+    assert exported.status_code == 200
+    body = exported.json()
+    assert body["filename"] == "TCP三次握手课件_v1.pptx"
+    assert body["courseware_title"] == "TCP三次握手课件"
+    assert body["version_no"] == 1
+    assert body["version"] == 1
+
+
 def test_gen_modify_supports_content_task_ids():
     """测试 /api/v1/gen/modify 支持以 content_ 开头的任务 ID（内容修改场景）。"""
     import ai_engine.main as main_module

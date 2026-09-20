@@ -1805,6 +1805,17 @@ _export_tasks: dict[str, ExportJob] = {}
 _export_lock = asyncio.Lock()
 
 
+def _export_contract_filename(courseware_title: str, version: int, fmt: ExportFormat) -> str:
+    safe_title = "".join("_" if ch in '\\/:*?\"<>|' else ch for ch in courseware_title).strip(" .") or "课件"
+    extension = {
+        ExportFormat.DOCX: "docx",
+        ExportFormat.LESSON_PLAN: "docx",
+        ExportFormat.INTERACTIVE: "html",
+    }.get(fmt, "pptx")
+    return f"{safe_title}_v{version}.{extension}"
+
+
+@app.post("/api/v1/exp/{gen_id}", response_model=ExportStatusResponse)
 @app.post("/api/v1/export/{gen_id}", response_model=ExportStatusResponse)
 async def export_create(gen_id: str, req: ExportRequest):
     """
@@ -1831,6 +1842,11 @@ async def export_create(gen_id: str, req: ExportRequest):
         format=req.format,
         version=selected_version,
         status=ExportStatus.PENDING,
+        metadata={
+            "courseware_title": courseware_title,
+            "version": selected_version,
+            "filename": _export_contract_filename(courseware_title, selected_version, req.format),
+        },
         created_at=datetime.now(),
     )
 
@@ -1858,11 +1874,13 @@ async def export_create(gen_id: str, req: ExportRequest):
 
     return ExportStatusResponse(
         job_id=job_id,
+        filename=job.metadata["filename"],
         status=ExportStatus.PENDING,
         download_url=None,
         error=None,
         courseware_title=courseware_title,
         version=selected_version,
+        version_no=selected_version,
     )
 
 
@@ -1982,6 +2000,7 @@ async def _run_export(
             _export_tasks[job_id] = job
 
 
+@app.get("/api/v1/exp/status/{job_id}", response_model=ExportStatusResponse)
 @app.get("/api/v1/export/status/{job_id}", response_model=ExportStatusResponse)
 async def export_status(job_id: str):
     """
@@ -2010,6 +2029,9 @@ async def export_status(job_id: str):
     meta = job.metadata or {}
     return ExportStatusResponse(
         job_id=job.job_id,
+        filename=meta.get("filename") or _export_contract_filename(
+            meta.get("courseware_title") or "课件", int(meta.get("version") or job.version or 1), job.format,
+        ),
         status=job.status,
         download_url=download_url,
         error=job.error,
@@ -2018,6 +2040,7 @@ async def export_status(job_id: str):
         file_size=job.file_size,
         courseware_title=meta.get("courseware_title") or "课件",
         version=int(meta.get("version") or job.version or 1),
+        version_no=int(meta.get("version") or job.version or 1),
         files=files,
     )
 
@@ -2048,7 +2071,7 @@ async def export_download(job_id: str, extension: str):
     return FileResponse(
         path,
         media_type=media_types[extension.lower()],
-        filename=f"{safe_title}-v{version}.{extension.lower()}",
+        filename=f"{safe_title}_v{version}.{extension.lower()}",
     )
 
 
