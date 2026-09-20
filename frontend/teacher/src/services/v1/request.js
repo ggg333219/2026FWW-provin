@@ -10,6 +10,7 @@ const REQUEST_TIMEOUT_MS = 10000
 
 // Mock 模式下探测后端健康检查的节流窗口：探测失败后 8s 内不再重复探测。
 const PROBE_TTL_MS = 8000
+const AUTH_TOKEN_KEY = 'fuww_teacher_auth_token'
 
 let lastProbeFailedAt = 0
 
@@ -85,6 +86,14 @@ export async function requestJson(path, options = {}) {
 
   try {
     const { timeoutMs = REQUEST_TIMEOUT_MS, ...fetchOptions } = options
+    const authToken = typeof window !== 'undefined'
+      ? window.localStorage.getItem(AUTH_TOKEN_KEY)
+      : null
+    const headers = new Headers(fetchOptions.headers || {})
+    if (authToken && !authToken.startsWith('local_') && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${authToken}`)
+    }
+    fetchOptions.headers = headers
     const isMultipart = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData
     const controller = new AbortController()
     const timer = isMultipart

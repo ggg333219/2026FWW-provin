@@ -16,13 +16,14 @@ export const teacherInteractiveApi = {
    * POST /api/v1/generations/{generation_id}/nodes/{node_id}/interactive
    * 生成 HTML5 互动资源（规范 3.11）
    */
-  generate: ({ generation_id, node_id, interactive_plan } = {}) =>
+  generate: ({ generation_id, node_id, node, interactive_plan } = {}) =>
     requestJson(
       `/api/v1/generations/${encodeURIComponent(generation_id)}/nodes/${encodeURIComponent(node_id)}/interactive`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          node: node || {},
           interactive_plan: interactive_plan || {
             enabled: true,
             kind: 'quiz',

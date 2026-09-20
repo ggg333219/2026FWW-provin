@@ -274,6 +274,26 @@ class TestInMemoryVectorStore(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0].chunk.chunk_id, "c_pdf")
 
+    def test_hybrid_retriever_filters_knowledge_base(self):
+        from ai_engine.rag.retrieve import HybridRetriever
+
+        class _Embed:
+            def embed_text(self, _query):
+                return [1.0] * 1024
+
+        kb_a = self._make_chunk("kb-a", "alpha", embedding=[1.0] * 1024)
+        kb_a.metadata = {"knowledge_base_id": "kb_a"}
+        kb_b = self._make_chunk("kb-b", "beta", embedding=[1.0] * 1024)
+        kb_b.metadata = {"knowledge_base_id": "kb_b"}
+        self.store.insert_batch([kb_a], doc_id="doc_a")
+        self.store.insert_batch([kb_b], doc_id="doc_b")
+
+        retriever = HybridRetriever(store=self.store, embed_service=_Embed())
+        results = retriever.search("alpha", top_k=5, min_score=0.0, knowledge_base_ids=["kb_b"])
+
+        self.assertTrue(results)
+        self.assertTrue(all(item.metadata["knowledge_base_id"] == "kb_b" for item in results))
+
     def test_delete_by_doc(self):
         """按文档 ID 删除。"""
         chunks = [self._make_chunk(f"c{i}", f"content-{i}") for i in range(5)]

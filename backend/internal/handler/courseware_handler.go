@@ -209,15 +209,21 @@ func (h *CoursewareHandler) ModifyHistory(c *gin.Context) {
 		ModifyInstruction string                     `json:"modify_instruction"`
 		CreatedAt         string                     `json:"created_at"`
 		Nodes             []service.TeachingNodeItem `json:"nodes"`
+		Presentation      map[string]string          `json:"presentation,omitempty"`
 	}
 	items := make([]versionItem, 0, len(versions))
 	for _, v := range versions {
 		var nodes []service.TeachingNodeItem
 		_ = json.Unmarshal([]byte(v.NodesJSON), &nodes)
+		var presentation map[string]string
+		if v.PresentationJSON != "" {
+			_ = json.Unmarshal([]byte(v.PresentationJSON), &presentation)
+		}
 		items = append(items, versionItem{
 			VersionID: v.VersionID, VersionNo: v.VersionNo,
 			ModifyInstruction: v.ModifyInstr, CreatedAt: v.CreatedAt.Format("2006-01-02 15:04:05"),
-			Nodes: nodes,
+			Nodes:        nodes,
+			Presentation: presentation,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"items": items}})

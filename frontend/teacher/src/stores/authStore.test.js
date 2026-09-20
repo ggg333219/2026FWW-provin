@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { teacherV1Api } from '../services/v1'
-import { useAuthStore } from './authStore'
+import { AUTH_TOKEN_KEY, useAuthStore } from './authStore'
 
 function createStorage() {
   const data = new Map()
@@ -60,5 +60,23 @@ describe('authStore 后端状态', () => {
 
     expect(store.backendStatus).toBe('online')
     expect(window.localStorage.getItem('fuww_mock_mode')).toBe(null)
+  })
+
+  it('登录后保存真实 JWT，刷新会话时恢复同一个 JWT', async () => {
+    const store = useAuthStore()
+    await store.login({ username: 'teacher', role: 'teacher', userId: '7', token: 'jwt-token' })
+
+    expect(window.localStorage.getItem(AUTH_TOKEN_KEY)).toBe('jwt-token')
+    store.$reset()
+    expect(store.restoreSession()).toBe(true)
+    expect(store.token).toBe('jwt-token')
+  })
+
+  it('退出登录会清理 JWT', async () => {
+    const store = useAuthStore()
+    await store.login({ username: 'teacher', token: 'jwt-token' })
+    store.logout()
+
+    expect(window.localStorage.getItem(AUTH_TOKEN_KEY)).toBe(null)
   })
 })

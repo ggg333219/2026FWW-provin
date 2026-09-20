@@ -129,14 +129,15 @@ function nodesForApi() {
     estimated_duration_minutes: n.estimated_duration_minutes || 5,
     citation_refs: n.citation_refs || [],
     source_chunk_ids: n.source_chunk_ids || [],
+    metadata: n.metadata || {},
   }))
 }
 
 // 生成后优先写回 PPT 节点并用 inline 节点刷新预览；生成前才回写大纲。
-async function applyResult({ allNodes, modifiedNodes, intent, instruction }) {
+async function applyResult({ allNodes, modifiedNodes, intent, instruction, presentation }) {
   if (!Array.isArray(allNodes)) return
   if (intent?.action === 'restyle' || intent?.target_type === 'style') {
-    emit('style-request', { instruction, intent })
+    emit('style-request', { instruction, intent, presentation })
     return
   }
   const current = liveNodes.value || []

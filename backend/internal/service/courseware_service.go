@@ -61,21 +61,23 @@ func (coursewareProjectRow) TableName() string { return "courseware_projects" }
 
 // CoursewareVersion —— 版本快照（A6）。
 type CoursewareVersion struct {
-	VersionID   string    `json:"version_id"`
-	ProjectID   string    `json:"project_id"`
-	VersionNo   int       `json:"version_no"`
-	NodesJSON   string    `json:"-"` // 原始 JSON（内部）
-	ModifyInstr string    `json:"modify_instruction"`
-	CreatedAt   time.Time `json:"created_at"`
+	VersionID        string    `json:"version_id"`
+	ProjectID        string    `json:"project_id"`
+	VersionNo        int       `json:"version_no"`
+	NodesJSON        string    `json:"-"` // 原始 JSON（内部）
+	PresentationJSON string    `json:"-"` // 修改前的 PPT 呈现层快照
+	ModifyInstr      string    `json:"modify_instruction"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type coursewareVersionRow struct {
-	VersionID   string    `gorm:"column:version_id;size:64;primaryKey"`
-	ProjectID   string    `gorm:"column:project_id;size:64;index"`
-	VersionNo   int       `gorm:"column:version_no"`
-	NodesJSON   string    `gorm:"column:nodes_snapshot;type:text"`
-	ModifyInstr string    `gorm:"column:modify_instruction;size:1000"`
-	CreatedAt   time.Time `gorm:"column:created_at"`
+	VersionID        string    `gorm:"column:version_id;size:64;primaryKey"`
+	ProjectID        string    `gorm:"column:project_id;size:64;index"`
+	VersionNo        int       `gorm:"column:version_no"`
+	NodesJSON        string    `gorm:"column:nodes_snapshot;type:text"`
+	PresentationJSON string    `gorm:"column:presentation_snapshot;type:text"`
+	ModifyInstr      string    `gorm:"column:modify_instruction;size:1000"`
+	CreatedAt        time.Time `gorm:"column:created_at"`
 }
 
 func (coursewareVersionRow) TableName() string { return "courseware_versions" }
@@ -95,14 +97,15 @@ func (coursewareDraftRow) TableName() string { return "courseware_drafts" }
 // =============================================================================
 
 type ModifyIntent struct {
-	TargetType            string   `json:"target_type"` // node | page | global | style
-	TargetIDs             []string `json:"target_ids"`
-	Action                string   `json:"action"` // simplify|expand|delete|add|reorder|restyle|rewrite
-	SecondaryActions      []string `json:"secondary_actions"`
-	Constraints           []string `json:"constraints"`
-	Confidence            float64  `json:"confidence"`
-	ClarificationNeeded   bool     `json:"clarification_needed"`
-	ClarificationQuestion string   `json:"clarification_question"`
+	TargetType            string            `json:"target_type"` // node | page | global | style
+	TargetIDs             []string          `json:"target_ids"`
+	Action                string            `json:"action"` // simplify|expand|delete|add|reorder|restyle|rewrite
+	SecondaryActions      []string          `json:"secondary_actions"`
+	Constraints           []string          `json:"constraints"`
+	Confidence            float64           `json:"confidence"`
+	ClarificationNeeded   bool              `json:"clarification_needed"`
+	ClarificationQuestion string            `json:"clarification_question"`
+	Presentation          map[string]string `json:"presentation"`
 }
 
 // ParseModifyRequest / Response —— Go→Python 调用 DTO。
@@ -237,6 +240,7 @@ type ModifyResult struct {
 	PreviousVersionNo int                `json:"previous_version_no"`
 	NewVersionNo      int                `json:"new_version_no"`
 	Clarification     string             `json:"clarification,omitempty"`
+	Presentation      map[string]string  `json:"presentation,omitempty"`
 }
 
 // Modify 修改编排：解析意图 → （低置信度则追问）→ 局部生成 → 更新草稿 → 版本快照。
@@ -295,7 +299,7 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 		updatedNodes = mergePartialResult(updatedNodes, resp.Nodes, intent.TargetIDs)
 		modifiedIDs = intent.TargetIDs
 	}
-	// restyle：仅样式层，不改内容，前端处理；仍生成版本快照记录
+	// restyle：仅样式层，不改内容；样式字段由 AI 解析后透传给前端。
 
 	// 5) 修改前快照（快照 = 修改前的完整状态）
 	prevNo, err := s.store.NextVersionNo(ctx, projectID)
@@ -304,12 +308,13 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 	}
 	nodesJSON, _ := json.Marshal(nodes) // 修改前
 	snap := &CoursewareVersion{
-		VersionID:   "ver_" + uuid.NewString()[:12],
-		ProjectID:   projectID,
-		VersionNo:   prevNo,
-		NodesJSON:   string(nodesJSON),
-		ModifyInstr: instruction,
-		CreatedAt:   time.Now(),
+		VersionID:        "ver_" + uuid.NewString()[:12],
+		ProjectID:        projectID,
+		VersionNo:        prevNo,
+		NodesJSON:        string(nodesJSON),
+		PresentationJSON: presentationJSON(presentationFromNodes(nodes)),
+		ModifyInstr:      instruction,
+		CreatedAt:        time.Now(),
 	}
 	if err := s.store.SaveVersion(ctx, snap); err != nil {
 		return nil, err
@@ -336,7 +341,39 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 		PreviousVersionID: snap.VersionID,
 		PreviousVersionNo: snap.VersionNo,
 		NewVersionNo:      snap.VersionNo, // 快照即新版本号
+		Presentation:      intent.Presentation,
 	}, nil
+}
+
+func presentationJSON(p map[string]string) string {
+	if len(p) == 0 {
+		return "{}"
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func presentationFromNodes(nodes []TeachingNodeItem) map[string]string {
+	if len(nodes) == 0 || nodes[0].Metadata == nil {
+		return map[string]string{}
+	}
+	raw, ok := nodes[0].Metadata["presentation"].(map[string]interface{})
+	if !ok {
+		if typed, ok := nodes[0].Metadata["presentation"].(map[string]string); ok {
+			return typed
+		}
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(raw))
+	for key, value := range raw {
+		if text, ok := value.(string); ok {
+			out[key] = text
+		}
+	}
+	return out
 }
 
 // applyStructuralAction —— delete/add/reorder 的节点列表操作（Go 侧本地执行）。
@@ -451,12 +488,13 @@ func (s *CoursewareService) Rollback(ctx context.Context, projectID string, vers
 		return nil, err
 	}
 	snap := &CoursewareVersion{
-		VersionID:   "ver_" + uuid.NewString()[:12],
-		ProjectID:   projectID,
-		VersionNo:   newNo,
-		NodesJSON:   target.NodesJSON, // 内容 = 目标版本
-		ModifyInstr: fmt.Sprintf("回滚到 v%d", versionNo),
-		CreatedAt:   time.Now(),
+		VersionID:        "ver_" + uuid.NewString()[:12],
+		ProjectID:        projectID,
+		VersionNo:        newNo,
+		NodesJSON:        target.NodesJSON, // 内容 = 目标版本
+		PresentationJSON: target.PresentationJSON,
+		ModifyInstr:      fmt.Sprintf("回滚到 v%d", versionNo),
+		CreatedAt:        time.Now(),
 	}
 	if err := s.store.SaveVersion(ctx, snap); err != nil {
 		return nil, err
@@ -802,7 +840,7 @@ func (g *gormCoursewareStore) NextVersionNo(ctx context.Context, projectID strin
 func (g *gormCoursewareStore) SaveVersion(ctx context.Context, v *CoursewareVersion) error {
 	return g.db.WithContext(ctx).Create(&coursewareVersionRow{
 		VersionID: v.VersionID, ProjectID: v.ProjectID, VersionNo: v.VersionNo,
-		NodesJSON: v.NodesJSON, ModifyInstr: v.ModifyInstr, CreatedAt: v.CreatedAt,
+		NodesJSON: v.NodesJSON, PresentationJSON: v.PresentationJSON, ModifyInstr: v.ModifyInstr, CreatedAt: v.CreatedAt,
 	}).Error
 }
 
@@ -817,7 +855,7 @@ func (g *gormCoursewareStore) GetVersion(ctx context.Context, projectID string, 
 	}
 	return &CoursewareVersion{
 		VersionID: row.VersionID, ProjectID: row.ProjectID, VersionNo: row.VersionNo,
-		NodesJSON: row.NodesJSON, ModifyInstr: row.ModifyInstr, CreatedAt: row.CreatedAt,
+		NodesJSON: row.NodesJSON, PresentationJSON: row.PresentationJSON, ModifyInstr: row.ModifyInstr, CreatedAt: row.CreatedAt,
 	}, nil
 }
 
@@ -831,7 +869,7 @@ func (g *gormCoursewareStore) ListVersions(ctx context.Context, projectID string
 	for _, r := range rows {
 		out = append(out, &CoursewareVersion{
 			VersionID: r.VersionID, ProjectID: r.ProjectID, VersionNo: r.VersionNo,
-			NodesJSON: r.NodesJSON, ModifyInstr: r.ModifyInstr, CreatedAt: r.CreatedAt,
+			NodesJSON: r.NodesJSON, PresentationJSON: r.PresentationJSON, ModifyInstr: r.ModifyInstr, CreatedAt: r.CreatedAt,
 		})
 	}
 	return out, nil

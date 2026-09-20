@@ -135,6 +135,7 @@ func main() {
 	outlineService := service.NewOutlineServiceWithDB(aiClient, db)
 	outlineHandler := handler.NewOutlineHandler(outlineService)
 	genHandler := handler.NewGenerationHandler(aiClient, outlineService, service.NewCoursewareProjectService(db))
+	interactiveHandler := handler.NewInteractiveHandler(aiClient)
 	versionHandler := handler.NewVersionHandler(aiClient)
 	exportHandler := handler.NewExportHandler(aiClient, service.NewCoursewareProjectService(db))
 	contentHandler := handler.NewContentHandler(aiClient)
@@ -162,7 +163,7 @@ func main() {
 	skillV1 := api.Group("/v1")
 	router.RegisterNewSkillRoutes(skillV1,
 		convHandler, parseHandler, knowledgeHandler, outlineHandler,
-		genHandler, versionHandler, exportHandler, contentHandler, coursewareProjectHandler, coursewareHandler,
+		genHandler, interactiveHandler, versionHandler, exportHandler, contentHandler, coursewareProjectHandler, coursewareHandler,
 	)
 
 	applogger.Info("教师端服务运行中", zap.Int("port", 8082))

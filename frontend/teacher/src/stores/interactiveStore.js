@@ -54,7 +54,7 @@ export const useInteractiveStore = defineStore('interactive', {
     /**
      * 生成互动资源（对应规范 3.11）
      */
-    async generateInteractive({ generation_id, node_id, interactive_plan }) {
+    async generateInteractive({ generation_id, node_id, node, interactive_plan }) {
       const genId = generation_id || this.generation_id
       if (!genId || !node_id) return
       this.loading = true
@@ -63,6 +63,7 @@ export const useInteractiveStore = defineStore('interactive', {
         const resp = await teacherV1Api.interactive.generate({
           generation_id: genId,
           node_id,
+          node,
           interactive_plan
         })
         const data = resp?.data || resp || {}
@@ -75,6 +76,7 @@ export const useInteractiveStore = defineStore('interactive', {
           file_url: data.file_url || '',
           entry_url: data.entry_url || '',
           file_size: data.file_size || 0,
+          items: Array.isArray(data.items) ? data.items : [],
           error: data.error || null
         }
         this.assets[node_id] = asset
@@ -111,6 +113,7 @@ export const useInteractiveStore = defineStore('interactive', {
             file_url: data.file_url || this.assets[nodeId].file_url,
             entry_url: data.entry_url || this.assets[nodeId].entry_url,
             file_size: data.file_size || this.assets[nodeId].file_size,
+            items: Array.isArray(data.items) ? data.items : (this.assets[nodeId].items || []),
             error: data.error || null
           }
           if (data.status === 'done' || data.status === 'failed') {

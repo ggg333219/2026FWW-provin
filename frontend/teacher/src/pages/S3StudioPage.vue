@@ -271,10 +271,16 @@
         <div v-else class="pages-empty">暂无页面数据，请先生成内容</div>
 
         <!-- 互动资源入口 -->
-        <div v-if="generationStore.lastGenId" class="interactive-section">
+        <div v-if="generationStore.lastGenId || interactiveNodes.length" class="interactive-section">
           <h4>🎮 互动资源管理</h4>
           <p class="interactive-hint">
             从大纲中标记为互动的节点可在此生成 HTML5 互动资源
+          </p>
+          <p v-if="!generationStore.lastGenId" class="interactive-error" role="alert">
+            当前页面没有课件生成记录，请先完成“内容生成”后再生成互动。
+          </p>
+          <p v-if="interactiveStore.error" class="interactive-error" role="alert">
+            {{ interactiveStore.error }}
           </p>
           <div class="interactive-node-list">
             <div
@@ -289,7 +295,11 @@
               <div class="int-node-actions">
                 <template v-if="interactiveStore.hasAsset(node.node_id)">
                   <span class="asset-done">✅ 已生成</span>
+                  <span v-if="interactiveStore.getAsset(node.node_id)?.items?.length" class="asset-count">
+                    {{ interactiveStore.getAsset(node.node_id).items.length }} 项内容
+                  </span>
                   <button
+                    v-if="interactiveStore.getAsset(node.node_id)?.entry_url"
                     class="btn btn-sm"
                     @click="openInteractiveAsset(node)"
                   >
@@ -307,10 +317,10 @@
                 <template v-else>
                   <button
                     class="btn btn-sm btn-primary"
-                    :disabled="interactiveStore.loading"
+                    :disabled="interactiveStore.loading || !generationStore.lastGenId"
                     @click="handleGenerateInteractive(node)"
                   >
-                    生成互动
+                    {{ interactiveStore.loading ? "生成中..." : "生成互动" }}
                   </button>
                 </template>
               </div>
@@ -381,9 +391,10 @@ const hasEvidence = computed(() => {
 
 // 需要互动资源的节点（大纲中标记为 interactive / quiz 的节点）
 const interactiveNodes = computed(() =>
-  (outlineStore.nodes || []).filter(
-    (n) => n.node_type === "interactive" || n.node_type === "quiz",
-  ),
+  (outlineStore.nodes?.length ? outlineStore.nodes : generationStore.currentScriptNodes || []).filter((n) => {
+    const nodeType = n.node_type || n.type || "";
+    return nodeType === "interactive" || nodeType === "quiz" || n.metadata?.interactive || n.interactive_plan;
+  }),
 );
 
 onMounted(async () => {
@@ -620,11 +631,15 @@ async function handlePreviewPage(page) {
 
 // 生成互动资源
 async function handleGenerateInteractive(node) {
-  if (!generationStore.lastGenId) return;
+  if (!generationStore.lastGenId) {
+    handleError("当前课件还没有生成结果，请先完成内容生成");
+    return;
+  }
   try {
     await interactiveStore.generateInteractive({
       generation_id: generationStore.lastGenId,
       node_id: node.node_id,
+      node,
       interactive_plan: node.interactive_plan || {
         enabled: true,
         kind: "quiz",
@@ -696,12 +711,21 @@ async function applyPresentationStyle() {
   currentPhase.value = "style";
 }
 
-async function handleStyleRequest({ instruction = '' } = {}) {
+async function handleStyleRequest({ instruction = '', presentation = {} } = {}) {
   const text = String(instruction).toLowerCase();
-  if (/商务|business|简洁/.test(text)) { templateId.value = 'deck-swiss-edu'; density.value = 'minimal'; }
-  if (/蓝|blue/.test(text)) palette.value = 'klein-blue';
-  if (/图|视觉|visual/.test(text)) layoutMode.value = 'visual';
-  if (/文字|内容优先/.test(text)) layoutMode.value = 'text';
+  const style = presentation && typeof presentation === 'object' ? presentation : {};
+  if (style.template_id) templateId.value = style.template_id;
+  if (style.palette) palette.value = style.palette;
+  if (style.layout) layoutMode.value = style.layout;
+  if (style.font_family) fontFamily.value = style.font_family;
+  if (style.density) density.value = style.density;
+  // 兼容旧 AI 响应：仅当结构化字段为空时才使用本地兜底映射。
+  if (!Object.values(style).some(Boolean)) {
+    if (/商务|business|简洁/.test(text)) { templateId.value = 'deck-swiss-edu'; density.value = 'minimal'; }
+    if (/蓝|blue/.test(text)) palette.value = 'klein-blue';
+    if (/图|视觉|visual/.test(text)) layoutMode.value = 'visual';
+    if (/文字|内容优先/.test(text)) layoutMode.value = 'text';
+  }
   currentPhase.value = 'style';
   await applyPresentationStyle();
 }
