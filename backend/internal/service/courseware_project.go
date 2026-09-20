@@ -69,8 +69,35 @@ func (s *CoursewareProjectService) List(ctx context.Context, ownerID string, pag
 		return nil, 0, err
 	}
 	var items []model.CoursewareProject
-	err := q.Order("updated_at DESC, id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error
-	return items, total, err
+	if err := q.Order("updated_at DESC, id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&items).Error; err != nil {
+		return nil, 0, err
+	}
+	// 一次聚合当前页所有版本号，避免前端为每张课件额外请求一次版本接口。
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+	}
+	if len(ids) > 0 {
+		var rows []struct {
+			ProjectID string `gorm:"column:project_id"`
+			VersionNo int    `gorm:"column:version_no"`
+		}
+		if err := s.db.WithContext(ctx).Table("courseware_versions").
+			Select("project_id, MAX(version_no) AS version_no").
+			Where("project_id IN ?", ids).Group("project_id").Scan(&rows).Error; err == nil {
+			latest := make(map[string]int, len(rows))
+			for _, row := range rows {
+				latest[row.ProjectID] = row.VersionNo
+			}
+			for i := range items {
+				items[i].VersionNo = latest[items[i].ID]
+				if items[i].VersionNo == 0 {
+					items[i].VersionNo = 1
+				}
+			}
+		}
+	}
+	return items, total, nil
 }
 
 // Delete removes a project from the owner's active list. CoursewareProject uses

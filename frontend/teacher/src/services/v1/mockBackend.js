@@ -2609,6 +2609,75 @@ export function handleMockRequest(path, options = {}, originalError = null) {
   const store = ensureMockStore()
 
   try {
+    // C1-C7 课件项目工作流：为离线演示提供与 Go 接口一致的最小持久化实现。
+    if (pathname === '/api/v1/coursewares' || pathname.startsWith('/api/v1/coursewares/')) {
+      store.coursewareProjects = store.coursewareProjects || []
+      const segments = pathname.split('/').filter(Boolean)
+      const projectId = segments[3] || ''
+      const action = segments[4] || ''
+      const project = store.coursewareProjects.find((item) => item.id === projectId)
+      const body = parseJsonBody(options)
+
+      if (!projectId && method === 'GET') {
+        return ok({ items: deepClone(store.coursewareProjects).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))), total: store.coursewareProjects.length })
+      }
+      if (!projectId && method === 'POST') {
+        const created = { id: uid('proj'), title: cleanText(body.title) || '未命名课件', current_step: 's1_intent', status: 'draft', draft_json: {}, gen_id: '', version_no: 1, versions: [], created_at: nowIso(), updated_at: nowIso() }
+        store.coursewareProjects.unshift(created); persistMockStore(); return ok(deepClone(created))
+      }
+      if (project && !action && method === 'DELETE') {
+        store.coursewareProjects = store.coursewareProjects.filter((item) => item.id !== projectId); persistMockStore(); return ok({ deleted: true })
+      }
+      if (project && action === 'context' && method === 'GET') {
+        return ok({ project: deepClone(project), draft: deepClone(project.draft_json || {}), current_step: project.current_step, generation_id: project.gen_id || null })
+      }
+      if (project && action === 'draft' && method === 'GET') {
+        return ok({ project: deepClone(project), draft: deepClone(project.draft_json || {}), current_step: project.current_step, generation_id: project.gen_id || null })
+      }
+      if (project && action === 'draft' && method === 'PUT') {
+        project.draft_json = typeof body.draft_json === 'string' ? JSON.parse(body.draft_json || '{}') : (body.draft_json || {})
+        project.status = 'active'; project.updated_at = nowIso(); persistMockStore(); return ok({ project: deepClone(project), draft: deepClone(project.draft_json), saved_at: project.updated_at })
+      }
+      if (project && action === 'step' && method === 'PUT') {
+        project.current_step = body.current_step || body.step || project.current_step; project.status = 'active'; project.updated_at = nowIso(); persistMockStore(); return ok({ current_step: project.current_step, updated_at: project.updated_at })
+      }
+      if (project && ['versions', 'modify-history'].includes(action) && method === 'GET') {
+        return ok({ items: deepClone(project.versions || []) })
+      }
+      if (project && action === 'modify' && method === 'POST') {
+        const instruction = cleanText(body.instruction)
+        const nodes = deepClone(Array.isArray(body.nodes) ? body.nodes : [])
+        const pageMatch = instruction.match(/第\s*(\d+)\s*页/)
+        const targetIndex = pageMatch ? Math.max(0, Number(pageMatch[1]) - 1) : 0
+        const target = nodes[targetIndex]
+        const restyle = /风格|样式|模板|配色|字体|版式/.test(instruction)
+        if (!restyle && !target) return ok({ clarification: '请说明要修改哪一页或哪个节点。', intent: { action: 'rewrite', target_ids: [], confidence: 0.4 } })
+        const actionName = restyle ? 'restyle' : (/精简|减少/.test(instruction) ? 'simplify' : (/增加|扩充/.test(instruction) ? 'expand' : 'rewrite'))
+        const targetIds = restyle ? [] : [target.node_id]
+        const modifiedNodes = []
+        if (target) {
+          const original = target.script || target.content || target.summary || ''
+          const nextText = actionName === 'simplify' ? String(original).slice(0, Math.max(20, Math.ceil(String(original).length * .65))) : `${original}${original ? '\n' : ''}（已根据教师指令完成 AI 局部调整）`
+          Object.assign(target, { script: nextText, content: nextText, summary: target.summary || nextText.slice(0, 80) })
+          modifiedNodes.push(deepClone(target))
+        }
+        project.versions = project.versions || []
+        const versionNo = project.versions.length + 1
+        project.versions.push({ version_no: versionNo, modify_instruction: instruction, created_at: nowIso(), nodes: deepClone(nodes) })
+        project.version_no = versionNo; project.updated_at = nowIso(); project.draft_json = { ...(project.draft_json || {}), generation: { ...(project.draft_json?.generation || {}), nodes } }
+        persistMockStore()
+        return ok({ modified_nodes: modifiedNodes, all_nodes: nodes, intent: { target_type: restyle ? 'style' : 'node', target_ids: targetIds, action: actionName, confidence: .95 }, previous_version_no: Math.max(0, versionNo - 1), new_version_no: versionNo })
+      }
+      if (project && action === 'rollback' && method === 'POST') {
+        const target = (project.versions || []).find((item) => item.version_no === Number(body.version_no))
+        if (!target) return null
+        const nodes = deepClone(target.nodes || [])
+        const versionNo = project.versions.length + 1
+        project.versions.push({ version_no: versionNo, modify_instruction: `回滚到 v${body.version_no}`, created_at: nowIso(), nodes })
+        project.version_no = versionNo; persistMockStore(); return ok({ restored_version_no: Number(body.version_no), new_version_no: versionNo, nodes })
+      }
+    }
+
     if (pathname.startsWith('/api/v1/teacher/coursewares')) {
       const response = handleTeacherCoursewareRequest(store, pathname, searchParams, method, options)
       if (response) return response

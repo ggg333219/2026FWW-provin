@@ -21,7 +21,7 @@
     </div>
 
     <!-- 对话区 -->
-    <div class="messages-area" ref="messagesEl">
+    <div class="messages-area" ref="messagesEl" aria-live="polite" aria-label="AI 修改对话记录">
       <div v-if="modifyStore.messages.length === 0" class="empty-hint">
         输入修改意见，AI 会理解意图并局部修改课件。
       </div>
@@ -33,15 +33,23 @@
     </div>
 
     <!-- 错误提示 -->
-    <div v-if="modifyStore.error" class="error-bar">{{ modifyStore.error }}</div>
+    <div v-if="modifyStore.error" class="error-bar" role="alert">
+      <span>{{ modifyStore.error }}</span>
+      <button v-if="modifyStore.lastFailedInstruction" type="button" @click="modifyStore.retryLast">重新填写</button>
+    </div>
+
+    <div v-if="modifyStore.pendingClarification" class="clarification-context" role="status">
+      <strong>AI 正在等你补充</strong>
+      <span>{{ modifyStore.pendingClarification.question }}</span>
+    </div>
 
     <!-- 输入区 -->
     <div class="input-area">
-      <input type="text" v-model="modifyStore.inputText"
+      <textarea v-model="modifyStore.inputText" rows="2" maxlength="500"
         placeholder="例如：第三页减少文字，增加一个生活案例"
         :disabled="modifyStore.modifying"
-        @keydown.enter="handleSend"
-        class="modify-input" />
+        @keydown.enter.exact.prevent="handleSend"
+        class="modify-input"></textarea>
       <button class="send-btn" :disabled="!modifyStore.canSend"
         @click="handleSend">
         {{ modifyStore.modifying ? '⏳' : '发送' }}
@@ -73,9 +81,10 @@
         <span class="tl-instr">{{ v.modify_instruction || '(初始版本)' }}</span>
         <span class="tl-time">{{ v.created_at }}</span>
       </button>
+      <span class="char-count" :class="{ limit: modifyStore.inputText.length >= 480 }">{{ modifyStore.inputText.length }}/500</span>
     </details>
 
-    <div v-if="selectedVersion" class="history-preview" role="dialog" aria-modal="true" aria-label="历史版本只读预览">
+    <div v-if="selectedVersion" class="history-preview" role="dialog" aria-modal="true" aria-label="历史版本只读预览" @click.self="selectedVersion = null">
       <div class="history-card">
         <div class="history-head">
           <div><strong>v{{ selectedVersion.version_no }} 只读预览</strong><p>{{ selectedVersion.modify_instruction || '初始版本' }}</p></div>
@@ -94,7 +103,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue'
 import { useModifyStore } from '../../stores/modifyStore'
 import { useOutlineStore } from '../../stores/outlineStore'
 import { useGenerationStore } from '../../stores/generationStore'
@@ -111,6 +120,9 @@ const liveNodes = computed(() => generationStore.currentScriptNodes?.length
 const isRecentlyModified = (node) => modifyStore.recentlyModifiedIds.includes(node.node_id)
 const previewVersion = (version) => { selectedVersion.value = version }
 const changeKind = (version) => /风格|样式|模板|配色|字体|版式|style|template/i.test(version?.modify_instruction || '') ? 'style' : 'content'
+const handleGlobalKeydown = (event) => { if (event.key === 'Escape') selectedVersion.value = null }
+onMounted(() => window.addEventListener('keydown', handleGlobalKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', handleGlobalKeydown))
 
 // 节点转 TeachingNodeItem 格式（outlineStore.nodes → Go TeachingNodeItem JSON）
 function nodesForApi() {
@@ -325,9 +337,16 @@ watch(() => modifyStore.messages.length, scrollToBottom)
   color: #c33;
   font-size: 12px;
   border-top: 1px solid #fcc;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
+.error-bar button { border:0; background:transparent; color:#9f2525; text-decoration:underline; cursor:pointer; }
+.clarification-context { display:grid; gap:3px; margin:8px 12px 0; padding:8px 10px; border:1px solid #ead8a3; border-radius:8px; background:#fff9e8; color:#795a12; font-size:11px; }
 
 .input-area {
+  position: relative;
   display: flex;
   gap: 6px;
   padding: 10px 12px;
@@ -341,6 +360,10 @@ watch(() => modifyStore.messages.length, scrollToBottom)
   padding: 6px 10px;
   font-size: 13px;
   outline: none;
+  resize: vertical;
+  min-height: 34px;
+  max-height: 110px;
+  font-family: inherit;
 }
 .modify-input:focus { border-color: #4a90d9; }
 
@@ -355,6 +378,8 @@ watch(() => modifyStore.messages.length, scrollToBottom)
   white-space: nowrap;
 }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.char-count { position:absolute; right:72px; bottom:12px; color:#98a19d; font-size:9px; pointer-events:none; }
+.char-count.limit { color:#b45a21; }
 
 .version-timeline {
   border-top: 1px solid #e0e0e0;
@@ -393,6 +418,7 @@ watch(() => modifyStore.messages.length, scrollToBottom)
 .preview-node.modified { border-color:#24a36f; background:#edfff7; box-shadow:0 0 0 3px rgba(36,163,111,.14); animation:modifiedPulse 2s ease-out; }
 .preview-node-head { color:#33443e; font-size:12px; font-weight:650; }
 .preview-node p,.history-nodes p { margin:5px 0 0; color:#66736f; font-size:11px; line-height:1.45; white-space:pre-wrap; }
+.preview-node p { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:3; }
 .modified-badge { padding:2px 6px; border-radius:999px; background:#24a36f; color:#fff; font-size:10px; }
 .history-preview { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; padding:20px; background:rgba(17,31,27,.42); }
 .history-card { width:min(720px,calc(100vw - 40px)); max-height:80vh; overflow:hidden; border-radius:14px; background:#fff; box-shadow:0 24px 80px rgba(0,0,0,.2); }
@@ -401,4 +427,11 @@ watch(() => modifyStore.messages.length, scrollToBottom)
 .history-nodes { max-height:60vh; overflow-y:auto; padding:14px 18px; }
 .history-nodes article { padding:10px 0; border-bottom:1px solid #edf1ef; }
 @keyframes modifiedPulse { 0% { transform:scale(.99); } 25% { transform:scale(1); } 100% { box-shadow:none; } }
+@media (max-width:680px) {
+  .modify-panel { min-width:0; max-width:none; }
+  .panel-header { align-items:flex-start; flex-wrap:wrap; }
+  .version-badge { order:3; width:100%; box-sizing:border-box; }
+  .live-preview { max-height:210px; }
+  .tl-time { display:none; }
+}
 </style>

@@ -16,9 +16,40 @@ import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
 import { teacherV1Api } from '../services/v1'
+import { useIntentStore } from '../stores/intentStore'
+import { useMaterialStore } from '../stores/materialStore'
+import { useOutlineStore } from '../stores/outlineStore'
+import { useGenerationStore } from '../stores/generationStore'
 
 const route = useRoute(); const router = useRouter(); const projects = useCoursewareProjectStore(); const message = ref('正在读取最新编辑进度…'); const failed = ref(false)
+const intentStore = useIntentStore(); const materialStore = useMaterialStore(); const outlineStore = useOutlineStore(); const generationStore = useGenerationStore()
 const routeForStep = { s1_intent: 'S1Intent', s2_material: 'S2Material', s3_studio: 'S3Studio', s4_version: 'S4Version' }
+function hydrateDraft(draft) {
+  const intentSession = draft.intent_session || {}
+  if (draft.intent || intentSession.session_id) {
+    intentStore.initialize()
+    intentStore.intentSummary = draft.intent || intentStore.intentSummary
+    intentStore.sessionId = intentSession.session_id || intentStore.sessionId
+    intentStore.intentId = intentSession.intent_id || intentStore.intentId
+    intentStore.sessionStatus = intentSession.status || intentStore.sessionStatus
+    if (Array.isArray(intentSession.messages)) intentStore.messages = intentSession.messages
+    intentStore.persist?.()
+  }
+  if (Array.isArray(draft.materials)) materialStore.materials = draft.materials
+  if (Array.isArray(draft.selected_materials)) materialStore.selectedMaterials = draft.selected_materials
+  if (draft.evidence_packet) {
+    materialStore.evidencePackets = [{ id: `resume_${Date.now()}`, packet: draft.evidence_packet, createdAt: new Date().toISOString() }]
+  }
+  if (draft.outline?.outline_id) {
+    outlineStore._applyOutlineData(draft.outline)
+    outlineStore._persist()
+  }
+  if (draft.generation) {
+    if (draft.generation.generation_id) generationStore.setLastGenId(draft.generation.generation_id)
+    if (draft.generation.task_id) generationStore.setLastTaskId(draft.generation.task_id)
+    if (Array.isArray(draft.generation.nodes)) generationStore.setNodes(draft.generation.nodes)
+  }
+}
 async function restart() {
   try {
     const project = await projects.create('未命名课件')
@@ -37,7 +68,12 @@ onMounted(async () => {
     if (!projectId) throw new Error('未找到该课件的本地编辑数据，是否重新开始？')
     const context = await projects.resume(projectId)
     const draftSource = context.draft || context.draft_json
-    const draft = draftSource && typeof draftSource === 'object' ? draftSource : {}
+    let draft = {}
+    if (draftSource && typeof draftSource === 'object') draft = draftSource
+    else if (typeof draftSource === 'string') {
+      try { draft = JSON.parse(draftSource) || {} } catch { draft = {} }
+    }
+    hydrateDraft(draft)
     try { window.localStorage.setItem('fuww_courseware_resume_draft', JSON.stringify(draft)) } catch {}
     const generationId = context.generation_id || context.project?.gen_id || draft.generation_id || draft.generation?.generation_id || ''
     let latestLocked = false

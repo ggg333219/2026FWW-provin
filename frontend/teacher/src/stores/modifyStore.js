@@ -44,10 +44,12 @@ export const useModifyStore = defineStore('modifyPanel', {
     redoStack: [],
     /** 错误提示 */
     error: '',
+    /** 最近一次失败的教师输入，供一键重试。 */
+    lastFailedInstruction: '',
   }),
 
   getters: {
-    canSend: (state) => !!state.projectId && !!state.inputText.trim() && !state.modifying,
+    canSend: (state) => !!state.projectId && !!state.inputText.trim() && state.inputText.length <= 500 && !state.modifying,
     canUndo: (state) => state.undoStack.length > 0,
     canRedo: (state) => state.redoStack.length > 0,
     /** 版本标签文案 */
@@ -104,6 +106,7 @@ export const useModifyStore = defineStore('modifyPanel', {
       this.undoStack = []
       this.redoStack = []
       this.error = ''
+      this.lastFailedInstruction = ''
       this._persist()
     },
 
@@ -133,6 +136,7 @@ export const useModifyStore = defineStore('modifyPanel', {
 
       this.modifying = true
       this.error = ''
+      this.lastFailedInstruction = ''
       this._pushMessage('teacher', teacherReply)
       this.inputText = ''
 
@@ -214,6 +218,7 @@ export const useModifyStore = defineStore('modifyPanel', {
         this._persist()
       } catch (e) {
         this.error = e?.message || '修改失败，请重试'
+        this.lastFailedInstruction = teacherReply
         this._pushMessage('ai', `⚠️ ${this.error}`, { isError: true })
       } finally {
         this.modifying = false
@@ -223,6 +228,11 @@ export const useModifyStore = defineStore('modifyPanel', {
     /** 快捷指令 */
     applyQuickChip(chip) {
       this.inputText = chip.text
+    },
+
+    retryLast() {
+      if (this.lastFailedInstruction) this.inputText = this.lastFailedInstruction
+      this.error = ''
     },
 
     /** 撤销 = 回滚到上一个版本（克隆式，产生新版本号） */

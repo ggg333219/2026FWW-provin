@@ -60,4 +60,19 @@ describe('modifyStore C6/C7 对话迭代', () => {
     expect(store.recentlyModifiedIds).toEqual(['node_2'])
     expect(store.messages.some((message) => message.text === '已更新：排序案例')).toBe(true)
   })
+
+  it('限制超长输入并支持失败后重新填写', async () => {
+    vi.spyOn(projectModifyApi, 'modify').mockRejectedValue(new Error('服务暂不可用'))
+    const store = useModifyStore()
+    store.bindProject('project_1')
+    store.inputText = 'x'.repeat(501)
+    expect(store.canSend).toBe(false)
+
+    store.inputText = '精简第三页'
+    await store.sendModify([], () => {})
+    expect(store.lastFailedInstruction).toBe('精简第三页')
+    store.retryLast()
+    expect(store.inputText).toBe('精简第三页')
+    expect(store.error).toBe('')
+  })
 })

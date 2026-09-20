@@ -84,6 +84,7 @@ export async function requestJson(path, options = {}) {
     }
   }
 
+  let requestTimer = 0
   try {
     const { timeoutMs = REQUEST_TIMEOUT_MS, ...fetchOptions } = options
     const authToken = typeof window !== 'undefined'
@@ -96,11 +97,11 @@ export async function requestJson(path, options = {}) {
     fetchOptions.headers = headers
     const isMultipart = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData
     const controller = new AbortController()
-    const timer = isMultipart
+    requestTimer = isMultipart
       ? 0
       : setTimeout(() => controller.abort(), timeoutMs)
     const response = await fetch(`${API_BASE}${path}`, { ...fetchOptions, signal: controller.signal })
-    if (timer) clearTimeout(timer)
+    if (requestTimer) { clearTimeout(requestTimer); requestTimer = 0 }
     const payload = await response.json().catch(() => ({}))
     if (!response.ok || (typeof payload.code !== 'undefined' && payload.code !== 200)) {
       // 标记 HTTP 级错误（后端可达但路由缺失/业务错误），区别于网络不可达
@@ -110,6 +111,7 @@ export async function requestJson(path, options = {}) {
     }
     return payload
   } catch (error) {
+    if (requestTimer) { clearTimeout(requestTimer); requestTimer = 0 }
     // 超时（AbortError）：后端可能仍在慢速处理（如 RAG 嵌入/生成）。
     // 不切换全局 mock、也不回退 Mock，避免“真实数据 → 假数据”跳变；
     // 交由调用方优雅降级（空态提示 / 轮询重试）。

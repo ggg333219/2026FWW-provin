@@ -89,6 +89,7 @@ type CoursewareProject struct {
 	GenID       string `gorm:"size:100;index" json:"gen_id,omitempty"`
 	Status      string `gorm:"size:20;not null;default:'draft';index" json:"status"`
 	DraftJSON   JSONB  `gorm:"type:jsonb;not null;default:'{}'" json:"draft_json"`
+	VersionNo   int    `gorm:"-" json:"version_no"`
 }
 
 // CoursePage 课件页表

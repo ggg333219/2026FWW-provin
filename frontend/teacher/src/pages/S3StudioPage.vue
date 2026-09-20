@@ -8,7 +8,7 @@
           <p>大纲编辑 → 内容生成 → 页面预览</p>
         </div>
         <div class="page-header-right">
-          <button v-if="projectStore.projectId" class="save-state" :class="projectStore.saveState" @click="projectStore.saveNow(draftSnapshot())">{{ projectStore.saveLabel || '保存草稿' }}</button>
+          <button v-if="projectStore.projectId" class="save-state" :class="projectStore.saveState" aria-live="polite" @click="projectStore.saveNow(draftSnapshot())">{{ projectStore.saveLabel || '保存草稿' }}</button>
           <button v-if="generationStore.currentScriptNodes.length" class="save-version" :disabled="saveVersionState === 'saving'" @click="handleSaveNewVersion">{{ saveVersionState === 'saving' ? '正在保存版本…' : (lastSavedVersion ? `已保存 v${lastSavedVersion}` : '保存新版本') }}</button>
           <div class="step-pills">
             <router-link :to="{ name: 'S1Intent', query: { project_id: projectStore.projectId } }" class="pill"
@@ -42,10 +42,11 @@
       </div>
 
       <!-- S3 阶段指示器 -->
-      <div class="phase-tabs">
+      <div class="phase-tabs" role="tablist" aria-label="课件生成步骤">
         <button
           class="phase-tab"
           :class="{ active: currentPhase === 'outline' }"
+          role="tab" :aria-selected="currentPhase === 'outline'"
           @click="currentPhase = 'outline'"
         >
           📋 大纲编辑
@@ -53,6 +54,7 @@
         <button
           class="phase-tab"
           :class="{ active: currentPhase === 'generating' }"
+          role="tab" :aria-selected="currentPhase === 'generating'"
           @click="currentPhase = 'generating'"
           :disabled="!outlineStore.isConfirmed"
         >
@@ -61,12 +63,13 @@
         <button
           class="phase-tab"
           :class="{ active: currentPhase === 'pages' }"
+          role="tab" :aria-selected="currentPhase === 'pages'"
           @click="currentPhase = 'pages'"
           :disabled="!generationStore.lastGenId"
         >
           📄 页面管理
         </button>
-        <button class="phase-tab" :class="{ active: currentPhase === 'style' }" :disabled="!generationStore.lastGenId" @click="currentPhase = 'style'">🎨 PPT 样式</button>
+        <button class="phase-tab" :class="{ active: currentPhase === 'style' }" role="tab" :aria-selected="currentPhase === 'style'" :disabled="!generationStore.lastGenId" @click="currentPhase = 'style'">🎨 PPT 样式</button>
       </div>
 
       <!-- ==================== 大纲阶段 ==================== -->
@@ -126,7 +129,7 @@
           v-if="
             generationStore.isGenerating || generationStore.generateProgress > 0
           "
-          class="gen-progress-panel"
+          class="gen-progress-panel" role="progressbar" aria-label="课件生成进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="generationStore.generateProgress"
         >
           <div class="progress-bar-wrap">
             <div
@@ -933,6 +936,24 @@ function handleError(msg) {
 .style-ai-hint { padding: 12px; border-radius: 10px; background: #f1f8f5; color: #45685e; font-size: 13px; line-height: 1.6; }
 @media (max-width: 1400px) { .s3-page { padding-left: 20px; } }
 @media (max-width: 1100px) { .s3-page { padding-right: 20px; } .s3-ai-panel { position: static; width: auto; min-height: 420px; margin-bottom: 14px; } }
+@media (max-width: 700px) {
+  .s3-page { padding: 14px 12px; overflow: visible; }
+  .page-header { flex-direction: column; }
+  .page-header-right { width: 100%; justify-content: flex-start; }
+  .step-pills { width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+  .pill { flex: 0 0 auto; }
+  .phase-tabs { overflow-x: auto; }
+  .phase-tab { flex: 0 0 auto; padding: 8px 12px; }
+  .evidence-warning { align-items: flex-start; flex-direction: column; }
+  .evidence-warning div { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .s3-ai-panel { min-height: 520px; }
+  .style-panel { padding: 16px; }
+  .style-actions,.gen-complete-actions { flex-direction: column; }
+  .style-actions button,.gen-complete-actions button { width: 100%; }
+  .preview-frame { height: 360px; }
+  .page-item { align-items: flex-start; flex-direction: column; }
+  .page-item-right { width: 100%; justify-content: flex-end; }
+}
 .save-state { border: 1px solid #bdd8cb; border-radius: 999px; padding: 6px 10px; background: #fff; color: #42675d; font-size: 12px; cursor: pointer; }
 .save-state.saving { color: #996a14; }.save-state.error { color: #b42318; }
 .save-version { border: 1px solid #2f605a; border-radius: 999px; padding: 6px 11px; background: #2f605a; color: #fff; font-size: 12px; cursor: pointer; }.save-version:disabled{opacity:.55;cursor:not-allowed}

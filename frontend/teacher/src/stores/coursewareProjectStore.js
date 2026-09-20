@@ -43,17 +43,6 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
       try {
         const data = unwrap(await projectModifyApi.list())
         this.items = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : [])
-        await Promise.all(this.items.map(async (item) => {
-          const id = item.id || item.project_id
-          if (!id || item.version_no != null) return
-          try {
-            const history = unwrap(await projectModifyApi.versions(id))
-            const versions = Array.isArray(history.items) ? history.items : []
-            item.version_no = versions.reduce((latest, version) => Math.max(latest, Number(version.version_no || 0)), 0) || 1
-          } catch {
-            item.version_no = 1
-          }
-        }))
         return this.items
       } catch (error) { this.error = error?.message || '课件列表加载失败'; throw error }
       finally { this.loading = false }
@@ -86,7 +75,7 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
       if (!this.projectId) return
       this._lastDraft = draft; this.saveState = 'dirty'
       if (this._timer) clearTimeout(this._timer)
-      this._timer = setTimeout(() => this.saveNow(), delay)
+      this._timer = setTimeout(() => this.saveNow().catch(() => {}), delay)
     },
     async saveNow(draft = this._lastDraft) {
       if (!this.projectId || !draft) return
