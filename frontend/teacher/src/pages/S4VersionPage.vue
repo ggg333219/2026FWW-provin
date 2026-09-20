@@ -157,6 +157,7 @@
               :export-status="versionStore.exportStatus"
               :export-format="versionStore.exportFormat"
               :export-download-url="versionStore.exportDownloadUrl"
+              :export-files="versionStore.exportFiles"
               :export-error="versionStore.exportError"
               :loading="versionStore.loading"
               :intent="intentStore.intentSummary || {}"

@@ -695,3 +695,4 @@ class ExportStatusResponse(BaseModel):
     file_size: Optional[int] = None
     courseware_title: Optional[str] = None
     version: Optional[int] = None
+    files: dict[str, str] = Field(default_factory=dict)

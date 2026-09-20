@@ -100,6 +100,7 @@ func (h *ExportHandler) StatusV2(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "查询导出状态失败: " + err.Error()})
 		return
 	}
+	h.rewriteExportDownloads(jobID, resp)
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
 
@@ -135,18 +136,32 @@ func (h *ExportHandler) Status(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "查询导出状态失败: " + err.Error()})
 		return
 	}
-	if resp.DownloadURL != "" {
-		extension := strings.TrimPrefix(path.Ext(resp.DownloadURL), ".")
-		if extension == "" {
-			extension = "pptx"
-		}
-		if _, ok := h.aiClient.(interface {
-			ExportDownloadURL(string, string) string
-		}); ok {
+	h.rewriteExportDownloads(jobID, resp)
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
+}
+
+func (h *ExportHandler) rewriteExportDownloads(jobID string, resp *service.ExportStatusResponse) {
+	if resp == nil {
+		return
+	}
+	if _, ok := h.aiClient.(interface {
+		ExportDownloadURL(string, string) string
+	}); ok {
+		if resp.DownloadURL != "" {
+			extension := strings.TrimPrefix(path.Ext(resp.DownloadURL), ".")
+			if extension == "" {
+				extension = "pptx"
+			}
 			resp.DownloadURL = "/api/v1/export/download/" + jobID + "/" + extension
 		}
+		for format := range resp.Files {
+			extension := strings.ToLower(format)
+			if extension == "html5" || extension == "interactive" {
+				extension = "html"
+			}
+			resp.Files[format] = "/api/v1/export/download/" + jobID + "/" + extension
+		}
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
 
 // Download  GET /api/v1/export/download/:job_id/:extension — 网关下载代理

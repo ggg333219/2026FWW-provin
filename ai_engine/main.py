@@ -1984,14 +1984,16 @@ async def export_status(job_id: str):
         raise HTTPException(status_code=404, detail="导出任务不存在")
 
     download_url = None
+    files: dict[str, str] = {}
     if job.status == ExportStatus.DONE:
         meta = job.metadata or {}
         if "ppt_path" in meta:
-            download_url = f"/download/{job_id}.pptx"
-        elif "doc_path" in meta:
-            download_url = f"/download/{job_id}.docx"
-        elif "html_path" in meta:
-            download_url = f"/download/{job_id}.html"
+            files["pptx"] = f"/download/{job_id}.pptx"
+        if "doc_path" in meta:
+            files["docx"] = f"/download/{job_id}.docx"
+        if "html_path" in meta:
+            files["html"] = f"/download/{job_id}.html"
+        download_url = next(iter(files.values()), None)
 
     meta = job.metadata or {}
     return ExportStatusResponse(
@@ -2004,6 +2006,7 @@ async def export_status(job_id: str):
         file_size=job.file_size,
         courseware_title=meta.get("courseware_title") or "课件",
         version=int(meta.get("version") or job.version or 1),
+        files=files,
     )
 
 

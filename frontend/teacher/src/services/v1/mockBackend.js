@@ -751,18 +751,23 @@ function mockBuildDocxBytes(nodes) {
 const _mockExportBlobCache = new Map()
 
 /** 导出任务 → 可下载地址：浏览器环境返回 Blob URL（真实可打开文件），否则回退后端下载路径 */
-function mockBuildExportDownloadUrl(store, job) {
-  const fmt = job.format || 'pptx'
+function mockBuildExportDownloadUrl(store, job, requestedFormat = '') {
+  const fmt = requestedFormat || job.format || 'pptx'
   const fallback = `/download/${job.job_id}.${fmt}`
   const canBlob = typeof URL !== 'undefined' && typeof Blob !== 'undefined' && typeof URL.createObjectURL === 'function'
   if (!canBlob) return fallback
-  if (_mockExportBlobCache.has(job.job_id)) return _mockExportBlobCache.get(job.job_id)
+  const cacheKey = `${job.job_id}:${fmt}`
+  if (_mockExportBlobCache.has(cacheKey)) return _mockExportBlobCache.get(cacheKey)
   try {
     const nodes = mockExportNodesFrom(store, job.generation_id)
-    const isDocx = fmt === 'docx'
-    const bytes = isDocx ? mockBuildDocxBytes(nodes) : mockBuildPptxBytes(nodes)
-    const blobUrl = URL.createObjectURL(new Blob([bytes], { type: isDocx ? DOCX_MIME : PPTX_MIME }))
-    _mockExportBlobCache.set(job.job_id, blobUrl)
+    const isDocx = fmt === 'docx' || fmt === 'lesson_plan'
+    const isHtml = fmt === 'html' || fmt === 'html5' || fmt === 'interactive'
+    const bytes = isHtml
+      ? new TextEncoder().encode('<!doctype html><meta charset="utf-8"><title>互动课件</title><h1>HTML5 互动课件</h1>')
+      : (isDocx ? mockBuildDocxBytes(nodes) : mockBuildPptxBytes(nodes))
+    const mime = isHtml ? 'text/html;charset=utf-8' : (isDocx ? DOCX_MIME : PPTX_MIME)
+    const blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }))
+    _mockExportBlobCache.set(cacheKey, blobUrl)
     return blobUrl
   } catch (error) {
     return fallback
@@ -3256,10 +3261,17 @@ ${slides}
       }
       // 完成时按需生成真实可下载文件（浏览器返回 Blob URL；无 Blob 环境回退后端下载路径）
       const downloadUrl = job.status === 'done' ? mockBuildExportDownloadUrl(store, job) : ''
+      const formats = job.format === 'both'
+        ? ['pptx', 'docx', 'html']
+        : [job.format === 'lesson_plan' ? 'docx' : (job.format === 'interactive' ? 'html' : job.format)]
+      const files = job.status === 'done'
+        ? Object.fromEntries(formats.map((format) => [format, mockBuildExportDownloadUrl(store, job, format)]))
+        : {}
       return ok({
         job_id: job.job_id,
         status: job.status,
         download_url: downloadUrl,
+        files,
         error: job.error || null
       })
     }

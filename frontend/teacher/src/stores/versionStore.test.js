@@ -48,17 +48,29 @@ describe('versionStore S4 导出闭环（Mock）', () => {
     expect(store.exportDownloadUrl.startsWith('blob:')).toBe(true)
   })
 
+  it('同时导出返回 PPTX、DOCX、HTML5 三个独立下载入口', async () => {
+    const store = useVersionStore()
+    await store.startExport('gen_export_bundle', 'both', 2, '网络基础')
+    await sleep(2700)
+
+    expect(store.exportStatus).toBe('done')
+    expect(Object.keys(store.exportFiles).sort()).toEqual(['docx', 'html', 'pptx'])
+    expect(Object.values(store.exportFiles).every((url) => url.startsWith('blob:'))).toBe(true)
+  })
+
   it('resetExport 清空导出状态', async () => {
     const store = useVersionStore()
     store.exportJobId = 'exp_x'
     store.exportStatus = 'done'
     store.exportDownloadUrl = '/download/exp_x.pptx'
+    store.exportFiles = { pptx: '/download/exp_x.pptx' }
     store.exportError = ''
 
     store.resetExport()
     expect(store.exportJobId).toBe('')
     expect(store.exportStatus).toBe('idle')
     expect(store.exportDownloadUrl).toBe('')
+    expect(store.exportFiles).toEqual({})
     expect(store.exportError).toBe('')
   })
 })

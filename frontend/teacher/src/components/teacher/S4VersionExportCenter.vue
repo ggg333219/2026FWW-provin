@@ -1,7 +1,7 @@
 <template>
   <div class="section-card">
     <h3>导出中心</h3>
-    <p v-if="genId" class="export-context">导出文件：{{ exportFileName }}</p>
+    <p v-if="genId" class="export-context">{{ exportDescription }}</p>
 
     <div v-if="!genId" class="empty-tip">请先加载版本</div>
     <div v-else class="export-panel">
@@ -64,10 +64,15 @@
         <!-- 完成 -->
         <div v-if="exportStatus === 'done'" class="done-section">
           <span class="done-icon">✅ 导出完成</span>
+          <div v-if="downloadFiles.length" class="download-list">
+            <button v-for="file in downloadFiles" :key="file.format" class="btn btn-sm" @click="handleDownload(file.url)">
+              下载 {{ file.label }}
+            </button>
+          </div>
           <button
-            v-if="exportDownloadUrl"
+            v-else-if="exportDownloadUrl"
             class="btn btn-sm"
-            @click="handleDownload"
+            @click="handleDownload(exportDownloadUrl)"
           >
             下载文件
           </button>
@@ -93,6 +98,7 @@ const props = defineProps({
   exportStatus: { type: String, default: 'idle' },
   exportFormat: { type: String, default: 'pptx' },
   exportDownloadUrl: { type: String, default: '' },
+  exportFiles: { type: Object, default: () => ({}) },
   exportError: { type: String, default: '' },
   loading: { type: Boolean, default: false },
   /** 教学意图对象（传给 deck-skill 生成 HTML 课件） */
@@ -148,6 +154,15 @@ const exportFileName = computed(() => {
   const extension = selectedFormat.value === 'both' ? 'zip' : (selectedFormat.value === 'interactive' ? 'html' : (selectedFormat.value === 'lesson_plan' ? 'docx' : selectedFormat.value))
   return `${safeTitle}-${props.versionLabel}.${extension}`
 })
+const exportDescription = computed(() => selectedFormat.value === 'both'
+  ? `导出文件：${String(props.courseTitle || '未命名课件')}-${props.versionLabel}（PPTX + DOCX + HTML5）`
+  : `导出文件：${exportFileName.value}`)
+const downloadFiles = computed(() => {
+  const labels = { pptx: 'PPTX', docx: 'DOCX', html: 'HTML5', html5: 'HTML5', interactive: 'HTML5' }
+  return Object.entries(props.exportFiles || {})
+    .filter(([, url]) => Boolean(url))
+    .map(([format, url]) => ({ format, url, label: labels[format] || format.toUpperCase() }))
+})
 
 const statusText = computed(() => {
   const map = {
@@ -180,10 +195,8 @@ watch(() => props.exportStatus, (val) => {
   }
 })
 
-function handleDownload() {
-  if (props.exportDownloadUrl) {
-    window.open(props.exportDownloadUrl, '_blank')
-  }
+function handleDownload(url) {
+  if (url) window.open(url, '_blank', 'noopener')
 }
 </script>
 
@@ -232,7 +245,8 @@ function handleDownload() {
   height: 100%; background: linear-gradient(90deg, #5ca68f, #3b8b7a); border-radius: 3px; transition: width 0.4s;
 }
 
-.done-section { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.done-section { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.download-list { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .done-icon { font-size: 14px; color: #059669; font-weight: 500; }
 
 .error-section { margin-top: 4px; }

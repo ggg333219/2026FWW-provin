@@ -45,6 +45,8 @@ export const useVersionStore = defineStore("version", {
     exportFormat: "pptx",
     /** 导出下载地址 */
     exportDownloadUrl: "",
+    /** 多格式导出文件 { pptx, docx, html } */
+    exportFiles: {},
     /** 导出错误 */
     exportError: "",
 
@@ -282,6 +284,9 @@ export const useVersionStore = defineStore("version", {
         this.exportJobId = job.job_id || "";
         this.exportStatus = job.status === "done" ? "done" : "pending";
         this.exportDownloadUrl = normalizeDownloadUrl(job.download_url);
+        this.exportFiles = Object.fromEntries(
+          Object.entries(job.files || {}).map(([format, url]) => [format, normalizeDownloadUrl(url)]),
+        );
         // 如果不是立即完成，启动轮询
         if (this.exportStatus !== "done" && this.exportJobId) {
           this._pollExport();
@@ -311,6 +316,9 @@ export const useVersionStore = defineStore("version", {
           const job = response?.data || response || {};
           this.exportStatus = job.status || "pending";
           this.exportDownloadUrl = normalizeDownloadUrl(job.download_url);
+          this.exportFiles = Object.fromEntries(
+            Object.entries(job.files || {}).map(([format, url]) => [format, normalizeDownloadUrl(url)]),
+          );
           this.exportError = job.error || "";
           if (this.exportStatus === "done" || this.exportStatus === "failed") {
             return;
@@ -334,6 +342,7 @@ export const useVersionStore = defineStore("version", {
       this.exportStatus = "idle";
       this.exportFormat = "pptx";
       this.exportDownloadUrl = "";
+      this.exportFiles = {};
       this.exportError = "";
     },
 
