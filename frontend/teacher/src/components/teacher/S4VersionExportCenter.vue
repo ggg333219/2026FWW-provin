@@ -1,7 +1,7 @@
 <template>
   <div class="section-card">
     <h3>导出中心</h3>
-    <p v-if="genId" class="export-context">{{ courseTitle }} · {{ versionLabel }}</p>
+    <p v-if="genId" class="export-context">导出文件：{{ exportFileName }}</p>
 
     <div v-if="!genId" class="empty-tip">请先加载版本</div>
     <div v-else class="export-panel">
@@ -143,6 +143,11 @@ async function handleSkillPreview() {
 }
 
 const exportIsActive = computed(() => ['pending', 'exporting'].includes(props.exportStatus))
+const exportFileName = computed(() => {
+  const safeTitle = String(props.courseTitle || '未命名课件').replace(/[\\/:*?"<>|]/g, '_')
+  const extension = selectedFormat.value === 'both' ? 'zip' : (selectedFormat.value === 'interactive' ? 'html' : (selectedFormat.value === 'lesson_plan' ? 'docx' : selectedFormat.value))
+  return `${safeTitle}-${props.versionLabel}.${extension}`
+})
 
 const statusText = computed(() => {
   const map = {

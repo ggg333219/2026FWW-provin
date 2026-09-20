@@ -44,6 +44,11 @@
         <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }">返回补充资料</router-link>
       </div>
 
+      <div v-if="baseVersion > 0" class="version-branch-banner" role="status">
+        <strong>当前基于 v{{ baseVersion }} 编辑</strong>
+        <span>保存后将生成 v{{ baseVersion + 1 }}，原版本不会被覆盖。</span>
+      </div>
+
       <!-- S3 阶段指示器 -->
       <div class="phase-tabs" role="tablist" aria-label="课件生成步骤">
         <button
@@ -310,7 +315,7 @@
                     class="btn btn-sm"
                     @click="openInteractiveAsset(node)"
                   >
-                    打开
+                    页面内预览
                   </button>
                 </template>
                 <template
@@ -336,6 +341,13 @@
               大纲中无互动节点，可在编辑大纲时将节点类型改为"互动环节"
             </p>
           </div>
+          <div v-if="interactivePreviewUrl" class="interactive-preview-card">
+            <div class="interactive-preview-head">
+              <div><strong>HTML5 互动预览</strong><span>{{ interactivePreviewTitle }}</span></div>
+              <div><button class="btn btn-sm" @click="openInteractiveWindow">新窗口打开</button><button class="btn btn-sm" @click="closeInteractivePreview">关闭</button></div>
+            </div>
+            <iframe :src="interactivePreviewUrl" class="interactive-preview-frame" sandbox="allow-scripts allow-same-origin allow-forms" title="HTML5 互动资源预览"></iframe>
+          </div>
         </div>
       </div>
     </div>
@@ -357,6 +369,7 @@ import { useMaterialStore } from "../stores/materialStore";
 import { useModifyStore } from "../stores/modifyStore";
 import { useCoursewareProjectStore } from "../stores/coursewareProjectStore";
 import { teacherV1Api } from "../services/v1";
+import { projectModifyApi } from "../services/v1/projectModifyApi";
 import { API_BASE, AI_API_BASE } from "../config/api";
 
 const generationStore = useGenerationStore();
@@ -387,6 +400,9 @@ const selectedEvidenceIds = ref([]);
 const evidenceScope = ref({ scope: "draft", nodeId: "" });
 const saveVersionState = ref("idle");
 const lastSavedVersion = ref(0);
+const baseVersion = ref(Number(route.query.base_version || 0));
+const interactivePreviewUrl = ref("");
+const interactivePreviewTitle = ref("");
 const initializing = ref(true);
 
 const evidenceId = (item, index) => String(item?.chunk_id || item?.id || `evidence-${index}`);
@@ -485,6 +501,7 @@ onMounted(async () => {
     // 覆盖当前课件的恢复结果。
     if (!restoredGenerationNodes) await loadGenerationStatus();
   }
+  if (route.query.phase === "outline") currentPhase.value = "outline";
   } finally {
     initializing.value = false;
   }
@@ -697,8 +714,18 @@ async function handleGenerateInteractive(node) {
 function openInteractiveAsset(node) {
   const asset = interactiveStore.getAsset(node.node_id);
   if (asset?.entry_url) {
-    window.open(asset.entry_url, "_blank");
+    interactivePreviewUrl.value = asset.entry_url;
+    interactivePreviewTitle.value = node.title || "互动资源";
   }
+}
+
+function openInteractiveWindow() {
+  if (interactivePreviewUrl.value) window.open(interactivePreviewUrl.value, "_blank", "noopener");
+}
+
+function closeInteractivePreview() {
+  interactivePreviewUrl.value = "";
+  interactivePreviewTitle.value = "";
 }
 
 // 新窗口打开 HTML5 预览
@@ -802,17 +829,37 @@ async function handleSaveNewVersion() {
   genError.value = "";
   try {
     await projectStore.saveNow(draftSnapshot());
+    const summary = `教师保存：${new Date().toLocaleString()}`;
     const response = await teacherV1Api.generation.finalize({
       generation_id: generationStore.lastGenId,
       nodes: generationStore.currentScriptNodes,
       course_name: outlineStore.title || intentStore.intentSummary?.topic || "未命名课件",
-      summary: `教师保存：${new Date().toLocaleString()}`,
+      summary,
       outline_id: outlineStore.outline_id,
       outline_version: outlineStore.outline_version,
     });
     const data = response?.data || response || {};
     if (data.generation_id) generationStore.setLastGenId(data.generation_id);
-    lastSavedVersion.value = Number(data.version_number || 0);
+    const generationVersion = Number(data.version_number || 0);
+    let savedVersion = generationVersion;
+    if (projectStore.projectId) {
+      const projectResponse = await projectModifyApi.createVersion(projectStore.projectId, {
+        nodes: generationStore.currentScriptNodes,
+        presentation: draftSnapshot().presentation,
+        page_bindings: generationPages.value.map((page) => ({
+          page_id: page.page_id,
+          node_id: page.node_id,
+          page_order: page.page_order,
+          citation_refs: page.citation_refs || page.source_chunk_ids || [],
+          interactive_asset_id: page.metadata?.interactive_asset?.interactive_asset_id || "",
+        })),
+        version_summary: summary,
+      });
+      const projectVersion = projectResponse?.data || projectResponse || {};
+      if (!savedVersion) savedVersion = Number(projectVersion.version_no || 0);
+    }
+    lastSavedVersion.value = savedVersion;
+    if (savedVersion > 0) baseVersion.value = savedVersion;
     saveVersionState.value = "saved";
     await modifyStore.loadVersionHistory().catch(() => {});
   } catch (error) {
@@ -920,6 +967,19 @@ function handleError(msg) {
   font-weight: 700;
   text-decoration: none;
 }
+.version-branch-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 11px 15px;
+  border: 1px solid #b9d9cd;
+  border-radius: 12px;
+  background: #eff8f4;
+  color: #24594d;
+  font-size: 13px;
+}
+.version-branch-banner span { color: #617c73; }
 
 /* 阶段选项卡 */
 .phase-tabs {
@@ -1319,6 +1379,12 @@ function handleError(msg) {
   text-align: center;
   padding: 10px 0;
 }
+.interactive-preview-card { margin-top: 14px; overflow: hidden; border: 1px solid #c8ddd5; border-radius: 12px; background: #fff; }
+.interactive-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid #e3ece8; background: #f5faf8; }
+.interactive-preview-head > div { display: flex; align-items: center; gap: 8px; }
+.interactive-preview-head strong { color: #23584c; font-size: 13px; }
+.interactive-preview-head span { color: #70837c; font-size: 12px; }
+.interactive-preview-frame { display: block; width: 100%; min-height: 520px; border: 0; background: #fff; }
 
 /* 通用按钮 */
 .btn {

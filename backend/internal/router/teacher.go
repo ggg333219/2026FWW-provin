@@ -146,6 +146,8 @@ func RegisterNewSkillRoutes(
 		projects.POST("/:project_id/modify", coursewareHandler.Modify)
 		projects.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
 		projects.GET("/:project_id/versions", coursewareHandler.Versions)
+		projects.POST("/:project_id/versions", coursewareHandler.CreateVersion)
+		projects.GET("/:project_id/versions/:version_id", coursewareHandler.VersionDetail)
 		projects.POST("/:project_id/rollback", coursewareHandler.Rollback)
 	} else if coursewareHandler != nil {
 		// S1 standalone（无 JWT、无持久化 handler）
@@ -160,6 +162,8 @@ func RegisterNewSkillRoutes(
 		projects.POST("/:project_id/modify", coursewareHandler.Modify)
 		projects.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
 		projects.GET("/:project_id/versions", coursewareHandler.Versions)
+		projects.POST("/:project_id/versions", coursewareHandler.CreateVersion)
+		projects.GET("/:project_id/versions/:version_id", coursewareHandler.VersionDetail)
 		projects.POST("/:project_id/rollback", coursewareHandler.Rollback)
 	}
 	// ---- S1: 意图理解 ----

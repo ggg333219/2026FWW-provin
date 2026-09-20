@@ -107,6 +107,7 @@ export const useVersionStore = defineStore("version", {
           locked: data.locked || false,
           createdAt: data.created_at || "",
         };
+        return this.currentVersionDetail;
       } catch (err) {
         console.warn("[versionStore] 加载版本详情失败", err);
         this.currentVersionDetail = null;
@@ -269,14 +270,14 @@ export const useVersionStore = defineStore("version", {
     // ================================================================
     // 导出
     // ================================================================
-    async startExport(genId, format = "pptx", version = null) {
+    async startExport(genId, format = "pptx", version = null, coursewareTitle = "") {
       if (!genId) return;
       this.exportStatus = "pending";
       this.exportFormat = format;
       this.exportError = "";
       try {
         // 统一兼容 {code,message,data} 信封（Mock）与裸响应（FastAPI 网关）
-        const response = await teacherV1Api.version.exportCreate(genId, format, version);
+        const response = await teacherV1Api.version.exportCreate(genId, format, version, coursewareTitle);
         const job = response?.data || response || {};
         this.exportJobId = job.job_id || "";
         this.exportStatus = job.status === "done" ? "done" : "pending";

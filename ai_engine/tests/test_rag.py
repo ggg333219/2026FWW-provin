@@ -650,6 +650,24 @@ class TestPGVectorStore(unittest.TestCase):
         self.assertIn("3", formatted)
 
 
+class TestModule3TCPKnowledgeSeed(unittest.TestCase):
+    """模块三验收：TCP 种子资料可被关键词检索命中。"""
+
+    def test_tcp_handshake_query_hits_seed_chunk(self):
+        from pathlib import Path
+        from ai_engine.rag.retrieve import BM25Scorer
+
+        seed_path = Path(__file__).resolve().parents[2] / "docs" / "knowledge" / "TCP网络基础-知识库种子资料.md"
+        content = seed_path.read_text(encoding="utf-8")
+        chunks = [chunk.strip() for chunk in content.split("## ") if chunk.strip()]
+        scorer = BM25Scorer()
+        scorer.index(chunks)
+        hits = scorer.search("TCP三次握手", top_k=3)
+
+        self.assertTrue(hits)
+        self.assertIn("三次握手", chunks[hits[0][0]])
+
+
 # =============================================================================
 # 8. S2 → KB 对接测试
 # =============================================================================

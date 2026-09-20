@@ -51,13 +51,14 @@ export const teacherVersionApi = {
    * 创建导出任务
    * POST /api/v1/export/{genId}
    */
-  exportCreate: (genId, format = 'pptx', version = null) =>
+  exportCreate: (genId, format = 'pptx', version = null, coursewareTitle = '') =>
     requestJson(`/api/v1/export/${encodeURIComponent(genId)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         format,
-        version: version || null
+        version: version || null,
+        courseware_title: coursewareTitle || ''
       })
     }),
 

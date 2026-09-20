@@ -525,48 +525,48 @@ const (
 
 // OutlineInteractivePlan —— 大纲节点的互动规划（规范 §2.2）。仅声明规划，不承载题目。
 type OutlineInteractivePlan struct {
-	Enabled        bool   `json:"enabled"`
-	Kind           string `json:"kind"` // quiz | flashcard | poll | game
-	DurationMin    int    `json:"duration_minutes"`
-	QuestionCount  int    `json:"question_count,omitempty"`
-	AutoGrading    bool   `json:"auto_grading,omitempty"`
-	Delivery       string `json:"delivery"` // html5_link | ppt_native | standalone_html
+	Enabled       bool   `json:"enabled"`
+	Kind          string `json:"kind"` // quiz | flashcard | poll | game
+	DurationMin   int    `json:"duration_minutes"`
+	QuestionCount int    `json:"question_count,omitempty"`
+	AutoGrading   bool   `json:"auto_grading,omitempty"`
+	Delivery      string `json:"delivery"` // html5_link | ppt_native | standalone_html
 }
 
 // OutlineNode —— 大纲节点（规范 §2.1）。只描述"准备讲什么"，不含完整讲稿正文。
 // 禁止字段：script / segments / interactive_items（规范 §2.1 明确禁止）。
 type OutlineNode struct {
-	NodeID               string                 `json:"node_id"`
-	Order                int                    `json:"order"` // 从 1 开始连续编号
-	Title                string                 `json:"title"`
-	Summary              string                 `json:"summary"`
-	NodeType             string                 `json:"node_type"` // content | section | quiz | interactive | summary
-	KeyPoints            []string               `json:"key_points"`
-	EstimatedDurationMin float64                `json:"estimated_duration_minutes"` // 单位统一为分钟
-	SourceChunkIDs       []string               `json:"source_chunk_ids,omitempty"`
+	NodeID               string                  `json:"node_id"`
+	Order                int                     `json:"order"` // 从 1 开始连续编号
+	Title                string                  `json:"title"`
+	Summary              string                  `json:"summary"`
+	NodeType             string                  `json:"node_type"` // content | section | quiz | interactive | summary
+	KeyPoints            []string                `json:"key_points"`
+	EstimatedDurationMin float64                 `json:"estimated_duration_minutes"` // 单位统一为分钟
+	SourceChunkIDs       []string                `json:"source_chunk_ids,omitempty"`
 	InteractivePlan      *OutlineInteractivePlan `json:"interactive_plan,omitempty"`
 }
 
 // OutlineGenerateRequest —— POST /gen/outline 请求（Python GenOutlineRequest 镜像）。
 type OutlineGenerateRequest struct {
-	SessionID     string          `json:"session_id,omitempty"`
-	IntentID      string          `json:"intent_id,omitempty"`
-	Intent        *IntentSummary  `json:"intent,omitempty"`
+	SessionID      string          `json:"session_id,omitempty"`
+	IntentID       string          `json:"intent_id,omitempty"`
+	Intent         *IntentSummary  `json:"intent,omitempty"`
 	EvidencePacket *EvidencePacket `json:"evidence_packet,omitempty"`
-	Markdown      string          `json:"markdown,omitempty"`
-	CourseName    string          `json:"course_name,omitempty"`
+	Markdown       string          `json:"markdown,omitempty"`
+	CourseName     string          `json:"course_name,omitempty"`
 }
 
 // OutlineGenerateResponse —— POST /gen/outline 响应（Python 返回裸 {"nodes": [...], "used_fallback": ...}）。
 type OutlineGenerateResponse struct {
-	Nodes         []OutlineNode `json:"nodes"`
-	UsedFallback  bool          `json:"used_fallback,omitempty"`
+	Nodes        []OutlineNode `json:"nodes"`
+	UsedFallback bool          `json:"used_fallback,omitempty"`
 }
 
 // OutlineReviseAIRequest —— POST /gen/outline/revise 请求（Python GenOutlineReviseRequest 镜像）。
 type OutlineReviseAIRequest struct {
-	Nodes    []OutlineNode `json:"nodes"`
-	Message  string        `json:"message"`
+	Nodes   []OutlineNode `json:"nodes"`
+	Message string        `json:"message"`
 }
 
 // OutlineReviseAIResponse —— POST /gen/outline/revise 响应（Python 返回 {"nodes", "change_summary"}）。
@@ -742,10 +742,11 @@ type VersionLockResponse struct {
 }
 
 type ExportCreateRequest struct {
-	Format    string   `json:"format"`
-	Version   int      `json:"version"`
-	VersionID string   `json:"version_id,omitempty"`
-	Formats   []string `json:"formats,omitempty"`
+	Format          string   `json:"format"`
+	Version         int      `json:"version"`
+	VersionID       string   `json:"version_id,omitempty"`
+	Formats         []string `json:"formats,omitempty"`
+	CoursewareTitle string   `json:"courseware_title,omitempty"`
 }
 
 type ExportCreateResponse struct {
@@ -802,13 +803,13 @@ func (c *aiEngineClient) GenerationFinalize(ctx context.Context, req GenerationF
 // =============================================================================
 
 type GenContentRequest struct {
-	Nodes            []TeachingNodeItem `json:"nodes"`
-	ContextMarkdown  string             `json:"context_markdown"`
-	CourseName       string             `json:"course_name"`
-	Mode             string             `json:"mode"`
-	Enhanced         bool               `json:"enhanced"`
-	OutlineID        string             `json:"outline_id"`
-	OutlineVersion   int                `json:"outline_version"`
+	Nodes           []TeachingNodeItem `json:"nodes"`
+	ContextMarkdown string             `json:"context_markdown"`
+	CourseName      string             `json:"course_name"`
+	Mode            string             `json:"mode"`
+	Enhanced        bool               `json:"enhanced"`
+	OutlineID       string             `json:"outline_id"`
+	OutlineVersion  int                `json:"outline_version"`
 	// B6: 局部重生成（mode=partial 时生效）
 	TargetNodeIDs     []string `json:"target_node_ids,omitempty"`
 	ModifyAction      string   `json:"modify_action,omitempty"`

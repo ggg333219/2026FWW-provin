@@ -206,6 +206,8 @@ func (h *CoursewareHandler) ModifyHistory(c *gin.Context) {
 	type versionItem struct {
 		VersionID         string                     `json:"version_id"`
 		VersionNo         int                        `json:"version_no"`
+		ParentVersionID   string                     `json:"parent_version_id,omitempty"`
+		VersionSummary    string                     `json:"version_summary"`
 		ModifyInstruction string                     `json:"modify_instruction"`
 		CreatedAt         string                     `json:"created_at"`
 		Nodes             []service.TeachingNodeItem `json:"nodes"`
@@ -220,7 +222,8 @@ func (h *CoursewareHandler) ModifyHistory(c *gin.Context) {
 			_ = json.Unmarshal([]byte(v.PresentationJSON), &presentation)
 		}
 		items = append(items, versionItem{
-			VersionID: v.VersionID, VersionNo: v.VersionNo,
+			VersionID: v.VersionID, VersionNo: v.VersionNo, ParentVersionID: v.ParentVersionID,
+			VersionSummary:    v.VersionSummary,
 			ModifyInstruction: v.ModifyInstr, CreatedAt: v.CreatedAt.Format("2006-01-02 15:04:05"),
 			Nodes:        nodes,
 			Presentation: presentation,
@@ -232,6 +235,56 @@ func (h *CoursewareHandler) ModifyHistory(c *gin.Context) {
 // Versions GET /:project_id/versions —— 版本列表（含修改指令摘要）。
 func (h *CoursewareHandler) Versions(c *gin.Context) {
 	h.ModifyHistory(c) // 同一数据源，字段一致
+}
+
+// CreateVersion POST /:project_id/versions —— 手动保存完整版本快照。
+func (h *CoursewareHandler) CreateVersion(c *gin.Context) {
+	projectID := c.Param("project_id")
+	var req struct {
+		Nodes          []service.TeachingNodeItem `json:"nodes"`
+		Presentation   map[string]string          `json:"presentation"`
+		PageBindings   interface{}                `json:"page_bindings"`
+		VersionSummary string                     `json:"version_summary"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "版本快照参数错误: " + err.Error()})
+		return
+	}
+	version, err := h.svc.CreateVersionSnapshot(c.Request.Context(), projectID, req.VersionSummary, req.Nodes, req.Presentation, req.PageBindings)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"code": 201, "data": h.versionDetail(version)})
+}
+
+// VersionDetail GET /:project_id/versions/:version_id —— 获取单版本详情。
+func (h *CoursewareHandler) VersionDetail(c *gin.Context) {
+	version, err := h.svc.GetVersionByID(c.Request.Context(), c.Param("project_id"), c.Param("version_id"))
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": h.versionDetail(version)})
+}
+
+func (h *CoursewareHandler) versionDetail(v *service.CoursewareVersion) gin.H {
+	var snapshot service.CoursewareVersionSnapshot
+	if v.SnapshotJSON != "" {
+		_ = json.Unmarshal([]byte(v.SnapshotJSON), &snapshot)
+	}
+	if len(snapshot.Nodes) == 0 && v.NodesJSON != "" {
+		_ = json.Unmarshal([]byte(v.NodesJSON), &snapshot.Nodes)
+	}
+	if len(snapshot.Presentation) == 0 && v.PresentationJSON != "" {
+		_ = json.Unmarshal([]byte(v.PresentationJSON), &snapshot.Presentation)
+	}
+	return gin.H{
+		"version_id": v.VersionID, "project_id": v.ProjectID, "version_no": v.VersionNo,
+		"parent_version_id": v.ParentVersionID, "version_summary": v.VersionSummary,
+		"modify_instruction": v.ModifyInstr, "created_at": v.CreatedAt,
+		"nodes": snapshot.Nodes, "presentation": snapshot.Presentation, "page_bindings": snapshot.PageBindings,
+	}
 }
 
 // Rollback POST /:project_id/rollback —— A7 回滚（克隆式，不覆盖历史）。

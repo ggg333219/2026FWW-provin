@@ -680,7 +680,8 @@ class RollbackRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     format: ExportFormat = ExportFormat.PPTX
-    version: int = 1
+    version: Optional[int] = 0
+    courseware_title: str = ""
 
 
 class ExportStatusResponse(BaseModel):
@@ -692,3 +693,5 @@ class ExportStatusResponse(BaseModel):
     upload_status: Optional[str] = None
     minio_path: Optional[str] = None
     file_size: Optional[int] = None
+    courseware_title: Optional[str] = None
+    version: Optional[int] = None

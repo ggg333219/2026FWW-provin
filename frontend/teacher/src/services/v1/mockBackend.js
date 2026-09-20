@@ -2641,8 +2641,34 @@ export function handleMockRequest(path, options = {}, originalError = null) {
       if (project && action === 'step' && method === 'PUT') {
         project.current_step = body.current_step || body.step || project.current_step; project.status = 'active'; project.updated_at = nowIso(); persistMockStore(); return ok({ current_step: project.current_step, updated_at: project.updated_at })
       }
+      if (project && action === 'versions' && segments[5] && method === 'GET') {
+        const target = (project.versions || []).find((item) => item.version_id === segments[5])
+        if (!target) return null
+        return ok(deepClone(target))
+      }
       if (project && ['versions', 'modify-history'].includes(action) && method === 'GET') {
         return ok({ items: deepClone(project.versions || []) })
+      }
+      if (project && action === 'versions' && method === 'POST') {
+        project.versions = project.versions || []
+        const versionNo = project.versions.length + 1
+        const created = {
+          version_id: uid('ver'),
+          project_id: project.id,
+          version_no: versionNo,
+          parent_version_id: body.parent_version_id || '',
+          version_summary: cleanText(body.version_summary) || `保存版本 v${versionNo}`,
+          modify_instruction: cleanText(body.version_summary) || `保存版本 v${versionNo}`,
+          created_at: nowIso(),
+          nodes: deepClone(Array.isArray(body.nodes) ? body.nodes : []),
+          presentation: deepClone(body.presentation || {}),
+          page_bindings: deepClone(body.page_bindings || []),
+        }
+        project.versions.push(created)
+        project.version_no = versionNo
+        project.updated_at = created.created_at
+        persistMockStore()
+        return ok(deepClone(created))
       }
       if (project && action === 'modify' && method === 'POST') {
         const instruction = cleanText(body.instruction)

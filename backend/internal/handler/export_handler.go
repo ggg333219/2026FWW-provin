@@ -73,6 +73,11 @@ func (h *ExportHandler) CreateV2(c *gin.Context) {
 		format = "interactive"
 	}
 	req.Format, req.Formats = format, nil
+	if h.projectService != nil && c.GetString("userID") != "" {
+		if p, findErr := h.projectService.FindByGeneration(c.Request.Context(), c.GetString("userID"), genID); findErr == nil {
+			req.CoursewareTitle = p.Title
+		}
+	}
 	resp, err := h.aiClient.ExportCreate(c.Request.Context(), genID, req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "创建导出任务失败: " + err.Error()})
@@ -80,11 +85,7 @@ func (h *ExportHandler) CreateV2(c *gin.Context) {
 	}
 	resp.Formats = requestedFormats
 	resp.Version = req.Version
-	if h.projectService != nil && c.GetString("userID") != "" {
-		if p, findErr := h.projectService.FindByGeneration(c.Request.Context(), c.GetString("userID"), genID); findErr == nil {
-			resp.CoursewareTitle = p.Title
-		}
-	}
+	resp.CoursewareTitle = req.CoursewareTitle
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
 

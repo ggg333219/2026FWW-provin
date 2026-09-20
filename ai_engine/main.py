@@ -1802,19 +1802,22 @@ async def export_create(gen_id: str, req: ExportRequest):
     """
     job_id = f"exp_{uuid.uuid4().hex[:12]}"
 
-    # 获取最新版本节点
+    # 按用户选中的版本导出；version<=0 时才回退最新版本。
     vm = get_version_manager()
-    latest = vm.load_version(gen_id)
-    if not latest:
+    requested_version = int(req.version or 0)
+    selected = vm.load_version(gen_id, requested_version) if requested_version > 0 else vm.load_version(gen_id)
+    if not selected:
         raise HTTPException(status_code=404, detail="版本不存在")
-    nodes = latest.nodes_snapshot
+    nodes = selected.nodes_snapshot
+    selected_version = selected.version_number
+    courseware_title = (req.courseware_title or "课件").strip() or "课件"
 
     # 创建导出任务
     job = ExportJob(
         job_id=job_id,
         generation_id=gen_id,
         format=req.format,
-        version=req.version or latest.version_number,
+        version=selected_version,
         status=ExportStatus.PENDING,
         created_at=datetime.now(),
     )
@@ -1834,18 +1837,26 @@ async def export_create(gen_id: str, req: ExportRequest):
                 break
 
     # 后台执行导出
-    asyncio.create_task(_run_export(job_id, nodes, req.format, intent=intent_dict))
+    asyncio.create_task(
+        _run_export(
+            job_id, nodes, req.format, intent=intent_dict,
+            courseware_title=courseware_title, version=selected_version,
+        )
+    )
 
     return ExportStatusResponse(
         job_id=job_id,
         status=ExportStatus.PENDING,
         download_url=None,
         error=None,
+        courseware_title=courseware_title,
+        version=selected_version,
     )
 
 
 async def _run_export(
     job_id: str, nodes: list[dict], fmt: ExportFormat, intent: dict | None = None,
+    courseware_title: str = "课件", version: int = 1,
 ):
     """后台导出任务"""
     async with _export_lock:
@@ -1856,9 +1867,12 @@ async def _run_export(
     try:
         job.status = ExportStatus.EXPORTING
 
-        course_name = "课件"
+        course_name = courseware_title
         export_dir = Path("data/exports")
         export_dir.mkdir(parents=True, exist_ok=True)
+        job.metadata = job.metadata or {}
+        job.metadata["courseware_title"] = course_name
+        job.metadata["version"] = version
 
         # Word 标准教案（A12 赛题 4b）：LLM 生成 + 确定性 fallback，导出永不空。
         # 产物存 doc_path（.docx），复用既有上传/下载链路，无需改动 upload 循环。
@@ -1988,6 +2002,8 @@ async def export_status(job_id: str):
         upload_status=meta.get("upload_status"),
         minio_path=job.minio_path,
         file_size=job.file_size,
+        courseware_title=meta.get("courseware_title") or "课件",
+        version=int(meta.get("version") or job.version or 1),
     )
 
 
@@ -2010,7 +2026,15 @@ async def export_download(job_id: str, extension: str):
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "html": "text/html; charset=utf-8",
     }
-    return FileResponse(path, media_type=media_types[extension.lower()], filename=path.name)
+    meta = job.metadata or {}
+    title = str(meta.get("courseware_title") or "课件")
+    safe_title = "".join("_" if ch in '\\/:*?\"<>|' else ch for ch in title).strip(" .") or "课件"
+    version = int(meta.get("version") or job.version or 1)
+    return FileResponse(
+        path,
+        media_type=media_types[extension.lower()],
+        filename=f"{safe_title}-v{version}.{extension.lower()}",
+    )
 
 
 # =============================================================================

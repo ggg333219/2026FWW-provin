@@ -64,9 +64,12 @@ type CoursewareVersion struct {
 	VersionID        string    `json:"version_id"`
 	ProjectID        string    `json:"project_id"`
 	VersionNo        int       `json:"version_no"`
+	ParentVersionID  string    `json:"parent_version_id,omitempty"`
 	NodesJSON        string    `json:"-"` // 原始 JSON（内部）
 	PresentationJSON string    `json:"-"` // 修改前的 PPT 呈现层快照
+	SnapshotJSON     string    `json:"-"` // 完整快照：节点、样式、页面证据绑定
 	ModifyInstr      string    `json:"modify_instruction"`
+	VersionSummary   string    `json:"version_summary"`
 	CreatedAt        time.Time `json:"created_at"`
 }
 
@@ -74,9 +77,12 @@ type coursewareVersionRow struct {
 	VersionID        string    `gorm:"column:version_id;size:64;primaryKey"`
 	ProjectID        string    `gorm:"column:project_id;size:64;index"`
 	VersionNo        int       `gorm:"column:version_no"`
+	ParentVersionID  string    `gorm:"column:parent_version_id;size:64;index"`
 	NodesJSON        string    `gorm:"column:nodes_snapshot;type:text"`
 	PresentationJSON string    `gorm:"column:presentation_snapshot;type:text"`
+	SnapshotJSON     string    `gorm:"column:snapshot_json;type:text"`
 	ModifyInstr      string    `gorm:"column:modify_instruction;size:1000"`
+	VersionSummary   string    `gorm:"column:version_summary;size:1000"`
 	CreatedAt        time.Time `gorm:"column:created_at"`
 }
 
@@ -151,7 +157,15 @@ type coursewareStore interface {
 	NextVersionNo(ctx context.Context, projectID string) (int, error)
 	SaveVersion(ctx context.Context, v *CoursewareVersion) error
 	GetVersion(ctx context.Context, projectID string, versionNo int) (*CoursewareVersion, error)
+	GetVersionByID(ctx context.Context, projectID, versionID string) (*CoursewareVersion, error)
 	ListVersions(ctx context.Context, projectID string) ([]*CoursewareVersion, error)
+}
+
+// CoursewareVersionSnapshot 是模块3的完整版本边界，显式保留页面证据绑定。
+type CoursewareVersionSnapshot struct {
+	Nodes        []TeachingNodeItem `json:"nodes"`
+	Presentation map[string]string  `json:"presentation,omitempty"`
+	PageBindings interface{}        `json:"page_bindings,omitempty"`
 }
 
 func NewCoursewareService(aiClient modifyClient) *CoursewareService {
@@ -313,7 +327,9 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 		VersionNo:        prevNo,
 		NodesJSON:        string(nodesJSON),
 		PresentationJSON: presentationJSON(presentationFromNodes(nodes)),
+		SnapshotJSON:     snapshotJSON(nodes, presentationFromNodes(nodes), nil),
 		ModifyInstr:      instruction,
+		VersionSummary:   instruction,
 		CreatedAt:        time.Now(),
 	}
 	if err := s.store.SaveVersion(ctx, snap); err != nil {
@@ -350,6 +366,14 @@ func presentationJSON(p map[string]string) string {
 		return "{}"
 	}
 	raw, err := json.Marshal(p)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func snapshotJSON(nodes []TeachingNodeItem, presentation map[string]string, pageBindings interface{}) string {
+	raw, err := json.Marshal(CoursewareVersionSnapshot{Nodes: nodes, Presentation: presentation, PageBindings: pageBindings})
 	if err != nil {
 		return "{}"
 	}
@@ -491,9 +515,12 @@ func (s *CoursewareService) Rollback(ctx context.Context, projectID string, vers
 		VersionID:        "ver_" + uuid.NewString()[:12],
 		ProjectID:        projectID,
 		VersionNo:        newNo,
+		ParentVersionID:  target.VersionID,
 		NodesJSON:        target.NodesJSON, // 内容 = 目标版本
 		PresentationJSON: target.PresentationJSON,
+		SnapshotJSON:     target.SnapshotJSON,
 		ModifyInstr:      fmt.Sprintf("回滚到 v%d", versionNo),
+		VersionSummary:   fmt.Sprintf("基于 v%d 分叉创建", versionNo),
 		CreatedAt:        time.Now(),
 	}
 	if err := s.store.SaveVersion(ctx, snap); err != nil {
@@ -513,6 +540,37 @@ func (s *CoursewareService) Rollback(ctx context.Context, projectID string, vers
 	}, nil
 }
 
+// CreateVersionSnapshot 手动保存一个完整版本快照，用于 S3“保存新版本”。
+func (s *CoursewareService) CreateVersionSnapshot(ctx context.Context, projectID, summary string, nodes []TeachingNodeItem, presentation map[string]string, pageBindings interface{}) (*CoursewareVersion, error) {
+	if _, err := s.store.GetProject(ctx, projectID); err != nil {
+		return nil, err
+	}
+	versionNo, err := s.store.NextVersionNo(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(summary) == "" {
+		summary = fmt.Sprintf("保存版本 v%d", versionNo)
+	}
+	nodesRaw, _ := json.Marshal(nodes)
+	version := &CoursewareVersion{
+		VersionID:        "ver_" + uuid.NewString()[:12],
+		ProjectID:        projectID,
+		VersionNo:        versionNo,
+		NodesJSON:        string(nodesRaw),
+		PresentationJSON: presentationJSON(presentation),
+		SnapshotJSON:     snapshotJSON(nodes, presentation, pageBindings),
+		ModifyInstr:      summary,
+		VersionSummary:   summary,
+		CreatedAt:        time.Now(),
+	}
+	if err := s.store.SaveVersion(ctx, version); err != nil {
+		return nil, err
+	}
+	_ = s.store.SaveDraft(ctx, projectID, version.SnapshotJSON)
+	return version, nil
+}
+
 // Versions 版本列表（含修改指令摘要）。
 func (s *CoursewareService) Versions(ctx context.Context, projectID string) ([]*CoursewareVersion, error) {
 	return s.store.ListVersions(ctx, projectID)
@@ -521,6 +579,11 @@ func (s *CoursewareService) Versions(ctx context.Context, projectID string) ([]*
 // GetVersion 读取指定版本快照。
 func (s *CoursewareService) GetVersion(ctx context.Context, projectID string, versionNo int) (*CoursewareVersion, error) {
 	return s.store.GetVersion(ctx, projectID, versionNo)
+}
+
+// GetVersionByID 读取指定版本 ID，供 /versions/:version_id 使用。
+func (s *CoursewareService) GetVersionByID(ctx context.Context, projectID, versionID string) (*CoursewareVersion, error) {
+	return s.store.GetVersionByID(ctx, projectID, versionID)
 }
 
 // =============================================================================
@@ -671,6 +734,18 @@ func (m *memCoursewareStore) GetVersion(_ context.Context, projectID string, ver
 	defer m.mu.RUnlock()
 	for _, v := range m.versions[projectID] {
 		if v.VersionNo == versionNo {
+			cp := *v
+			return &cp, nil
+		}
+	}
+	return nil, ErrVersionNotFound
+}
+
+func (m *memCoursewareStore) GetVersionByID(_ context.Context, projectID, versionID string) (*CoursewareVersion, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, v := range m.versions[projectID] {
+		if v.VersionID == versionID {
 			cp := *v
 			return &cp, nil
 		}
@@ -840,7 +915,8 @@ func (g *gormCoursewareStore) NextVersionNo(ctx context.Context, projectID strin
 func (g *gormCoursewareStore) SaveVersion(ctx context.Context, v *CoursewareVersion) error {
 	return g.db.WithContext(ctx).Create(&coursewareVersionRow{
 		VersionID: v.VersionID, ProjectID: v.ProjectID, VersionNo: v.VersionNo,
-		NodesJSON: v.NodesJSON, PresentationJSON: v.PresentationJSON, ModifyInstr: v.ModifyInstr, CreatedAt: v.CreatedAt,
+		ParentVersionID: v.ParentVersionID, NodesJSON: v.NodesJSON, PresentationJSON: v.PresentationJSON,
+		SnapshotJSON: v.SnapshotJSON, ModifyInstr: v.ModifyInstr, VersionSummary: v.VersionSummary, CreatedAt: v.CreatedAt,
 	}).Error
 }
 
@@ -855,8 +931,22 @@ func (g *gormCoursewareStore) GetVersion(ctx context.Context, projectID string, 
 	}
 	return &CoursewareVersion{
 		VersionID: row.VersionID, ProjectID: row.ProjectID, VersionNo: row.VersionNo,
-		NodesJSON: row.NodesJSON, PresentationJSON: row.PresentationJSON, ModifyInstr: row.ModifyInstr, CreatedAt: row.CreatedAt,
+		ParentVersionID: row.ParentVersionID, NodesJSON: row.NodesJSON, PresentationJSON: row.PresentationJSON,
+		SnapshotJSON: row.SnapshotJSON, ModifyInstr: row.ModifyInstr, VersionSummary: row.VersionSummary, CreatedAt: row.CreatedAt,
 	}, nil
+}
+
+func (g *gormCoursewareStore) GetVersionByID(ctx context.Context, projectID, versionID string) (*CoursewareVersion, error) {
+	var row coursewareVersionRow
+	if err := g.db.WithContext(ctx).Where("project_id = ? AND version_id = ?", projectID, versionID).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrVersionNotFound
+		}
+		return nil, err
+	}
+	return &CoursewareVersion{VersionID: row.VersionID, ProjectID: row.ProjectID, VersionNo: row.VersionNo,
+		ParentVersionID: row.ParentVersionID, NodesJSON: row.NodesJSON, PresentationJSON: row.PresentationJSON,
+		SnapshotJSON: row.SnapshotJSON, ModifyInstr: row.ModifyInstr, VersionSummary: row.VersionSummary, CreatedAt: row.CreatedAt}, nil
 }
 
 func (g *gormCoursewareStore) ListVersions(ctx context.Context, projectID string) ([]*CoursewareVersion, error) {
@@ -869,7 +959,8 @@ func (g *gormCoursewareStore) ListVersions(ctx context.Context, projectID string
 	for _, r := range rows {
 		out = append(out, &CoursewareVersion{
 			VersionID: r.VersionID, ProjectID: r.ProjectID, VersionNo: r.VersionNo,
-			NodesJSON: r.NodesJSON, PresentationJSON: r.PresentationJSON, ModifyInstr: r.ModifyInstr, CreatedAt: r.CreatedAt,
+			ParentVersionID: r.ParentVersionID, NodesJSON: r.NodesJSON, PresentationJSON: r.PresentationJSON,
+			SnapshotJSON: r.SnapshotJSON, ModifyInstr: r.ModifyInstr, VersionSummary: r.VersionSummary, CreatedAt: r.CreatedAt,
 		})
 	}
 	return out, nil

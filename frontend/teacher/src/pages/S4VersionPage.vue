@@ -76,7 +76,7 @@
               <div v-else class="action-group">
                 <!-- 回滚 -->
                 <div class="action-row">
-                  <label>回滚到版本:</label>
+                  <label>选择分叉起点:</label>
                   <select v-model="rollbackTarget" class="action-select">
                     <option :value="null" disabled>选择目标版本</option>
                     <option v-for="v in versionStore.versions" :key="v.id" :value="v.version">
@@ -88,7 +88,7 @@
                     :disabled="!rollbackTarget || versionStore.loading"
                     @click="handleRollback"
                   >
-                    回滚
+                    基于此版本新建版本
                   </button>
                 </div>
 
@@ -292,8 +292,16 @@ function changeLabels(changes = []) {
 async function handleRollback() {
   if (!rollbackTarget.value || !versionStore.genId) return
   try {
-    await versionStore.rollbackTo(versionStore.genId, rollbackTarget.value)
+    const targetVersion = Number(rollbackTarget.value)
+    const targetDetail = await versionStore.loadVersion(versionStore.genId, targetVersion)
+    const result = await versionStore.rollbackTo(versionStore.genId, targetVersion)
+    const data = result?.data || result || {}
+    const newVersion = Number(data.current_version || data.new_version_no || versionStore.currentVersionDetail?.version || targetVersion + 1)
+    generationStore.setLastGenId(versionStore.genId)
+    generationStore.setNodes(data.nodes || targetDetail?.nodes || [])
+    await projectStore.updateStep('s3_studio').catch(() => {})
     rollbackTarget.value = null
+    await router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, phase: 'outline' } })
   } catch {
     // 错误已在 store 中设置
   }
@@ -327,17 +335,20 @@ async function handleSubmitModify() {
 
 function handleStartExport(format) {
   if (!versionStore.genId) return
-  versionStore.startExport(versionStore.genId, format, versionStore.currentVersionDetail?.version || null)
+  versionStore.startExport(versionStore.genId, format, versionStore.currentVersionDetail?.version || null, courseTitle.value)
 }
 
 async function handleContinueFromLocked() {
   const version = versionStore.currentVersionDetail?.version
   if (!version || !versionStore.genId) return
-  await versionStore.rollbackTo(versionStore.genId, version)
+  const nodes = versionStore.currentVersionDetail?.nodes || []
+  const result = await versionStore.rollbackTo(versionStore.genId, version)
+  const data = result?.data || result || {}
+  const newVersion = Number(data.current_version || data.new_version_no || version + 1)
   generationStore.setLastGenId(versionStore.genId)
-  generationStore.setNodes(versionStore.currentVersionDetail?.nodes || [])
+  generationStore.setNodes(data.nodes || nodes)
   await projectStore.updateStep('s3_studio').catch(() => {})
-  router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId } })
+  router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, phase: 'outline' } })
 }
 
 function formatTime(iso) {

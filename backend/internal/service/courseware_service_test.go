@@ -247,6 +247,34 @@ func TestRollbackClonesVersion(t *testing.T) {
 	if _, err := svc.GetVersion(context.Background(), p.ProjectID, 2); err != nil {
 		t.Fatalf("v2 应仍可查: %v", err)
 	}
+	v4, err := svc.GetVersion(context.Background(), p.ProjectID, 4)
+	if err != nil || v4.ParentVersionID != versions[0].VersionID {
+		t.Fatalf("v4 应记录 v1 为父版本: err=%v parent=%q", err, v4.ParentVersionID)
+	}
+}
+
+func TestCreateVersionSnapshotIncludesPageBindings(t *testing.T) {
+	svc := newCoursewareTestSvc(&fakeModifyAI{})
+	p := mustCreateProject(t, svc)
+	bindings := []map[string]interface{}{{"page_id": "page_1", "node_id": "node_1", "citation_refs": []string{"chunk_tcp_1"}}}
+	created, err := svc.CreateVersionSnapshot(context.Background(), p.ProjectID, "首版课件", sampleTeachingNodes(), map[string]string{"template_id": "deck-swiss-edu"}, bindings)
+	if err != nil {
+		t.Fatalf("CreateVersionSnapshot: %v", err)
+	}
+	if created.VersionNo != 1 || created.VersionSummary != "首版课件" {
+		t.Fatalf("版本元数据错误: %+v", created)
+	}
+	detail, err := svc.GetVersionByID(context.Background(), p.ProjectID, created.VersionID)
+	if err != nil {
+		t.Fatalf("GetVersionByID: %v", err)
+	}
+	var snapshot CoursewareVersionSnapshot
+	if err := json.Unmarshal([]byte(detail.SnapshotJSON), &snapshot); err != nil {
+		t.Fatalf("解析完整快照失败: %v", err)
+	}
+	if len(snapshot.Nodes) != 3 || snapshot.Presentation["template_id"] != "deck-swiss-edu" || snapshot.PageBindings == nil {
+		t.Fatalf("完整快照缺少节点、呈现或页面绑定: %+v", snapshot)
+	}
 }
 
 // TestRollbackNotFound —— 回滚不存在的版本 → 404。

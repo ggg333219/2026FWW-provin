@@ -15,6 +15,8 @@ import { requestJson } from './request'
  *   POST   /coursewares/:id/modify         修改编排（A6：意图解析→局部生成→快照）
  *   GET    /coursewares/:id/modify-history 修改记录（A6）
  *   GET    /coursewares/:id/versions       版本列表（A7）
+ *   POST   /coursewares/:id/versions       保存完整版本快照（模块3）
+ *   GET    /coursewares/:id/versions/:vid  读取单版本快照（模块3）
  *   POST   /coursewares/:id/rollback       回滚（A7，克隆式）
  */
 const MODIFY_LLM_TIMEOUT_MS = 120000 // 修改编排含 LLM 意图解析 + 局部生成，给 2 分钟
@@ -89,6 +91,20 @@ export const projectModifyApi = {
   /** 版本列表 */
   versions: (project_id) =>
     requestJson(`/api/v1/coursewares/${project_id}/versions`, {
+      method: 'GET',
+    }),
+
+  /** 保存完整版本快照（节点、呈现样式和页面证据绑定）。 */
+  createVersion: (project_id, payload = {}) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/versions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 读取指定版本的完整快照。 */
+  versionDetail: (project_id, version_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/versions/${encodeURIComponent(version_id)}`, {
       method: 'GET',
     }),
 
