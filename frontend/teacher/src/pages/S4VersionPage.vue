@@ -299,10 +299,16 @@ async function handleRollback() {
     const data = result?.data || result || {}
     const newVersion = Number(data.current_version || data.new_version_no || versionStore.currentVersionDetail?.version || targetVersion + 1)
     generationStore.setLastGenId(versionStore.genId)
-    generationStore.setNodes(data.nodes || targetDetail?.nodes || [])
+    const nodes = data.nodes || targetDetail?.nodes || []
+    generationStore.setNodes(nodes)
+    await persistRollbackDraft({
+      nodes,
+      pageBindings: data.page_bindings || targetDetail?.pageBindings || [],
+      presentation: data.presentation || targetDetail?.presentation || {},
+    })
     await projectStore.updateStep('s3_studio').catch(() => {})
     rollbackTarget.value = null
-    await router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, phase: 'outline' } })
+    await router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: targetVersion, phase: 'outline' } })
   } catch {
     // 错误已在 store 中设置
   }
@@ -347,9 +353,34 @@ async function handleContinueFromLocked() {
   const data = result?.data || result || {}
   const newVersion = Number(data.current_version || data.new_version_no || version + 1)
   generationStore.setLastGenId(versionStore.genId)
-  generationStore.setNodes(data.nodes || nodes)
+  const restoredNodes = data.nodes || nodes
+  generationStore.setNodes(restoredNodes)
+  await persistRollbackDraft({
+    nodes: restoredNodes,
+    pageBindings: data.page_bindings || versionStore.currentVersionDetail?.pageBindings || [],
+    presentation: data.presentation || versionStore.currentVersionDetail?.presentation || {},
+  })
   await projectStore.updateStep('s3_studio').catch(() => {})
-  router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, phase: 'outline' } })
+  router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: version, phase: 'outline' } })
+}
+
+async function persistRollbackDraft({ nodes, pageBindings, presentation }) {
+  if (!projectStore.projectId) return
+  const current = projectStore.draft && typeof projectStore.draft === 'object' ? projectStore.draft : {}
+  const restored = {
+    ...current,
+    generation: {
+      ...(current.generation || {}),
+      generation_id: versionStore.genId,
+      nodes: nodes || [],
+    },
+    page_bindings: pageBindings || [],
+    presentation: { ...(current.presentation || {}), ...(presentation || {}) },
+  }
+  await projectStore.saveNow(restored).catch(() => {})
+  try {
+    window.localStorage.setItem('fuww_courseware_resume_draft', JSON.stringify(restored))
+  } catch {}
 }
 
 function formatTime(iso) {

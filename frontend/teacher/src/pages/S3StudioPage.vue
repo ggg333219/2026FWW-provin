@@ -418,7 +418,19 @@ const selectedEvidencePacket = computed(() => {
 });
 
 function draftSnapshot() {
-  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value } };
+  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value } };
+}
+
+function versionPageBindings() {
+  return generationPages.value.map((page) => ({
+    page_id: page.page_id,
+    node_id: page.node_id,
+    page_order: page.page_order,
+    evidence_refs: [...new Set([...(page.citation_refs || []), ...(page.source_chunk_ids || [])])],
+    auto_bound: Boolean(page.metadata?.evidence_auto_bound),
+    bound_by: page.metadata?.evidence_bound_by || "",
+    interactive_asset_id: page.metadata?.interactive_asset?.interactive_asset_id || "",
+  }));
 }
 
 // 是否有参考资料
@@ -485,6 +497,13 @@ onMounted(async () => {
       if (savedDraft?.evidence_packet) evidencePacket.value = savedDraft.evidence_packet;
       if (Array.isArray(savedDraft?.evidence_selection)) selectedEvidenceIds.value = savedDraft.evidence_selection;
       if (savedDraft?.evidence_scope) evidenceScope.value = savedDraft.evidence_scope;
+      if (Array.isArray(savedDraft?.page_bindings) && savedDraft.page_bindings.length) {
+        const bindings = new Map(savedDraft.page_bindings.map((item) => [String(item.page_id || item.node_id || ''), item]));
+        generationStore.setNodes(generationStore.currentScriptNodes.map((node) => {
+          const binding = bindings.get(String(node.page_id || node.node_id || ''));
+          return binding ? { ...node, citation_refs: binding.evidence_refs || [], source_chunk_ids: binding.evidence_refs || [] } : node;
+        }));
+      }
       if (savedDraft?.presentation) { templateId.value = savedDraft.presentation.template_id || "default"; palette.value = savedDraft.presentation.palette || "classic"; layoutMode.value = savedDraft.presentation.layout || "balanced"; fontFamily.value = savedDraft.presentation.font_family || "system"; density.value = savedDraft.presentation.density || "comfortable"; }
     } catch {}
   }
@@ -837,6 +856,8 @@ async function handleSaveNewVersion() {
       summary,
       outline_id: outlineStore.outline_id,
       outline_version: outlineStore.outline_version,
+      page_bindings: versionPageBindings(),
+      presentation: draftSnapshot().presentation,
     });
     const data = response?.data || response || {};
     if (data.generation_id) generationStore.setLastGenId(data.generation_id);
@@ -846,13 +867,7 @@ async function handleSaveNewVersion() {
       const projectResponse = await projectModifyApi.createVersion(projectStore.projectId, {
         nodes: generationStore.currentScriptNodes,
         presentation: draftSnapshot().presentation,
-        page_bindings: generationPages.value.map((page) => ({
-          page_id: page.page_id,
-          node_id: page.node_id,
-          page_order: page.page_order,
-          citation_refs: page.citation_refs || page.source_chunk_ids || [],
-          interactive_asset_id: page.metadata?.interactive_asset?.interactive_asset_id || "",
-        })),
+        page_bindings: versionPageBindings(),
         version_summary: summary,
       });
       const projectVersion = projectResponse?.data || projectResponse || {};

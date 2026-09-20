@@ -64,7 +64,7 @@ export const teacherGenerationApi = {
     }),
 
   /** 将当前内容、样式和证据引用固化为新的正式版本快照 */
-  finalize: ({ generation_id, nodes, course_name, summary, outline_id, outline_version } = {}) =>
+  finalize: ({ generation_id, nodes, course_name, summary, outline_id, outline_version, page_bindings, presentation } = {}) =>
     requestJson('/api/v1/gen/finalize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -74,7 +74,9 @@ export const teacherGenerationApi = {
         course_name: course_name || '未命名课件',
         summary: summary || '教师保存的新版本',
         outline_id: outline_id || '',
-        outline_version: outline_version || 0
+        outline_version: outline_version || 0,
+        page_bindings: page_bindings || [],
+        presentation: presentation || {}
       })
     }),
 

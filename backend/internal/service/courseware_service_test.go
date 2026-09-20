@@ -275,6 +275,24 @@ func TestCreateVersionSnapshotIncludesPageBindings(t *testing.T) {
 	if len(snapshot.Nodes) != 3 || snapshot.Presentation["template_id"] != "deck-swiss-edu" || snapshot.PageBindings == nil {
 		t.Fatalf("完整快照缺少节点、呈现或页面绑定: %+v", snapshot)
 	}
+	rb, err := svc.Rollback(context.Background(), p.ProjectID, created.VersionNo)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if rb.Presentation["template_id"] != "deck-swiss-edu" || rb.PageBindings == nil {
+		t.Fatalf("回滚响应未恢复呈现或页面绑定: %+v", rb)
+	}
+	draftJSON, err := svc.GetDraft(context.Background(), p.ProjectID)
+	if err != nil {
+		t.Fatalf("GetDraft: %v", err)
+	}
+	var restored CoursewareVersionSnapshot
+	if err := json.Unmarshal([]byte(draftJSON), &restored); err != nil {
+		t.Fatalf("解析回滚草稿失败: %v", err)
+	}
+	if restored.PageBindings == nil || restored.Presentation["template_id"] != "deck-swiss-edu" {
+		t.Fatalf("回滚草稿丢失页面绑定或呈现: %+v", restored)
+	}
 }
 
 // TestRollbackNotFound —— 回滚不存在的版本 → 404。

@@ -105,6 +105,8 @@ export const useVersionStore = defineStore("version", {
           version: data.version_number,
           id: data.id,
           nodes: data.nodes_snapshot || [],
+          pageBindings: data.page_bindings || [],
+          presentation: data.presentation || {},
           summary: data.summary || "",
           locked: data.locked || false,
           createdAt: data.created_at || "",

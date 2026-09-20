@@ -143,6 +143,10 @@ def test_gen_finalize_creates_snapshot_from_confirmed_content():
         ],
         "course_name": "冒泡排序",
         "summary": "教师确认终稿",
+        "page_bindings": [
+            {"page_id": "node_001", "evidence_refs": ["chunk_sort_1"]}
+        ],
+        "presentation": {"template_id": "deck-swiss-edu", "palette": "forest"},
     })
 
     assert resp.status_code == 200
@@ -160,6 +164,13 @@ def test_gen_finalize_creates_snapshot_from_confirmed_content():
     assert snap.version_number == 1
     assert len(snap.nodes_snapshot) == 1
     assert snap.nodes_snapshot[0].node_id == "node_001"
+    assert snap.page_bindings[0]["evidence_refs"] == ["chunk_sort_1"]
+    assert snap.presentation["template_id"] == "deck-swiss-edu"
+
+    loaded = client.get(f'/api/v1/version/{body["generation_id"]}?v=1')
+    assert loaded.status_code == 200
+    assert loaded.json()["page_bindings"] == snap.page_bindings
+    assert loaded.json()["presentation"] == snap.presentation
 
 
 def test_gen_finalize_with_existing_generation_id():

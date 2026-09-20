@@ -2983,6 +2983,8 @@ ${slides}
         version_number: 1,
         id: uid('ver'),
         nodes_snapshot: [],
+        page_bindings: [],
+        presentation: {},
         summary: '初始版本',
         locked: false,
         created_at: nowIso()
@@ -3037,6 +3039,27 @@ ${slides}
         evidence_packet: task.evidence_packet || null,
         error: task.error || null
       })
+    }
+
+    if (pathname === '/api/v1/gen/finalize' && method === 'POST') {
+      const body = parseJsonBody(options)
+      const genId = cleanText(body.generation_id) || uid('gen')
+      store.versionSnapshots = store.versionSnapshots || {}
+      const snapshots = store.versionSnapshots[genId] || []
+      const versionNumber = snapshots.reduce((max, item) => Math.max(max, Number(item.version_number || 0)), 0) + 1
+      snapshots.push({
+        version_number: versionNumber,
+        id: uid('ver'),
+        nodes_snapshot: deepClone(Array.isArray(body.nodes) ? body.nodes : []),
+        page_bindings: deepClone(Array.isArray(body.page_bindings) ? body.page_bindings : []),
+        presentation: deepClone(body.presentation || {}),
+        summary: cleanText(body.summary) || `版本 ${versionNumber}`,
+        locked: false,
+        created_at: nowIso()
+      })
+      store.versionSnapshots[genId] = snapshots
+      persistMockStore()
+      return ok({ generation_id: genId, version_number: versionNumber, status: 'done' })
     }
 
     if (pathname === '/api/v1/gen/preview' && method === 'POST') {
@@ -3162,6 +3185,8 @@ ${slides}
           version_number: snap.version_number,
           id: snap.id,
           nodes_snapshot: snap.nodes_snapshot || [],
+          page_bindings: snap.page_bindings || [],
+          presentation: snap.presentation || {},
           summary: snap.summary,
           locked: snap.locked || false,
           created_at: snap.created_at
@@ -3187,13 +3212,21 @@ ${slides}
           version_number: snapshots.length + 1,
           id: uid('ver'),
           nodes_snapshot: deepClone(target.nodes_snapshot || []),
+          page_bindings: deepClone(target.page_bindings || []),
+          presentation: deepClone(target.presentation || {}),
           summary: `回滚到版本 ${targetVersion}`,
           locked: false,
           created_at: nowIso()
         }
         snapshots.push(newVer)
         persistMockStore()
-        return ok({ current_version: newVer.version_number, status: 'done' })
+        return ok({
+          current_version: newVer.version_number,
+          status: 'done',
+          nodes: deepClone(newVer.nodes_snapshot),
+          page_bindings: deepClone(newVer.page_bindings),
+          presentation: deepClone(newVer.presentation)
+        })
       }
 
       if (action === 'lock') {

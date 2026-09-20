@@ -493,6 +493,10 @@ class GenerationVersion(BaseModel):
     generation_id: str = ""
     version_number: int = 1
     nodes_snapshot: list[TeachingNode] = Field(default_factory=list)
+    page_bindings: list[dict[str, Any]] = Field(default_factory=list)
+    """页面级证据绑定快照，回滚分叉时必须与节点一起恢复。"""
+    presentation: dict[str, Any] = Field(default_factory=dict)
+    """模板、配色、版式等呈现层快照。"""
     summary: str = ""
     """版本的变更摘要（如"修改第3页内容"）"""
     parent_version: Optional[int] = None

@@ -1042,6 +1042,8 @@ class GenFinalizeRequest(BaseModel):
     summary: str = "教师确认终稿"
     outline_id: str = ""
     outline_version: int = 0
+    page_bindings: list[dict[str, Any]] = Field(default_factory=list)
+    presentation: dict[str, Any] = Field(default_factory=dict)
 
 
 class GenFinalizeResponse(BaseModel):
@@ -1101,6 +1103,8 @@ async def gen_finalize(req: GenFinalizeRequest):
             "outline_id": req.outline_id,
             "outline_version": req.outline_version,
         },
+        page_bindings=req.page_bindings,
+        presentation=req.presentation,
     )
 
     return GenFinalizeResponse(
@@ -1340,7 +1344,13 @@ async def version_rollback(gen_id: str, req: RollbackRequest):
     vm = get_version_manager()
     try:
         new_ver = vm.revert_to(gen_id, req.target_version)
-        return {"current_version": new_ver.version_number, "status": "done"}
+        return {
+            "current_version": new_ver.version_number,
+            "status": "done",
+            "nodes": [n.model_dump() if hasattr(n, "model_dump") else n for n in new_ver.nodes_snapshot],
+            "page_bindings": new_ver.page_bindings,
+            "presentation": new_ver.presentation,
+        }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1367,6 +1377,8 @@ async def version_load(gen_id: str, v: int | None = None):
         "version_number": snap.version_number,
         "id": snap.id,
         "nodes_snapshot": [n.model_dump() if hasattr(n, "model_dump") else n for n in snap.nodes_snapshot],
+        "page_bindings": snap.page_bindings,
+        "presentation": snap.presentation,
         "summary": snap.summary,
         "locked": snap.locked,
         "created_at": snap.created_at.isoformat() if snap.created_at else "",

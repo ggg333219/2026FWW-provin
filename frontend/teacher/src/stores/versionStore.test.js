@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useVersionStore } from './versionStore'
+import { teacherV1Api } from '../services/v1'
 
 function createStorage() {
   const values = new Map()
@@ -22,6 +23,26 @@ beforeEach(() => {
 })
 
 describe('versionStore S4 导出闭环（Mock）', () => {
+  it('版本加载与回滚保留页面证据绑定和呈现样式', async () => {
+    const pageBindings = [{ page_id: 'page_1', evidence_refs: ['chunk_tcp_1'] }]
+    const presentation = { template_id: 'deck-swiss-edu', palette: 'forest' }
+    await teacherV1Api.generation.finalize({
+      generation_id: 'gen_version_binding',
+      nodes: [{ node_id: 'page_1', title: 'TCP 三次握手' }],
+      page_bindings: pageBindings,
+      presentation,
+    })
+    const store = useVersionStore()
+    const detail = await store.loadVersion('gen_version_binding', 1)
+
+    expect(detail.pageBindings).toEqual(pageBindings)
+    expect(detail.presentation).toEqual(presentation)
+
+    const rollback = await store.rollbackTo('gen_version_binding', 1)
+    expect(rollback.data.page_bindings).toEqual(pageBindings)
+    expect(rollback.data.presentation).toEqual(presentation)
+  })
+
   it('startExport：正确读取 job_id 并轮询到 done（回归：信封解包 bug）', async () => {
     const store = useVersionStore()
 

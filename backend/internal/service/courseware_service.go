@@ -498,6 +498,8 @@ type RollbackResult struct {
 	RestoredVersionNo int                `json:"restored_version_no"`
 	NewVersionNo      int                `json:"new_version_no"`
 	Nodes             []TeachingNodeItem `json:"nodes"`
+	Presentation      map[string]string  `json:"presentation,omitempty"`
+	PageBindings      interface{}        `json:"page_bindings,omitempty"`
 }
 
 // Rollback 克隆目标版本为新版本（不覆盖历史）。
@@ -529,14 +531,32 @@ func (s *CoursewareService) Rollback(ctx context.Context, projectID string, vers
 
 	var nodes []TeachingNodeItem
 	_ = json.Unmarshal([]byte(target.NodesJSON), &nodes)
+	var restored CoursewareVersionSnapshot
+	if target.SnapshotJSON != "" {
+		_ = json.Unmarshal([]byte(target.SnapshotJSON), &restored)
+	}
+	if len(restored.Nodes) == 0 {
+		restored.Nodes = nodes
+	}
+	if len(restored.Presentation) == 0 && target.PresentationJSON != "" {
+		_ = json.Unmarshal([]byte(target.PresentationJSON), &restored.Presentation)
+	}
 
-	// 更新草稿为回滚内容
-	_ = s.store.SaveDraft(ctx, projectID, target.NodesJSON)
+	// 更新草稿为完整回滚快照，避免页面证据绑定与样式在重新进入 S3 时丢失。
+	restoredDraft, _ := json.Marshal(map[string]interface{}{
+		"nodes":         restored.Nodes,
+		"generation":    map[string]interface{}{"nodes": restored.Nodes},
+		"presentation":  restored.Presentation,
+		"page_bindings": restored.PageBindings,
+	})
+	_ = s.store.SaveDraft(ctx, projectID, string(restoredDraft))
 
 	return &RollbackResult{
 		RestoredVersionNo: versionNo,
 		NewVersionNo:      newNo,
-		Nodes:             nodes,
+		Nodes:             restored.Nodes,
+		Presentation:      restored.Presentation,
+		PageBindings:      restored.PageBindings,
 	}, nil
 }
 

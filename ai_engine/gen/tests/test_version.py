@@ -254,6 +254,26 @@ class TestVersionManagerIsolation(unittest.TestCase):
         reverted = self.vm.revert_to(gen_id, 1)
         self.assertEqual(reverted.nodes_snapshot[0].title, "原始内容")
 
+    def test_revert_to_preserves_page_bindings_and_presentation(self):
+        gen_id = _test_gen_id("revert_bindings")
+        bindings = [{"page_id": "page_1", "evidence_refs": ["chunk_tcp_1"]}]
+        presentation = {"template_id": "deck-swiss-edu", "palette": "forest"}
+        self.vm.save_snapshot(
+            gen_id,
+            [{"node_id": "page_1", "title": "TCP 三次握手"}],
+            "v1",
+            metadata={"outline_id": "outline_1"},
+            page_bindings=bindings,
+            presentation=presentation,
+        )
+
+        reverted = self.vm.revert_to(gen_id, 1)
+
+        self.assertEqual(reverted.page_bindings, bindings)
+        self.assertEqual(reverted.presentation, presentation)
+        self.assertEqual(reverted.metadata.get("outline_id"), "outline_1")
+        self.assertEqual(reverted.metadata.get("reverted_from"), 1)
+
     def test_revert_to_nonexistent_raises(self):
         gen_id = _test_gen_id("revert_nonexist")
         with self.assertRaises(ValueError):

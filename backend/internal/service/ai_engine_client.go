@@ -717,6 +717,8 @@ type VersionSnapshot struct {
 	GenerationID  string             `json:"generation_id"`
 	VersionNumber int                `json:"version_number"`
 	NodesSnapshot []TeachingNodeItem `json:"nodes_snapshot,omitempty"`
+	PageBindings  []map[string]any   `json:"page_bindings,omitempty"`
+	Presentation  map[string]any     `json:"presentation,omitempty"`
 	Summary       string             `json:"summary,omitempty"`
 	Locked        bool               `json:"locked"`
 	CreatedAt     string             `json:"created_at"`
@@ -731,8 +733,11 @@ type VersionRollbackRequest struct {
 }
 
 type VersionRollbackResponse struct {
-	CurrentVersion int    `json:"current_version"`
-	Status         string `json:"status"`
+	CurrentVersion int                `json:"current_version"`
+	Status         string             `json:"status"`
+	Nodes          []TeachingNodeItem `json:"nodes,omitempty"`
+	PageBindings   []map[string]any   `json:"page_bindings,omitempty"`
+	Presentation   map[string]any     `json:"presentation,omitempty"`
 }
 
 type VersionLockResponse struct {
@@ -782,6 +787,8 @@ type GenerationFinalizeRequest struct {
 	Summary        string             `json:"summary,omitempty"`
 	OutlineID      string             `json:"outline_id,omitempty"`
 	OutlineVersion int                `json:"outline_version,omitempty"`
+	PageBindings   []map[string]any   `json:"page_bindings,omitempty"`
+	Presentation   map[string]any     `json:"presentation,omitempty"`
 }
 
 type GenerationFinalizeResponse struct {
