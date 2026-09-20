@@ -38,6 +38,11 @@
       <button v-if="modifyStore.lastFailedInstruction" type="button" @click="modifyStore.retryLast">重新填写</button>
     </div>
 
+    <div v-if="modifyStore.modifying" class="ai-working" role="status" aria-live="polite">
+      <span class="ai-working-spinner"></span>
+      <div><strong>AI 正在修改课件</strong><p>正在理解指令并更新相关页面，请稍候…</p></div>
+    </div>
+
     <div v-if="modifyStore.pendingClarification" class="clarification-context" role="status">
       <strong>AI 正在等你补充</strong>
       <span>{{ modifyStore.pendingClarification.question }}</span>
@@ -342,6 +347,7 @@ watch(() => modifyStore.messages.length, scrollToBottom)
   justify-content: space-between;
   gap: 8px;
 }
+.ai-working{display:flex;align-items:center;gap:11px;margin:10px 12px 0;padding:12px;border:1px solid #cde2da;border-radius:11px;background:linear-gradient(110deg,#eff9f5,#fff);color:#28594c}.ai-working strong{font-size:13px}.ai-working p{margin:3px 0 0;color:#789087;font-size:11px}.ai-working-spinner{width:22px;height:22px;flex:0 0 auto;border:3px solid #d6e9e1;border-top-color:#28735f;border-radius:50%;animation:ai-spin .75s linear infinite}@keyframes ai-spin{to{transform:rotate(360deg)}}
 .error-bar button { border:0; background:transparent; color:#9f2525; text-decoration:underline; cursor:pointer; }
 .clarification-context { display:grid; gap:3px; margin:8px 12px 0; padding:8px 10px; border:1px solid #ead8a3; border-radius:8px; background:#fff9e8; color:#795a12; font-size:11px; }
 

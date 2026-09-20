@@ -2,16 +2,12 @@
   <div class="top-nav">
     <div class="nav-left">
       <span class="app-icon">🎓</span>
-      <span class="app-title">智能互动教学平台 · 教师端</span>
+      <span class="app-title">智能互动教学平台</span>
     </div>
     <div class="nav-right">
       <div class="backend-status" :class="backendStatusClass">
         <span class="status-dot"></span>
         {{ backendStatusText }}
-      </div>
-      <div class="platform-status" :class="platformStatusClass">
-        <span class="status-dot"></span>
-        {{ platformStatusText }}
       </div>
       <div class="teacher-info">
         <div class="avatar">
@@ -42,11 +38,11 @@ defineProps({
   },
   platformStatusText: {
     type: String,
-    default: '泛雅开放平台已接通'
+    default: '协作数据已同步'
   },
   username: {
     type: String,
-    default: '教师'
+    default: '用户'
   }
 })
 

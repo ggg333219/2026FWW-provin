@@ -264,6 +264,18 @@ export const useOutlineStore = defineStore('outline', {
       this.swapNodes(this.nodes[idx].node_id, this.nodes[newIdx].node_id)
     },
 
+    /** 拖拽到指定位置，保持数组顺序与 order 字段一致 */
+    moveNodeToIndex(nodeId, targetIndex) {
+      if (!this.canEdit) return
+      const sourceIndex = this.nodes.findIndex((n) => n.node_id === nodeId)
+      const boundedTarget = Math.max(0, Math.min(Number(targetIndex), this.nodes.length - 1))
+      if (sourceIndex < 0 || sourceIndex === boundedTarget) return
+      const [node] = this.nodes.splice(sourceIndex, 1)
+      this.nodes.splice(boundedTarget, 0, node)
+      this._reorder()
+      this._persist()
+    },
+
     // ------------------------------------------------------------------
     // 保存 & AI 修订
     // ------------------------------------------------------------------

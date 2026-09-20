@@ -1,6 +1,9 @@
 <template>
   <AppShell>
     <div class="s3-page">
+      <div v-if="initializing" class="studio-loading" role="status" aria-live="polite">
+        <span class="studio-spinner"></span><strong>正在恢复课件工作区</strong><p>正在加载 AI 对话、资料证据与生成记录，请稍候…</p>
+      </div>
       <!-- 页面头部 -->
       <div class="page-header">
         <div>
@@ -81,6 +84,7 @@
         :default-query="intentStore.intentSummary?.topic || ''"
         @search="handleEvidenceSearch"
         @apply="handleEvidenceApply"
+        @selection-change="handleEvidenceSelection"
       />
       <!-- C6: AI 修改对话面板（右侧浮动；projectId 绑定后显示） -->
       <ModifyPanel class="s3-ai-panel" @style-request="handleStyleRequest" />
@@ -379,12 +383,26 @@ const layoutMode = ref("balanced");
 const fontFamily = ref("system");
 const density = ref("comfortable");
 const evidencePacket = ref(null);
+const selectedEvidenceIds = ref([]);
 const evidenceScope = ref({ scope: "draft", nodeId: "" });
 const saveVersionState = ref("idle");
 const lastSavedVersion = ref(0);
+const initializing = ref(true);
+
+const evidenceId = (item, index) => String(item?.chunk_id || item?.id || `evidence-${index}`);
+const selectedEvidencePacket = computed(() => {
+  if (!evidencePacket.value) return null;
+  const selected = new Set(selectedEvidenceIds.value);
+  const filter = (items = []) => items.filter((item, index) => selected.has(evidenceId(item, index)));
+  return {
+    ...evidencePacket.value,
+    citations: filter(evidencePacket.value.citations || []),
+    relevant_chunks: filter(evidencePacket.value.relevant_chunks || []),
+  };
+});
 
 function draftSnapshot() {
-  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: evidencePacket.value, evidence_scope: evidenceScope.value, presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value } };
+  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value } };
 }
 
 // 是否有参考资料
@@ -401,6 +419,7 @@ const interactiveNodes = computed(() =>
 );
 
 onMounted(async () => {
+	try {
 	let restoredGenerationNodes = false;
   // 恢复 S1 会话/意图（刷新或直接进入 S3 时 store 内存为空，
   // 不恢复会导致 sessionId 缺失 → AI 生成大纲被 "缺少 session_id" 拦截）
@@ -448,6 +467,7 @@ onMounted(async () => {
         }
       }
       if (savedDraft?.evidence_packet) evidencePacket.value = savedDraft.evidence_packet;
+      if (Array.isArray(savedDraft?.evidence_selection)) selectedEvidenceIds.value = savedDraft.evidence_selection;
       if (savedDraft?.evidence_scope) evidenceScope.value = savedDraft.evidence_scope;
       if (savedDraft?.presentation) { templateId.value = savedDraft.presentation.template_id || "default"; palette.value = savedDraft.presentation.palette || "classic"; layoutMode.value = savedDraft.presentation.layout || "balanced"; fontFamily.value = savedDraft.presentation.font_family || "system"; density.value = savedDraft.presentation.density || "comfortable"; }
     } catch {}
@@ -464,6 +484,9 @@ onMounted(async () => {
     // 项目草稿已经包含完整节点时直接使用，避免全局缓存中的旧 task_id
     // 覆盖当前课件的恢复结果。
     if (!restoredGenerationNodes) await loadGenerationStatus();
+  }
+  } finally {
+    initializing.value = false;
   }
 });
 
@@ -523,11 +546,7 @@ async function handleStartGeneration() {
   generationStore.setGenerateProgress(5, "准备生成环境");
 
   try {
-    let evidence = null;
-    try {
-      const raw = window.localStorage.getItem(`fuww_s2_evidence_packet:${intentStore.sessionId}`);
-      if (raw) evidence = JSON.parse(raw);
-    } catch {}
+    const evidence = selectedEvidencePacket.value;
 
     generationStore.setGenerateProgress(15, "创建生成任务");
     const resp = await teacherV1Api.generation.createGeneration({
@@ -744,15 +763,22 @@ async function handleEvidenceSearch(query) {
   }
 }
 
-async function handleEvidenceApply({ scope, nodeId }) {
+function handleEvidenceSelection(ids) {
+  selectedEvidenceIds.value = Array.isArray(ids) ? ids : [];
+  projectStore.scheduleSave(draftSnapshot());
+}
+
+async function handleEvidenceApply({ scope, nodeId, selectedIds = [] }) {
+  selectedEvidenceIds.value = selectedIds;
   evidenceScope.value = { scope, nodeId: nodeId || "" };
   if (scope === "none" || !evidencePacket.value) {
     projectStore.scheduleSave(draftSnapshot(), 0);
     return;
   }
+  const activePacket = selectedEvidencePacket.value || {};
   const refs = [
-    ...(evidencePacket.value.citations || []).map((item) => item.chunk_id),
-    ...(evidencePacket.value.relevant_chunks || []).map((item) => item.chunk_id),
+    ...(activePacket.citations || []).map((item) => item.chunk_id),
+    ...(activePacket.relevant_chunks || []).map((item) => item.chunk_id),
   ].filter(Boolean);
   const uniqueRefs = [...new Set(refs)];
   if (generationStore.currentScriptNodes?.length) {
@@ -832,6 +858,7 @@ function handleError(msg) {
     ),
     linear-gradient(180deg, #fcfefd 0%, #f7faf8 100%);
 }
+.studio-loading{position:fixed;inset:82px 20px 20px;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;border-radius:22px;background:rgba(248,252,250,.96);backdrop-filter:blur(8px);color:#27594e}.studio-loading strong{margin-top:14px;font-size:18px}.studio-loading p{margin:7px 0;color:#70857d;font-size:13px}.studio-spinner{width:42px;height:42px;border:4px solid #d8ebe4;border-top-color:#28735f;border-radius:50%;animation:studio-spin .8s linear infinite}@keyframes studio-spin{to{transform:rotate(360deg)}}
 .page-header {
   display: flex;
   align-items: flex-start;

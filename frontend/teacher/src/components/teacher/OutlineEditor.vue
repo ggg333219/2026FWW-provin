@@ -64,10 +64,14 @@
           v-for="(node, idx) in outlineStore.nodes"
           :key="node.node_id"
           class="outline-node-card"
-          :class="`node-type-${node.node_type}`"
+          :class="[`node-type-${node.node_type}`, { dragging: draggedNodeId === node.node_id, 'drag-over': dragOverIndex === idx }]"
+          @dragover.prevent="handleDragOver(idx)"
+          @drop.prevent="handleDrop(idx)"
+          @dragend="handleDragEnd"
         >
           <!-- 节点序号 & 移动按钮 -->
           <div class="node-drag-handle">
+            <span v-if="outlineStore.canEdit" class="drag-grip" draggable="true" title="按住拖动排序" aria-label="拖动节点排序" @dragstart="handleDragStart($event, node.node_id)">⠿</span>
             <span class="node-order">{{ idx + 1 }}</span>
             <div class="node-move-btns" v-if="outlineStore.canEdit">
               <button
@@ -302,6 +306,8 @@ const showReviseInput = ref(false)
 const reviseMessage = ref('')
 const revisingDialogLoading = ref(false) // 对话框内 AI 正在生成修订
 const newKeyPoints = ref({}) // { [node_id]: input value }
+const draggedNodeId = ref('')
+const dragOverIndex = ref(-1)
 
 const statusLabel = computed(() => ({
   draft: '草稿',
@@ -372,6 +378,28 @@ function handleDeleteNode(nodeId) {
     return
   }
   outlineStore.removeNode(nodeId)
+}
+
+function handleDragStart(event, nodeId) {
+  if (!outlineStore.canEdit) return
+  draggedNodeId.value = nodeId
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', nodeId)
+}
+
+function handleDragOver(index) {
+  if (draggedNodeId.value) dragOverIndex.value = index
+}
+
+function handleDrop(index) {
+  const nodeId = draggedNodeId.value
+  if (nodeId) outlineStore.moveNodeToIndex(nodeId, index)
+  handleDragEnd()
+}
+
+function handleDragEnd() {
+  draggedNodeId.value = ''
+  dragOverIndex.value = -1
 }
 
 function addKeyPoint(node) {
@@ -505,6 +533,8 @@ function handleCancelRevision() {
 .outline-node-card:hover {
   border-color: #5ca68f;
 }
+.outline-node-card.dragging { opacity: .45; cursor: grabbing; }
+.outline-node-card.drag-over { border-color: #28735f; box-shadow: 0 0 0 3px rgba(40,115,95,.14); transform: translateY(2px); }
 .outline-node-card.node-type-section {
   border-left: 4px solid #2f605a;
   background: #f8fbf9;
@@ -527,6 +557,7 @@ function handleCancelRevision() {
   gap: 4px;
   min-width: 28px;
 }
+.drag-grip { color:#7da596; font-size:18px; line-height:1; cursor:grab; }
 .node-order {
   font-size: 16px;
   font-weight: 700;
