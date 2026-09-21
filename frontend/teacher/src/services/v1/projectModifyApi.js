@@ -108,11 +108,11 @@ export const projectModifyApi = {
       method: 'GET',
     }),
 
-  /** A7 回滚（克隆式，不覆盖历史）。响应 data: { restored_version_no, new_version_no, nodes } */
-  rollback: (project_id, version_no) =>
+  /** A7 回滚（按 version_id 克隆，不覆盖历史）。 */
+  rollback: (project_id, target_version_id) =>
     requestJson(`/api/v1/coursewares/${project_id}/rollback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ version_no }),
+      body: JSON.stringify({ target_version_id }),
     }),
 }

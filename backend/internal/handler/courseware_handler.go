@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -66,7 +65,7 @@ func (h *CoursewareHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"items": items}})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"items": items}, "error": "", "code": 200})
 }
 
 // UpdateStep PUT /:project_id/step —— 持久化当前步骤。
@@ -241,21 +240,35 @@ func (h *CoursewareHandler) Versions(c *gin.Context) {
 func (h *CoursewareHandler) CreateVersion(c *gin.Context) {
 	projectID := c.Param("project_id")
 	var req struct {
-		Nodes          []service.TeachingNodeItem `json:"nodes"`
-		Presentation   map[string]string          `json:"presentation"`
-		PageBindings   interface{}                `json:"page_bindings"`
-		VersionSummary string                     `json:"version_summary"`
+		VersionNo      int                              `json:"version_no"`
+		Snapshot       *service.ContractVersionSnapshot `json:"snapshot"`
+		ChangeNote     string                           `json:"change_note"`
+		Nodes          []service.TeachingNodeItem       `json:"nodes"`
+		Presentation   map[string]string                `json:"presentation"`
+		PageBindings   interface{}                      `json:"page_bindings"`
+		VersionSummary string                           `json:"version_summary"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "版本快照参数错误: " + err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "data": nil, "error": "版本快照参数错误: " + err.Error(), "code": 400})
 		return
 	}
-	version, err := h.svc.CreateVersionSnapshot(c.Request.Context(), projectID, req.VersionSummary, req.Nodes, req.Presentation, req.PageBindings)
+	var version *service.CoursewareVersion
+	var err error
+	if req.Snapshot != nil {
+		version, err = h.svc.CreateVersionSnapshotJSON(c.Request.Context(), projectID, req.ChangeNote, *req.Snapshot)
+	} else {
+		// Legacy fields remain accepted for one compatibility cycle.
+		summary := req.ChangeNote
+		if summary == "" {
+			summary = req.VersionSummary
+		}
+		version, err = h.svc.CreateVersionSnapshot(c.Request.Context(), projectID, summary, req.Nodes, req.Presentation, req.PageBindings)
+	}
 	if err != nil {
 		h.mapError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"code": 201, "data": h.versionDetail(version)})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"version_id": version.VersionID, "version_no": version.VersionNo}, "error": "", "code": 200})
 }
 
 // VersionDetail GET /:project_id/versions/:version_id —— 获取单版本详情。
@@ -265,7 +278,7 @@ func (h *CoursewareHandler) VersionDetail(c *gin.Context) {
 		h.mapError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "data": h.versionDetail(version)})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": h.versionDetail(version), "error": "", "code": 200})
 }
 
 func (h *CoursewareHandler) versionDetail(v *service.CoursewareVersion) gin.H {
@@ -279,10 +292,24 @@ func (h *CoursewareHandler) versionDetail(v *service.CoursewareVersion) gin.H {
 	if len(snapshot.Presentation) == 0 && v.PresentationJSON != "" {
 		_ = json.Unmarshal([]byte(v.PresentationJSON), &snapshot.Presentation)
 	}
+	publicSnapshot := service.ContractVersionSnapshot{
+		Outline:      map[string]interface{}{},
+		Content:      snapshot.Nodes,
+		PageBindings: snapshot.PageBindings,
+		Style:        snapshot.Presentation,
+	}
+	if v.SnapshotJSON != "" {
+		var canonical service.ContractVersionSnapshot
+		if json.Unmarshal([]byte(v.SnapshotJSON), &canonical) == nil && (canonical.Content != nil || canonical.Outline != nil || canonical.Style != nil) {
+			publicSnapshot = canonical
+		}
+	}
 	return gin.H{
 		"version_id": v.VersionID, "project_id": v.ProjectID, "version_no": v.VersionNo,
-		"parent_version_id": v.ParentVersionID, "version_summary": v.VersionSummary,
-		"modify_instruction": v.ModifyInstr, "created_at": v.CreatedAt,
+		"parent_version_id": v.ParentVersionID, "change_note": v.ModifyInstr,
+		"version_summary": v.VersionSummary, "modify_instruction": v.ModifyInstr, "created_at": v.CreatedAt,
+		"snapshot": publicSnapshot,
+		// Legacy response fields remain temporarily for existing S3 consumers.
 		"nodes": snapshot.Nodes, "presentation": snapshot.Presentation, "page_bindings": snapshot.PageBindings,
 	}
 }
@@ -291,26 +318,29 @@ func (h *CoursewareHandler) versionDetail(v *service.CoursewareVersion) gin.H {
 func (h *CoursewareHandler) Rollback(c *gin.Context) {
 	projectID := c.Param("project_id")
 	var req struct {
-		VersionNo int `json:"version_no"`
+		TargetVersionID string `json:"target_version_id"`
+		VersionNo       int    `json:"version_no"` // legacy compatibility
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.VersionNo <= 0 {
-		// 兼容 path 参数
-		if v := c.Param("version_no"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil {
-				req.VersionNo = n
-			}
-		}
-		if req.VersionNo <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "version_no 必填"})
-			return
-		}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "data": nil, "error": "target_version_id 必填", "code": 400})
+		return
 	}
-	result, err := h.svc.Rollback(c.Request.Context(), projectID, req.VersionNo)
+	var result *service.RollbackResult
+	var err error
+	if req.TargetVersionID != "" {
+		result, err = h.svc.RollbackByID(c.Request.Context(), projectID, req.TargetVersionID)
+	} else if req.VersionNo > 0 {
+		// Legacy clients may still send a number while migrating.
+		result, err = h.svc.Rollback(c.Request.Context(), projectID, req.VersionNo)
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "data": nil, "error": "target_version_id 必填", "code": 400})
+		return
+	}
 	if err != nil {
 		h.mapError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "data": result})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": result, "error": "", "code": 200})
 }
 
 func (h *CoursewareHandler) mapError(c *gin.Context, err error) {
@@ -319,5 +349,5 @@ func (h *CoursewareHandler) mapError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrProjectNotFound), errors.Is(err, service.ErrVersionNotFound):
 		status = http.StatusNotFound
 	}
-	c.JSON(status, gin.H{"code": status, "message": err.Error()})
+	c.JSON(status, gin.H{"ok": false, "data": nil, "error": err.Error(), "code": status})
 }

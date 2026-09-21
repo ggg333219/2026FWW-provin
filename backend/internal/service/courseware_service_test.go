@@ -304,3 +304,46 @@ func TestRollbackNotFound(t *testing.T) {
 		t.Fatalf("应返回 ErrVersionNotFound, 实际 %v", err)
 	}
 }
+
+func TestContractVersionSnapshotAndRollbackByID(t *testing.T) {
+	svc := newCoursewareTestSvc(&fakeModifyAI{})
+	p := mustCreateProject(t, svc)
+	snapshot := ContractVersionSnapshot{
+		Outline: map[string]interface{}{"title": "排序算法"},
+		Content: sampleTeachingNodes(),
+		PageBindings: map[string]interface{}{
+			"page_003": map[string]interface{}{"evidence_refs": []string{"chunk_005"}},
+		},
+		Style: map[string]interface{}{"template_id": "tech"},
+	}
+	created, err := svc.CreateVersionSnapshotJSON(context.Background(), p.ProjectID, "保存第三页修改", snapshot)
+	if err != nil {
+		t.Fatalf("CreateVersionSnapshotJSON: %v", err)
+	}
+	if created.VersionNo != 1 {
+		t.Fatalf("expected v1, got %d", created.VersionNo)
+	}
+
+	rolled, err := svc.RollbackByID(context.Background(), p.ProjectID, created.VersionID)
+	if err != nil {
+		t.Fatalf("RollbackByID: %v", err)
+	}
+	if rolled.NewDraftVersionNo != 2 || rolled.BaseVersionNo != 1 {
+		t.Fatalf("unexpected fork result: %+v", rolled)
+	}
+	draft, err := svc.GetDraft(context.Background(), p.ProjectID)
+	if err != nil {
+		t.Fatalf("GetDraft: %v", err)
+	}
+	var restored ContractVersionSnapshot
+	if err := json.Unmarshal([]byte(draft), &restored); err != nil {
+		t.Fatalf("parse restored snapshot: %v", err)
+	}
+	if restored.PageBindings == nil || restored.Style == nil {
+		t.Fatalf("rollback lost page bindings or style: %+v", restored)
+	}
+	versions, err := svc.Versions(context.Background(), p.ProjectID)
+	if err != nil || len(versions) != 2 {
+		t.Fatalf("history should preserve source and fork: err=%v count=%d", err, len(versions))
+	}
+}

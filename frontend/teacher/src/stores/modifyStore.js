@@ -244,7 +244,9 @@ export const useModifyStore = defineStore('modifyPanel', {
         this.modifying = true
         // 回滚到 targetNo（0 = 初始状态，回滚到 v1 的修改前——用 v1 快照）
         const rollbackTo = targetNo > 0 ? targetNo : 1
-        const resp = await projectModifyApi.rollback(this.projectId, rollbackTo)
+        const target = this.versionHistory.find((item) => Number(item.version_no) === rollbackTo)
+        if (!target?.version_id) throw new Error('目标版本标识缺失，请刷新版本历史后重试')
+        const resp = await projectModifyApi.rollback(this.projectId, target.version_id)
         const data = resp.data || resp
         this.redoStack.push(this.currentVersionNo)
         this.basedOnVersionNo = rollbackTo
@@ -271,7 +273,9 @@ export const useModifyStore = defineStore('modifyPanel', {
       if (targetNo == null) return
       try {
         this.modifying = true
-        const resp = await projectModifyApi.rollback(this.projectId, targetNo)
+        const target = this.versionHistory.find((item) => Number(item.version_no) === targetNo)
+        if (!target?.version_id) throw new Error('目标版本标识缺失，请刷新版本历史后重试')
+        const resp = await projectModifyApi.rollback(this.projectId, target.version_id)
         const data = resp.data || resp
         this.undoStack.push(this.currentVersionNo)
         this.basedOnVersionNo = targetNo

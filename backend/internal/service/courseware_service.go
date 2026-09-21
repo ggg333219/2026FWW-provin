@@ -168,6 +168,16 @@ type CoursewareVersionSnapshot struct {
 	PageBindings interface{}        `json:"page_bindings,omitempty"`
 }
 
+// ContractVersionSnapshot is the public v1 version snapshot shape. The
+// internal nodes/presentation representation remains supported while callers
+// migrate to this canonical contract.
+type ContractVersionSnapshot struct {
+	Outline      interface{} `json:"outline"`
+	Content      interface{} `json:"content"`
+	PageBindings interface{} `json:"page_bindings"`
+	Style        interface{} `json:"style"`
+}
+
 func NewCoursewareService(aiClient modifyClient) *CoursewareService {
 	return &CoursewareService{aiClient: aiClient, store: newMemCoursewareStore()}
 }
@@ -497,6 +507,8 @@ func (s *CoursewareService) ModifyHistory(ctx context.Context, projectID string)
 type RollbackResult struct {
 	RestoredVersionNo int                `json:"restored_version_no"`
 	NewVersionNo      int                `json:"new_version_no"`
+	NewDraftVersionNo int                `json:"new_draft_version_no"`
+	BaseVersionNo     int                `json:"base_version_no"`
 	Nodes             []TeachingNodeItem `json:"nodes"`
 	Presentation      map[string]string  `json:"presentation,omitempty"`
 	PageBindings      interface{}        `json:"page_bindings,omitempty"`
@@ -508,6 +520,20 @@ func (s *CoursewareService) Rollback(ctx context.Context, projectID string, vers
 	if err != nil {
 		return nil, err
 	}
+	return s.rollbackVersion(ctx, projectID, target)
+}
+
+// RollbackByID clones the selected historical version into a new editable
+// version. The target version is never mutated.
+func (s *CoursewareService) RollbackByID(ctx context.Context, projectID, versionID string) (*RollbackResult, error) {
+	target, err := s.store.GetVersionByID(ctx, projectID, versionID)
+	if err != nil {
+		return nil, err
+	}
+	return s.rollbackVersion(ctx, projectID, target)
+}
+
+func (s *CoursewareService) rollbackVersion(ctx context.Context, projectID string, target *CoursewareVersion) (*RollbackResult, error) {
 	// 克隆为新版本
 	newNo, err := s.store.NextVersionNo(ctx, projectID)
 	if err != nil {
@@ -521,8 +547,8 @@ func (s *CoursewareService) Rollback(ctx context.Context, projectID string, vers
 		NodesJSON:        target.NodesJSON, // 内容 = 目标版本
 		PresentationJSON: target.PresentationJSON,
 		SnapshotJSON:     target.SnapshotJSON,
-		ModifyInstr:      fmt.Sprintf("回滚到 v%d", versionNo),
-		VersionSummary:   fmt.Sprintf("基于 v%d 分叉创建", versionNo),
+		ModifyInstr:      fmt.Sprintf("回滚到 v%d", target.VersionNo),
+		VersionSummary:   fmt.Sprintf("基于 v%d 分叉创建", target.VersionNo),
 		CreatedAt:        time.Now(),
 	}
 	if err := s.store.SaveVersion(ctx, snap); err != nil {
@@ -532,8 +558,24 @@ func (s *CoursewareService) Rollback(ctx context.Context, projectID string, vers
 	var nodes []TeachingNodeItem
 	_ = json.Unmarshal([]byte(target.NodesJSON), &nodes)
 	var restored CoursewareVersionSnapshot
+	canonicalDraft := ""
 	if target.SnapshotJSON != "" {
 		_ = json.Unmarshal([]byte(target.SnapshotJSON), &restored)
+		var canonical ContractVersionSnapshot
+		if json.Unmarshal([]byte(target.SnapshotJSON), &canonical) == nil && canonical.Content != nil {
+			contentRaw, _ := json.Marshal(canonical.Content)
+			_ = json.Unmarshal(contentRaw, &restored.Nodes)
+			restored.PageBindings = canonical.PageBindings
+			if style, ok := canonical.Style.(map[string]interface{}); ok {
+				restored.Presentation = make(map[string]string, len(style))
+				for key, value := range style {
+					if text, ok := value.(string); ok {
+						restored.Presentation[key] = text
+					}
+				}
+			}
+			canonicalDraft = target.SnapshotJSON
+		}
 	}
 	if len(restored.Nodes) == 0 {
 		restored.Nodes = nodes
@@ -543,17 +585,22 @@ func (s *CoursewareService) Rollback(ctx context.Context, projectID string, vers
 	}
 
 	// 更新草稿为完整回滚快照，避免页面证据绑定与样式在重新进入 S3 时丢失。
-	restoredDraft, _ := json.Marshal(map[string]interface{}{
-		"nodes":         restored.Nodes,
-		"generation":    map[string]interface{}{"nodes": restored.Nodes},
-		"presentation":  restored.Presentation,
-		"page_bindings": restored.PageBindings,
-	})
+	restoredDraft := []byte(canonicalDraft)
+	if len(restoredDraft) == 0 {
+		restoredDraft, _ = json.Marshal(map[string]interface{}{
+			"nodes":         restored.Nodes,
+			"generation":    map[string]interface{}{"nodes": restored.Nodes},
+			"presentation":  restored.Presentation,
+			"page_bindings": restored.PageBindings,
+		})
+	}
 	_ = s.store.SaveDraft(ctx, projectID, string(restoredDraft))
 
 	return &RollbackResult{
-		RestoredVersionNo: versionNo,
+		RestoredVersionNo: target.VersionNo,
 		NewVersionNo:      newNo,
+		NewDraftVersionNo: newNo,
+		BaseVersionNo:     target.VersionNo,
 		Nodes:             restored.Nodes,
 		Presentation:      restored.Presentation,
 		PageBindings:      restored.PageBindings,
@@ -588,6 +635,47 @@ func (s *CoursewareService) CreateVersionSnapshot(ctx context.Context, projectID
 		return nil, err
 	}
 	_ = s.store.SaveDraft(ctx, projectID, version.SnapshotJSON)
+	return version, nil
+}
+
+// CreateVersionSnapshotJSON stores the canonical contract snapshot while
+// keeping the legacy node/presentation columns populated for old readers.
+func (s *CoursewareService) CreateVersionSnapshotJSON(ctx context.Context, projectID, changeNote string, snapshot ContractVersionSnapshot) (*CoursewareVersion, error) {
+	if _, err := s.store.GetProject(ctx, projectID); err != nil {
+		return nil, err
+	}
+	versionNo, err := s.store.NextVersionNo(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("版本快照序列化失败: %w", err)
+	}
+	nodes, _ := snapshot.Content.([]TeachingNodeItem)
+	nodesRaw, _ := json.Marshal(nodes)
+	presentation, _ := snapshot.Style.(map[string]string)
+	version := &CoursewareVersion{
+		VersionID:        "ver_" + uuid.NewString()[:12],
+		ProjectID:        projectID,
+		VersionNo:        versionNo,
+		NodesJSON:        string(nodesRaw),
+		PresentationJSON: presentationJSON(presentation),
+		SnapshotJSON:     string(raw),
+		ModifyInstr:      changeNote,
+		VersionSummary:   changeNote,
+		CreatedAt:        time.Now(),
+	}
+	if strings.TrimSpace(changeNote) == "" {
+		version.ModifyInstr = fmt.Sprintf("保存版本 v%d", versionNo)
+		version.VersionSummary = version.ModifyInstr
+	}
+	if err := s.store.SaveVersion(ctx, version); err != nil {
+		return nil, err
+	}
+	if err := s.store.SaveDraft(ctx, projectID, string(raw)); err != nil {
+		return nil, err
+	}
 	return version, nil
 }
 
