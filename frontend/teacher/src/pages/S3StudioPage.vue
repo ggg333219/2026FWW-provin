@@ -4,6 +4,11 @@
       <div v-if="initializing" class="studio-loading" role="status" aria-live="polite">
         <span class="studio-spinner"></span><strong>正在恢复课件工作区</strong><p>正在加载 AI 对话、资料证据与生成记录，请稍候…</p>
       </div>
+      <div v-else-if="asyncActivity" class="async-activity" role="status" aria-live="polite">
+        <span class="async-spinner"></span>
+        <div><strong>{{ asyncActivity.title }}</strong><small>{{ asyncActivity.detail }}</small></div>
+        <span v-if="asyncActivity.progress != null" class="async-progress">{{ asyncActivity.progress }}%</span>
+      </div>
       <!-- 页面头部 -->
       <div class="page-header">
         <div>
@@ -87,6 +92,8 @@
         :nodes="generationStore.currentScriptNodes.length ? generationStore.currentScriptNodes : outlineStore.nodes"
         :searching="materialStore.searching"
         :default-query="intentStore.intentSummary?.topic || ''"
+        :selected-evidence-ids="selectedEvidenceIds"
+        :selection-initialized="evidenceSelectionInitialized"
         @search="handleEvidenceSearch"
         @apply="handleEvidenceApply"
         @selection-change="handleEvidenceSelection"
@@ -397,6 +404,7 @@ const fontFamily = ref("system");
 const density = ref("comfortable");
 const evidencePacket = ref(null);
 const selectedEvidenceIds = ref([]);
+const evidenceSelectionInitialized = ref(false);
 const evidenceScope = ref({ scope: "draft", nodeId: "" });
 const saveVersionState = ref("idle");
 const lastSavedVersion = ref(0);
@@ -404,6 +412,15 @@ const baseVersion = ref(Number(route.query.base_version || 0));
 const interactivePreviewUrl = ref("");
 const interactivePreviewTitle = ref("");
 const initializing = ref(true);
+
+const asyncActivity = computed(() => {
+  if (modifyStore.modifying) return { title: "AI 正在修改课件", detail: "正在理解指令并局部更新相关页面，完成后会自动刷新预览。" };
+  if (materialStore.searching) return { title: "正在检索资料与证据", detail: "正在从知识库筛选并融合可追溯引用。" };
+  if (generationStore.isGenerating) return { title: "正在生成课件内容", detail: generationStore.generateStageText || "AI 正在逐页生成，请保持当前页面打开。", progress: generationStore.generateProgress || 0 };
+  if (interactiveStore.loading) return { title: "正在生成互动内容", detail: "正在构建可预览的 HTML5 互动资源。" };
+  if (regeneratingPageId.value) return { title: "正在重新生成当前页面", detail: "其他页面不会受到影响。" };
+  return null;
+});
 
 const evidenceId = (item, index) => String(item?.chunk_id || item?.id || `evidence-${index}`);
 const selectedEvidencePacket = computed(() => {
@@ -495,7 +512,10 @@ onMounted(async () => {
         }
       }
       if (savedDraft?.evidence_packet) evidencePacket.value = savedDraft.evidence_packet;
-      if (Array.isArray(savedDraft?.evidence_selection)) selectedEvidenceIds.value = savedDraft.evidence_selection;
+      if (Array.isArray(savedDraft?.evidence_selection)) {
+        selectedEvidenceIds.value = savedDraft.evidence_selection;
+        evidenceSelectionInitialized.value = true;
+      }
       if (savedDraft?.evidence_scope) evidenceScope.value = savedDraft.evidence_scope;
       if (Array.isArray(savedDraft?.page_bindings) && savedDraft.page_bindings.length) {
         const bindings = new Map(savedDraft.page_bindings.map((item) => [String(item.page_id || item.node_id || ''), item]));
@@ -804,6 +824,8 @@ async function handleEvidenceSearch(query) {
     context: { intent: intentStore.intentSummary || {}, project_id: projectStore.projectId },
   });
   if (packet) {
+    // 新一轮检索默认勾选新证据；后续用户取消勾选时再由受控状态持久化。
+    evidenceSelectionInitialized.value = false;
     evidencePacket.value = packet;
     projectStore.scheduleSave(draftSnapshot(), 0);
   }
@@ -811,13 +833,27 @@ async function handleEvidenceSearch(query) {
 
 function handleEvidenceSelection(ids) {
   selectedEvidenceIds.value = Array.isArray(ids) ? ids : [];
+  evidenceSelectionInitialized.value = true;
   projectStore.scheduleSave(draftSnapshot());
 }
 
 async function handleEvidenceApply({ scope, nodeId, selectedIds = [] }) {
   selectedEvidenceIds.value = selectedIds;
+  evidenceSelectionInitialized.value = true;
   evidenceScope.value = { scope, nodeId: nodeId || "" };
-  if (scope === "none" || !evidencePacket.value) {
+  if (scope === "none") {
+    if (generationStore.currentScriptNodes?.length) {
+      generationStore.setNodes(generationStore.currentScriptNodes.map((node) => ({
+        ...node,
+        citation_refs: [],
+        source_chunk_ids: [],
+        metadata: { ...(node.metadata || {}), evidence_scope: "none" },
+      })));
+    }
+    projectStore.scheduleSave(draftSnapshot(), 0);
+    return;
+  }
+  if (!evidencePacket.value) {
     projectStore.scheduleSave(draftSnapshot(), 0);
     return;
   }
@@ -832,8 +868,9 @@ async function handleEvidenceApply({ scope, nodeId, selectedIds = [] }) {
       const selected = scope === "draft" || node.node_id === nodeId;
       return selected ? {
         ...node,
-        citation_refs: [...new Set([...(node.citation_refs || []), ...uniqueRefs])],
-        source_chunk_ids: [...new Set([...(node.source_chunk_ids || []), ...uniqueRefs])],
+        // 采用替换语义，确保取消勾选后旧证据不会继续残留在页面绑定中。
+        citation_refs: uniqueRefs,
+        source_chunk_ids: uniqueRefs,
         metadata: { ...(node.metadata || {}), evidence_scope: scope },
       } : node;
     }));
@@ -921,6 +958,7 @@ function handleError(msg) {
     linear-gradient(180deg, #fcfefd 0%, #f7faf8 100%);
 }
 .studio-loading{position:fixed;inset:82px 20px 20px;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;border-radius:22px;background:rgba(248,252,250,.96);backdrop-filter:blur(8px);color:#27594e}.studio-loading strong{margin-top:14px;font-size:18px}.studio-loading p{margin:7px 0;color:#70857d;font-size:13px}.studio-spinner{width:42px;height:42px;border:4px solid #d8ebe4;border-top-color:#28735f;border-radius:50%;animation:studio-spin .8s linear infinite}@keyframes studio-spin{to{transform:rotate(360deg)}}
+.async-activity{position:fixed;top:92px;left:50%;z-index:40;display:flex;align-items:center;gap:11px;min-width:min(440px,calc(100vw - 40px));box-sizing:border-box;padding:12px 16px;border:1px solid #bcdcd0;border-radius:14px;background:rgba(249,253,251,.97);box-shadow:0 14px 38px rgba(26,75,60,.18);color:#28594c;transform:translateX(-50%);backdrop-filter:blur(10px)}.async-activity>div{display:grid;gap:2px;flex:1}.async-activity strong{font-size:13px}.async-activity small{color:#718880;font-size:11px}.async-spinner{width:22px;height:22px;flex:0 0 auto;border:3px solid #d6e9e1;border-top-color:#28735f;border-radius:50%;animation:studio-spin .75s linear infinite}.async-progress{font-size:12px;font-weight:700;color:#28735f}
 .page-header {
   display: flex;
   align-items: flex-start;

@@ -96,6 +96,12 @@ export const useOutlineStore = defineStore('outline', {
     /** 是否可以编辑大纲（仅草稿状态可编辑） */
     canEdit: (state) => state.status === 'draft' || state.status === 'confirming',
 
+    /**
+     * 节点顺序在已确认后仍允许调整。
+     * S3 的“已确认”代表内容可以开始生成，不应把教师的排序操作一并锁死。
+     */
+    canReorder: (state) => ['draft', 'confirming', 'confirmed'].includes(state.status),
+
     /** 是否已确认（可进入内容生成） */
     isConfirmed: (state) => state.status === 'confirmed',
 
@@ -243,7 +249,7 @@ export const useOutlineStore = defineStore('outline', {
 
     /** 交换两个节点的顺序（真换数组位置，再重排 order） */
     swapNodes(nodeIdA, nodeIdB) {
-      if (!this.canEdit) return
+      if (!this.canReorder) return
       const idxA = this.nodes.findIndex((n) => n.node_id === nodeIdA)
       const idxB = this.nodes.findIndex((n) => n.node_id === nodeIdB)
       if (idxA < 0 || idxB < 0 || idxA === idxB) return
@@ -266,7 +272,7 @@ export const useOutlineStore = defineStore('outline', {
 
     /** 拖拽到指定位置，保持数组顺序与 order 字段一致 */
     moveNodeToIndex(nodeId, targetIndex) {
-      if (!this.canEdit) return
+      if (!this.canReorder) return
       const sourceIndex = this.nodes.findIndex((n) => n.node_id === nodeId)
       const boundedTarget = Math.max(0, Math.min(Number(targetIndex), this.nodes.length - 1))
       if (sourceIndex < 0 || sourceIndex === boundedTarget) return

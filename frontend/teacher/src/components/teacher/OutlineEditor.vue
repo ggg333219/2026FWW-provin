@@ -65,15 +65,22 @@
           :key="node.node_id"
           class="outline-node-card"
           :class="[`node-type-${node.node_type}`, { dragging: draggedNodeId === node.node_id, 'drag-over': dragOverIndex === idx }]"
-          @dragover.prevent="handleDragOver(idx)"
-          @drop.prevent="handleDrop(idx)"
+          @dragover.prevent="handleDragOver($event, idx)"
+          @dragenter.prevent="handleDragOver($event, idx)"
+          @drop.prevent="handleDrop($event, idx)"
           @dragend="handleDragEnd"
         >
           <!-- 节点序号 & 移动按钮 -->
-          <div class="node-drag-handle">
-            <span v-if="outlineStore.canEdit" class="drag-grip" draggable="true" title="按住拖动排序" aria-label="拖动节点排序" @dragstart="handleDragStart($event, node.node_id)">⠿</span>
+          <div
+            class="node-drag-handle"
+            :draggable="outlineStore.canReorder"
+            :title="outlineStore.canReorder ? '按住拖动排序' : ''"
+            :aria-label="outlineStore.canReorder ? `拖动第 ${idx + 1} 个节点排序` : undefined"
+            @dragstart="handleDragStart($event, node.node_id)"
+          >
+            <span v-if="outlineStore.canReorder" class="drag-grip" aria-hidden="true">⠿</span>
             <span class="node-order">{{ idx + 1 }}</span>
-            <div class="node-move-btns" v-if="outlineStore.canEdit">
+            <div class="node-move-btns" v-if="outlineStore.canReorder">
               <button
                 class="move-btn"
                 :disabled="idx === 0"
@@ -381,18 +388,23 @@ function handleDeleteNode(nodeId) {
 }
 
 function handleDragStart(event, nodeId) {
-  if (!outlineStore.canEdit) return
+  if (!outlineStore.canReorder) {
+    event.preventDefault()
+    return
+  }
   draggedNodeId.value = nodeId
   event.dataTransfer.effectAllowed = 'move'
   event.dataTransfer.setData('text/plain', nodeId)
 }
 
-function handleDragOver(index) {
-  if (draggedNodeId.value) dragOverIndex.value = index
+function handleDragOver(event, index) {
+  if (!draggedNodeId.value) return
+  event.dataTransfer.dropEffect = 'move'
+  dragOverIndex.value = index
 }
 
-function handleDrop(index) {
-  const nodeId = draggedNodeId.value
+function handleDrop(event, index) {
+  const nodeId = draggedNodeId.value || event.dataTransfer.getData('text/plain')
   if (nodeId) outlineStore.moveNodeToIndex(nodeId, index)
   handleDragEnd()
 }
@@ -556,8 +568,11 @@ function handleCancelRevision() {
   align-items: center;
   gap: 4px;
   min-width: 28px;
+  cursor: grab;
+  user-select: none;
 }
-.drag-grip { color:#7da596; font-size:18px; line-height:1; cursor:grab; }
+.node-drag-handle:active { cursor: grabbing; }
+.drag-grip { color:#7da596; font-size:18px; line-height:1; pointer-events:none; }
 .node-order {
   font-size: 16px;
   font-weight: 700;

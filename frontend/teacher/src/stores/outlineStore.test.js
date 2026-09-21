@@ -22,4 +22,20 @@ describe('outlineStore 大纲拖拽排序', () => {
     expect(store.nodes.map((node) => node.node_id)).toEqual(['b', 'c', 'a'])
     expect(store.nodes.map((node) => node.order)).toEqual([1, 2, 3])
   })
+
+  it('已确认的大纲仍可重新排序', () => {
+    const store = useOutlineStore()
+    store.status = 'confirmed'
+    store.nodes = [
+      { node_id: 'a', order: 1 },
+      { node_id: 'b', order: 2 },
+      { node_id: 'c', order: 3 },
+    ]
+
+    store.moveNodeToIndex('c', 0)
+
+    expect(store.canReorder).toBe(true)
+    expect(store.nodes.map((node) => node.node_id)).toEqual(['c', 'a', 'b'])
+    expect(store.nodes.map((node) => node.order)).toEqual([1, 2, 3])
+  })
 })

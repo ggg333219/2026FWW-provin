@@ -46,6 +46,8 @@ const props = defineProps({
   nodes: { type: Array, default: () => [] },
   searching: { type: Boolean, default: false },
   defaultQuery: { type: String, default: '' },
+  selectedEvidenceIds: { type: Array, default: () => [] },
+  selectionInitialized: { type: Boolean, default: false },
 })
 const emit = defineEmits(['search', 'apply', 'selection-change'])
 const query = ref(props.defaultQuery)
@@ -59,10 +61,20 @@ const evidenceItems = computed(() => {
 })
 const citationCount = computed(() => evidenceItems.value.length)
 const evidenceId = (item, index) => String(item?.chunk_id || item?.id || `evidence-${index}`)
-watch(evidenceItems, (items) => {
-  selectedIds.value = new Set(items.map(evidenceId))
-  emitSelection()
-}, { immediate: true })
+watch(
+  [evidenceItems, () => props.selectedEvidenceIds, () => props.selectionInitialized],
+  ([items, externalIds, initialized]) => {
+    const available = new Set(items.map(evidenceId))
+    const nextIds = initialized
+      ? externalIds.map(String).filter((id) => available.has(id))
+      : [...available]
+    const unchanged = nextIds.length === selectedIds.value.size && nextIds.every((id) => selectedIds.value.has(id))
+    if (unchanged) return
+    selectedIds.value = new Set(nextIds)
+    if (!initialized) emitSelection()
+  },
+  { immediate: true },
+)
 watch(() => props.nodes, (nodes) => {
   if (!targetNodeId.value && nodes?.length) targetNodeId.value = nodes[0].node_id || ''
 }, { immediate: true })

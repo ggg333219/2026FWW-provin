@@ -119,7 +119,7 @@ async function handleSkillPreview() {
   // intent 为空时用最小结构
   const intent = props.intent?.title
     ? props.intent
-    : { title: '课件预览', description: 'AI 智课课件', key_points: [] }
+    : { title: '课件预览', description: '智能互动课件', key_points: [] }
   skillPreviewLoading.value = true
   try {
     const { teacherGenerationApi: api } = await import('../../services/v1/generationApi')
