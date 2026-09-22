@@ -236,6 +236,8 @@ func runS1Standalone(mode string, aiClient service.AIEngine) {
 		coursewares.POST("/:project_id/modify", coursewareHandler.Modify)
 		coursewares.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
 		coursewares.GET("/:project_id/versions", coursewareHandler.Versions)
+		coursewares.POST("/:project_id/versions", coursewareHandler.CreateVersion)
+		coursewares.GET("/:project_id/versions/:version_id", coursewareHandler.VersionDetail)
 		coursewares.POST("/:project_id/rollback", coursewareHandler.Rollback)
 	}
 

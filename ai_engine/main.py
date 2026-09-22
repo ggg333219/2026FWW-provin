@@ -45,6 +45,7 @@ from ai_engine.core.schema import (
     ExportRequest, ExportFormat,
     ExportStatusResponse, ExportStatus, ExportJob,
     RollbackRequest,
+    normalize_generation_nodes,
 )
 
 app = FastAPI(title="泛雅 AI 智课系统后端", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
@@ -1608,6 +1609,10 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
                 intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
                 outline = builder.build(intent_dict, evidence_dict)
             nodes = outline.get("nodes", [])
+        # Outline responses may use the legacy Go-facing `content` type. The
+        # generation pipeline must validate only the internal TeachingNode
+        # enum, so normalize both confirmed and legacy paths at one boundary.
+        nodes = normalize_generation_nodes(nodes)
         task.nodes = [TeachingNode.model_validate(node) for node in nodes]
         task.progress_pct = 50.0
 

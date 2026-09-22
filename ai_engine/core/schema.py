@@ -91,6 +91,34 @@ class NodeType(str, Enum):
     DIVIDER = "divider"
 
 
+def normalize_generation_node_type(raw: Any) -> str:
+    """Normalize outline-facing aliases before validating a TeachingNode.
+
+    The outline API may expose ``content``/``summary`` for compatibility with
+    the Go outline contract, while the generation pipeline uses the stricter
+    TeachingNode enum. Keep that conversion at this boundary instead of
+    widening the internal enum.
+    """
+    value = str(raw or "").strip().lower()
+    if value in {"content", "summary", ""}:
+        return NodeType.SLIDE.value
+    if value in {item.value for item in NodeType}:
+        return value
+    return NodeType.SLIDE.value
+
+
+def normalize_generation_nodes(nodes: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Return copied nodes with an internal-valid node_type/type pair."""
+    normalized: list[dict[str, Any]] = []
+    for raw_node in nodes or []:
+        node = dict(raw_node or {})
+        node_type = normalize_generation_node_type(node.get("node_type") or node.get("type"))
+        node["node_type"] = node_type
+        node["type"] = node_type
+        normalized.append(node)
+    return normalized
+
+
 class ModifyCommandType(str, Enum):
     """S4 修改命令类型。"""
     UPDATE_NODE = "update_node"
