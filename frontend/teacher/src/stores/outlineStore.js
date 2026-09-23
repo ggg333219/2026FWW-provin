@@ -325,16 +325,32 @@ export const useOutlineStore = defineStore('outline', {
      * auto_apply=false（默认）：返回待确认修订结果
      */
     async reviseOutline(message) {
-      if (!this.outline_id) return
+      if (!this.outline_id) {
+        const error = new Error('当前大纲尚未保存，无法发起 AI 修订，请先保存大纲后重试')
+        this.reviseError = error.message
+        throw error
+      }
       this.reviseLoading = true
       this.reviseError = ''
       this.pendingRevision = null
       try {
-        const resp = await teacherV1Api.outline.revise(this.outline_id, {
-          message,
-          base_version: this.outline_version,
-          auto_apply: false
-        })
+        let resp
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            resp = await teacherV1Api.outline.revise(this.outline_id, {
+              message,
+              base_version: this.outline_version,
+              auto_apply: false
+            })
+            break
+          } catch (err) {
+            const isVersionConflict = err?.httpStatus === 409 || err?.status === 409 || err?.code === 409
+            if (!isVersionConflict || attempt > 0) throw err
+            // 其他页面/标签页可能已经产生了新版本。同步服务端最新版本，
+            // 再用同一条教师指令重试一次，避免用户看到可恢复的 409。
+            await this.loadOutline(this.outline_id)
+          }
+        }
         const data = resp?.data || resp || {}
         this.pendingRevision = {
           outline_version: data.outline_version || this.outline_version + 1,
@@ -371,6 +387,7 @@ export const useOutlineStore = defineStore('outline', {
     /** 放弃 AI 修订结果 */
     discardRevision() {
       this.pendingRevision = null
+      this.reviseError = ''
     },
 
     // ------------------------------------------------------------------
