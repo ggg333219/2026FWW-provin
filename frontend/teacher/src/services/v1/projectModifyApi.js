@@ -18,6 +18,7 @@ import { requestJson } from './request'
  *   POST   /coursewares/:id/versions       保存完整版本快照（模块3）
  *   GET    /coursewares/:id/versions/:vid  读取单版本快照（模块3）
  *   POST   /coursewares/:id/rollback       回滚（A7，克隆式）
+ *   GET    /coursewares/:id/latest-generation-context 权威读端点（契约 v1.0 §3.2）
  */
 const MODIFY_LLM_TIMEOUT_MS = 120000 // 修改编排含 LLM 意图解析 + 局部生成，给 2 分钟
 
@@ -114,5 +115,27 @@ export const projectModifyApi = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target_version_id }),
+    }),
+
+  /**
+   * 契约 v1.0 §3.2 权威读端点：按 project_id 拉最新生成上下文
+   * （项目 + 最新 CoursewareVersion + 所有 page_bindings）。
+   *
+   * 用于：
+   *  - 切 PPT / 新建课件进入 S3：前端必须用本接口重置本地 AI 对话、版本号、
+   *    资料绑定等状态，避免上一个课件的缓存残留；
+   *  - 打开 PPT 但还没点"生成"：直接读出已绑定的 page_bindings 显示在左侧资料栏。
+   *
+   * 响应 data 形态：
+   *  {
+   *    project_id, generation_id, status, step, updated_at,
+   *    version_id, version_no, generation_id, page_id,
+   *    evidence_refs, citation_refs, evidence_used,
+   *    latest_version, page_bindings
+   *  }
+   */
+  latestGenerationContext: (project_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/latest-generation-context`, {
+      method: 'GET',
     }),
 }

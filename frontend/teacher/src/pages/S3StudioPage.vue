@@ -484,8 +484,11 @@ onMounted(async () => {
   // project_id 才是 AI 对话、草稿与版本的边界；generation_id 只是该项目的生成结果。
   projectStore.setActive(String(route.query.project_id || projectStore.restoreActiveId() || ""));
   if (projectStore.projectId) {
-    modifyStore.bindProject(projectStore.projectId);
-    await modifyStore.loadVersionHistory();
+    // 契约 v1.0 §3.2：按 project_id 拉 /latest-generation-context 作为权威读源，
+    // 一次性拿到项目 + 最新版本 + 当前所有页绑定，避免"切 PPT 不重置 AI 对话"
+    // 和"左侧资料绑定打开 PPT 不显示"。loadLatestContext 内部会先 bindProject
+    // 把内存对话清空，再用响应填回 version_no / pageBindings。
+    await modifyStore.loadLatestContext(projectStore.projectId);
     await projectStore.updateStep("s3_studio").catch(() => {});
     // 统一恢复入口已把后端 draft 放入 session；优先恢复项目快照，避免误用另一份课件的全局缓存。
     try {
