@@ -98,6 +98,30 @@ type coursewareDraftRow struct {
 
 func (coursewareDraftRow) TableName() string { return "courseware_drafts" }
 
+// PageEvidenceBinding —— 页面级证据绑定（契约 v1.0 §4.1 PageEvidenceBinding）。
+// 一个课件项目内每页一行，记录该页局部修改时可引用的证据 chunk 列表。
+type PageEvidenceBinding struct {
+	PageID       string    `json:"page_id"`
+	EvidenceRefs []string  `json:"evidence_refs"`
+	AutoBound    bool      `json:"auto_bound"`
+	BoundBy      string    `json:"bound_by"` // "system:intent_keyword" | "user:<teacher_id>"
+	BoundAt      time.Time `json:"bound_at"`
+}
+
+// coursewarePageBindingRow —— gorm 表映射（courseware_page_bindings）。
+// 复合主键 (project_id, page_id)：绑定是当前项目的活动状态，按项目+页存最新一份。
+type coursewarePageBindingRow struct {
+	ProjectID    string    `gorm:"column:project_id;size:64;primaryKey"`
+	PageID       string    `gorm:"column:page_id;size:64;primaryKey"`
+	EvidenceRefs string    `gorm:"column:evidence_refs;type:text"` // JSON 字符串：["chunk_001", ...]
+	AutoBound    bool      `gorm:"column:auto_bound"`
+	BoundBy      string    `gorm:"column:bound_by;size:120"`
+	BoundAt      time.Time `gorm:"column:bound_at"`
+	UpdatedAt    time.Time `gorm:"column:updated_at"`
+}
+
+func (coursewarePageBindingRow) TableName() string { return "courseware_page_bindings" }
+
 // =============================================================================
 // ModifyIntent —— B5 解析结果（与 Python /api/v1/ai/parse_modify 响应对齐）
 // =============================================================================
@@ -159,6 +183,9 @@ type coursewareStore interface {
 	GetVersion(ctx context.Context, projectID string, versionNo int) (*CoursewareVersion, error)
 	GetVersionByID(ctx context.Context, projectID, versionID string) (*CoursewareVersion, error)
 	ListVersions(ctx context.Context, projectID string) ([]*CoursewareVersion, error)
+
+	SetPageBindings(ctx context.Context, projectID string, bindings []PageEvidenceBinding) ([]string, error)
+	GetPageBindings(ctx context.Context, projectID string) (map[string]PageEvidenceBinding, error)
 }
 
 // CoursewareVersionSnapshot 是模块3的完整版本边界，显式保留页面证据绑定。
@@ -186,9 +213,44 @@ func NewCoursewareServiceWithDB(aiClient modifyClient, db *gorm.DB) *CoursewareS
 	return &CoursewareService{aiClient: aiClient, store: newGormCoursewareStore(db)}
 }
 
-// AutoMigrateCourseware 注册课件项目/版本/草稿表迁移。
+// AutoMigrateCourseware 注册课件项目/版本/草稿/页面绑定表迁移。
+//
+// courseware_projects 是遗留表：主键建在 id 上，而本模块的主键是 project_id。
+// gorm 无法在同一张表上迁移主键（SQLSTATE 42P16），且这次 AutoMigrate 一旦报错
+// 就整体中断——连带 courseware_versions / courseware_drafts / courseware_page_bindings
+// 都不会被创建，模块1 的"绑定刷新后仍在"和模块2/3 的版本持久化在真实库里全部失效。
+// 因此子表单独迁移，遗留表降级为只补齐缺失列。
 func AutoMigrateCourseware(db *gorm.DB) error {
-	return db.AutoMigrate(&coursewareProjectRow{}, &coursewareVersionRow{}, &coursewareDraftRow{})
+	if err := db.AutoMigrate(&coursewareVersionRow{}, &coursewareDraftRow{}, &coursewarePageBindingRow{}); err != nil {
+		return err
+	}
+	if err := db.AutoMigrate(&coursewareProjectRow{}); err != nil {
+		if addErr := ensureCoursewareProjectColumns(db); addErr != nil {
+			return addErr
+		}
+		return nil
+	}
+	return nil
+}
+
+// ensureCoursewareProjectColumns 给遗留的 courseware_projects 表补齐本模块需要的列。
+// IF NOT EXISTS 保证可重复执行；已有的 id 主键与 owner_id/title 等列不被改动。
+func ensureCoursewareProjectColumns(db *gorm.DB) error {
+	columns := []struct{ name, ddl string }{
+		{"project_id", "VARCHAR(64) NOT NULL DEFAULT ''"},
+		{"owner_id", "VARCHAR(64) NOT NULL DEFAULT ''"},
+		{"title", "VARCHAR(500) NOT NULL DEFAULT ''"},
+		{"current_step", "VARCHAR(20) NOT NULL DEFAULT 's1_intent'"},
+		{"gen_id", "VARCHAR(64) DEFAULT ''"},
+		{"status", "VARCHAR(20) NOT NULL DEFAULT 'draft'"},
+	}
+	for _, col := range columns {
+		ddl := fmt.Sprintf("ALTER TABLE courseware_projects ADD COLUMN IF NOT EXISTS %s %s", col.name, col.ddl)
+		if err := db.Exec(ddl).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ---- A1 最小基础 ----
@@ -251,6 +313,48 @@ func (s *CoursewareService) SaveDraft(ctx context.Context, projectID, draftJSON 
 // GetDraft 读取草稿 JSON。
 func (s *CoursewareService) GetDraft(ctx context.Context, projectID string) (string, error) {
 	return s.store.GetDraft(ctx, projectID)
+}
+
+// SavePageBindings 保存页面级证据绑定（upsert 语义：只更新传入的页面，其余页面保持不变）。
+// 返回实际被写入的 page_id 列表。项目不存在返回 ErrProjectNotFound。
+func (s *CoursewareService) SavePageBindings(ctx context.Context, projectID string, bindings []PageEvidenceBinding) ([]string, error) {
+	if _, err := s.store.GetProject(ctx, projectID); err != nil {
+		return nil, err
+	}
+	updated := make([]string, 0, len(bindings))
+	if len(bindings) == 0 {
+		return updated, nil
+	}
+	for i := range bindings {
+		b := &bindings[i]
+		if strings.TrimSpace(b.PageID) == "" {
+			return nil, fmt.Errorf("page_id 不能为空")
+		}
+		// 契约示例里 page_id 由 map key 给出，请求体内的 page_id 可省略——以 key 为准。
+		if b.EvidenceRefs == nil {
+			b.EvidenceRefs = []string{}
+		}
+		if b.BoundBy == "" {
+			b.BoundBy = "user:unknown"
+		}
+		if b.BoundAt.IsZero() {
+			b.BoundAt = time.Now().UTC()
+		}
+		updated = append(updated, b.PageID)
+	}
+	if _, err := s.store.SetPageBindings(ctx, projectID, bindings); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+// GetPageBindings 读取项目当前的页面级证据绑定，key 为 page_id。
+// 项目不存在返回 ErrProjectNotFound；无绑定时返回空 map（非 nil），便于前端直接消费。
+func (s *CoursewareService) GetPageBindings(ctx context.Context, projectID string) (map[string]PageEvidenceBinding, error) {
+	if _, err := s.store.GetProject(ctx, projectID); err != nil {
+		return nil, err
+	}
+	return s.store.GetPageBindings(ctx, projectID)
 }
 
 // ---- A6: 修改编排 + 版本快照 ----
@@ -703,13 +807,16 @@ type memCoursewareStore struct {
 	projects map[string]*CoursewareProject
 	drafts   map[string]string
 	versions map[string][]*CoursewareVersion // project_id → 按 version_no 升序
+	// pageBindings[project_id][page_id] → PageEvidenceBinding
+	pageBindings map[string]map[string]PageEvidenceBinding
 }
 
 func newMemCoursewareStore() *memCoursewareStore {
 	return &memCoursewareStore{
-		projects: make(map[string]*CoursewareProject),
-		drafts:   make(map[string]string),
-		versions: make(map[string][]*CoursewareVersion),
+		projects:     make(map[string]*CoursewareProject),
+		drafts:       make(map[string]string),
+		versions:     make(map[string][]*CoursewareVersion),
+		pageBindings: make(map[string]map[string]PageEvidenceBinding),
 	}
 }
 
@@ -765,6 +872,7 @@ func (m *memCoursewareStore) DeleteProject(_ context.Context, projectID string) 
 	delete(m.projects, projectID)
 	delete(m.drafts, projectID)
 	delete(m.versions, projectID)
+	delete(m.pageBindings, projectID)
 	return nil
 }
 
@@ -873,6 +981,38 @@ func (m *memCoursewareStore) ListVersions(_ context.Context, projectID string) (
 	return out, nil
 }
 
+func (m *memCoursewareStore) SetPageBindings(_ context.Context, projectID string, bindings []PageEvidenceBinding) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	bucket := m.pageBindings[projectID]
+	if bucket == nil {
+		bucket = make(map[string]PageEvidenceBinding, len(bindings))
+		m.pageBindings[projectID] = bucket
+	}
+	for _, b := range bindings {
+		cp := b
+		if cp.EvidenceRefs == nil {
+			cp.EvidenceRefs = []string{}
+		}
+		bucket[b.PageID] = cp
+	}
+	return []string{}, nil
+}
+
+func (m *memCoursewareStore) GetPageBindings(_ context.Context, projectID string) (map[string]PageEvidenceBinding, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]PageEvidenceBinding)
+	for pageID, b := range m.pageBindings[projectID] {
+		cp := b
+		if cp.EvidenceRefs == nil {
+			cp.EvidenceRefs = []string{}
+		}
+		out[pageID] = cp
+	}
+	return out, nil
+}
+
 // =============================================================================
 // gorm 实现（完整模式）
 // =============================================================================
@@ -939,6 +1079,9 @@ func (g *gormCoursewareStore) DeleteProject(ctx context.Context, projectID strin
 			return err
 		}
 		if err := tx.Where("project_id = ?", projectID).Delete(&coursewareDraftRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", projectID).Delete(&coursewarePageBindingRow{}).Error; err != nil {
 			return err
 		}
 		res := tx.Where("project_id = ? OR id = ?", projectID, projectID).Delete(&coursewareProjectRow{})
@@ -1070,6 +1213,57 @@ func (g *gormCoursewareStore) ListVersions(ctx context.Context, projectID string
 			ParentVersionID: r.ParentVersionID, NodesJSON: r.NodesJSON, PresentationJSON: r.PresentationJSON,
 			SnapshotJSON: r.SnapshotJSON, ModifyInstr: r.ModifyInstr, VersionSummary: r.VersionSummary, CreatedAt: r.CreatedAt,
 		})
+	}
+	return out, nil
+}
+
+func (g *gormCoursewareStore) SetPageBindings(ctx context.Context, projectID string, bindings []PageEvidenceBinding) ([]string, error) {
+	now := time.Now().UTC()
+	for _, b := range bindings {
+		refs, err := json.Marshal(b.EvidenceRefs)
+		if err != nil {
+			return nil, err
+		}
+		if err := g.db.WithContext(ctx).Exec(`
+			INSERT INTO courseware_page_bindings (project_id, page_id, evidence_refs, auto_bound, bound_by, bound_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (project_id, page_id) DO UPDATE SET
+				evidence_refs = EXCLUDED.evidence_refs,
+				auto_bound    = EXCLUDED.auto_bound,
+				bound_by      = EXCLUDED.bound_by,
+				bound_at      = EXCLUDED.bound_at,
+				updated_at    = EXCLUDED.updated_at
+		`, projectID, b.PageID, string(refs), b.AutoBound, b.BoundBy, b.BoundAt, now).Error; err != nil {
+			return nil, err
+		}
+	}
+	return []string{}, nil
+}
+
+func (g *gormCoursewareStore) GetPageBindings(ctx context.Context, projectID string) (map[string]PageEvidenceBinding, error) {
+	var rows []coursewarePageBindingRow
+	if err := g.db.WithContext(ctx).Where("project_id = ?", projectID).
+		Order("page_id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]PageEvidenceBinding, len(rows))
+	for _, r := range rows {
+		b := PageEvidenceBinding{
+			PageID:       r.PageID,
+			EvidenceRefs: []string{},
+			AutoBound:    r.AutoBound,
+			BoundBy:      r.BoundBy,
+			BoundAt:      r.BoundAt,
+		}
+		if strings.TrimSpace(r.EvidenceRefs) != "" {
+			if err := json.Unmarshal([]byte(r.EvidenceRefs), &b.EvidenceRefs); err != nil {
+				return nil, fmt.Errorf("页面绑定 evidence_refs 反序列化失败: %s", err)
+			}
+			if b.EvidenceRefs == nil {
+				b.EvidenceRefs = []string{}
+			}
+		}
+		out[r.PageID] = b
 	}
 	return out, nil
 }

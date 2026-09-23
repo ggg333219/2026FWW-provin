@@ -25,6 +25,7 @@ import (
 	"smart-teaching-backend/pkg/config"
 	applogger "smart-teaching-backend/pkg/logger"
 	"smart-teaching-backend/pkg/oss"
+	"smart-teaching-backend/pkg/serveraddr"
 )
 
 func main() {
@@ -441,14 +442,10 @@ func main() {
 		}
 	}
 
-	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	for _, route := range r.Routes() {
 		applogger.Infof("Route: %s %s", route.Method, route.Path)
 	}
-	applogger.Sugar.Infof("服务器启动成功，访问地址: http://localhost%s", addr)
-	applogger.Sugar.Infof("健康检查: http://localhost%s/health", addr)
-
-	if err := r.Run(addr); err != nil {
+	if err := serveraddr.Serve(r, cfg.Server.Port, "api", projectRoot, applogger.Sugar.Warnf); err != nil {
 		applogger.Sugar.Fatalf("服务器启动失败: %v", err)
 	}
 }

@@ -43,6 +43,9 @@ scripts/pids.json
 tmp/
 uploads/
 
+# 运行时端口公告（serveraddr.Publish 写入，端口顺延后给脚本/CI 读）
+backend/.runtime/
+
 # Parse test files (large binary test assets)
 ai_engine/parse/test.docx
 ai_engine/parse/test2.pdf
@@ -95,3 +98,6 @@ lark_auth_qr.png
 会议讲稿.md
 # 任何含本地 env 配置的临时导出
 *claude-settings*.json
+
+# Local AI session artifacts (HANDOFF / backups / scratch / drafts) — 不入库
+.rivet/

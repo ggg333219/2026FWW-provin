@@ -126,6 +126,9 @@ func (h *GenerationHandler) PreviewHTML(c *gin.Context) {
 }
 
 // Modify  POST /api/v1/gen/modify — 应用编辑命令，生成新版本快照
+//
+// 契约 v1.0 模块1 接口3：请求体可带 page_id + evidence_refs，把局部修改的证据
+// 限定在该页绑定的 chunk 内；不传时保持现有行为（全库检索），向后兼容。
 func (h *GenerationHandler) Modify(c *gin.Context) {
 	var req service.GenerationModifyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -134,6 +137,14 @@ func (h *GenerationHandler) Modify(c *gin.Context) {
 	}
 	resp, err := h.aiClient.GenerationModify(c.Request.Context(), req)
 	if err != nil {
+		if httpErr, isHTTP := err.(*service.AIEngineHTTPError); isHTTP {
+			status := http.StatusBadGateway // 契约错误码：502 = AI引擎调用失败
+			if httpErr.StatusCode == http.StatusNotFound {
+				status = http.StatusNotFound // 契约错误码：404 = 版本/资源不存在
+			}
+			c.JSON(status, gin.H{"code": status, "message": "修改命令执行失败: " + httpErr.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "修改命令执行失败: " + err.Error()})
 		return
 	}

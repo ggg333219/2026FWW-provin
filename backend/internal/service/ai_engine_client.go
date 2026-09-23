@@ -702,6 +702,11 @@ type GenerationModifyRequest struct {
 	Nodes        []interface{}       `json:"nodes,omitempty"`
 	CourseName   string              `json:"course_name,omitempty"`
 	Regenerate   bool                `json:"regenerate"`
+	// 契约 v1.0 模块1 接口3：页面级局部修改的证据约束（字段只增不删，向后兼容）。
+	// PageID 对应大纲节点 ID（node_id == page_id）；EvidenceRefs 为空时保持现有全库行为。
+	PageID          string   `json:"page_id,omitempty"`
+	EvidenceRefs    []string `json:"evidence_refs,omitempty"`
+	UserInstruction string   `json:"user_instruction,omitempty"`
 }
 
 type GenerationModifyResponse struct {
@@ -710,6 +715,9 @@ type GenerationModifyResponse struct {
 	VersionNumber   int           `json:"version_number,omitempty"`
 	CommandsApplied []string      `json:"commands_applied,omitempty"`
 	Errors          []string      `json:"errors,omitempty"`
+	// 契约 v1.0 模块1：本次修改实际使用的证据 chunk（"用了哪些证据"）。
+	CitationRefs []string `json:"citation_refs,omitempty"`
+	EvidenceUsed []string `json:"evidence_used,omitempty"`
 }
 
 type VersionSnapshot struct {
