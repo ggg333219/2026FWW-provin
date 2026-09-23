@@ -1,6 +1,32 @@
 import { defineStore } from "pinia";
 import { teacherV1Api } from "../services/v1";
 import { API_BASE } from "../config/api";
+import { projectModifyApi } from "../services/v1/projectModifyApi";
+
+function diffNodes(leftNodes = [], rightNodes = [], leftVersion, rightVersion) {
+  const leftMap = new Map(leftNodes.map((node, index) => [node.node_id, { node, index }]));
+  const rightMap = new Map(rightNodes.map((node, index) => [node.node_id, { node, index }]));
+  const added = [], removed = [], changed = [], same = [];
+  for (const [id, entry] of rightMap) {
+    const old = leftMap.get(id);
+    if (!old) { added.push({ node_id: id, title: entry.node.title || id }); continue; }
+    const fields = [];
+    for (const field of ["title", "summary", "content", "script", "node_type", "citation_refs", "source_chunk_ids", "layout_hint", "font_size_hint", "slide_background", "metadata"]) {
+      if (JSON.stringify(old.node[field] ?? null) !== JSON.stringify(entry.node[field] ?? null)) fields.push(field);
+    }
+    if (old.index !== entry.index) fields.push("order");
+    (fields.length ? changed : same).push({ node_id: id, title: entry.node.title || id, changes: fields });
+  }
+  for (const [id, entry] of leftMap) if (!rightMap.has(id)) removed.push({ node_id: id, title: entry.node.title || id });
+  return { v1: leftVersion, v2: rightVersion, added, removed, changed, same };
+}
+
+function snapshotNodes(data = {}) {
+  if (Array.isArray(data.nodes) && data.nodes.length) return data.nodes;
+  if (Array.isArray(data.snapshot?.content)) return data.snapshot.content;
+  if (Array.isArray(data.snapshot?.content?.nodes)) return data.snapshot.content.nodes;
+  return [];
+}
 
 /** 后端/Mock 返回相对下载路径时补齐 API_BASE，保证跨端口可下载；blob/data 保持原样 */
 function normalizeDownloadUrl(url) {
@@ -28,6 +54,8 @@ export const useVersionStore = defineStore("version", {
     comparing: false,
     /** 当前 generation_id */
     genId: "",
+    /** 当前 courseware project_id；存在时版本历史以项目快照为准 */
+    projectId: "",
     /** 修改指令列表 */
     pendingChanges: [],
     /** 发布/锁定状态 */
@@ -120,6 +148,90 @@ export const useVersionStore = defineStore("version", {
       }
     },
 
+    async loadProjectVersions(projectId) {
+      if (!projectId) return;
+      this.projectId = projectId;
+      this.loading = true;
+      this.error = "";
+      try {
+        const raw = await projectModifyApi.versions(projectId);
+        const data = raw?.data || raw || {};
+        this.versions = (data.items || []).map((v) => ({
+          id: v.version_id,
+          version: v.version_no,
+          title: v.version_summary || v.modify_instruction || `版本 ${v.version_no}`,
+          summary: v.version_summary || v.modify_instruction || "",
+          locked: false,
+          createdAt: v.created_at || "",
+          nodes: v.nodes || [],
+          presentation: v.presentation || {},
+        }));
+      } catch (err) {
+        this.error = err.message || "加载项目版本历史失败";
+        throw err;
+      } finally { this.loading = false; }
+    },
+
+    async loadProjectVersion(projectId, versionNumber = null) {
+      if (!projectId) return null;
+      if (!this.versions.length || this.projectId !== projectId) await this.loadProjectVersions(projectId);
+      const item = versionNumber == null
+        ? this.versions[0]
+        : this.versions.find((v) => Number(v.version) === Number(versionNumber));
+      if (!item) { this.currentVersionDetail = null; return null; }
+      this.loading = true;
+      try {
+        const raw = await projectModifyApi.versionDetail(projectId, item.id);
+        const data = raw?.data || raw || {};
+        this.currentVersionDetail = {
+          version: data.version_no,
+          id: data.version_id,
+          nodes: snapshotNodes(data),
+          pageBindings: data.page_bindings || data.snapshot?.page_bindings || [],
+          presentation: data.presentation || data.snapshot?.style || {},
+          summary: data.version_summary || data.change_note || "",
+          locked: false,
+          createdAt: data.created_at || "",
+        };
+        return this.currentVersionDetail;
+      } finally { this.loading = false; }
+    },
+
+    async compareProjectVersions(projectId, leftVersion, rightVersion) {
+      if (!projectId || !leftVersion || !rightVersion || leftVersion === rightVersion) return null;
+      this.comparing = true;
+      try {
+        const leftItem = this.versions.find((v) => Number(v.version) === Number(leftVersion));
+        const rightItem = this.versions.find((v) => Number(v.version) === Number(rightVersion));
+        const [leftRaw, rightRaw] = await Promise.all([
+          projectModifyApi.versionDetail(projectId, leftItem.id),
+          projectModifyApi.versionDetail(projectId, rightItem.id),
+        ]);
+        const left = leftRaw?.data || leftRaw || {};
+        const right = rightRaw?.data || rightRaw || {};
+        this.comparison = diffNodes(snapshotNodes(left), snapshotNodes(right), leftVersion, rightVersion);
+        return this.comparison;
+      } catch (err) {
+        this.error = err.message || "版本对比失败";
+        throw err;
+      } finally { this.comparing = false; }
+    },
+
+    async rollbackProject(projectId, targetVersion) {
+      const item = this.versions.find((v) => Number(v.version) === Number(targetVersion));
+      if (!projectId || !item) throw new Error("未找到要回滚的项目版本");
+      this.loading = true;
+      try {
+        const result = await projectModifyApi.rollback(projectId, item.id);
+        await this.loadProjectVersions(projectId);
+        await this.loadProjectVersion(projectId);
+        return result;
+      } catch (err) {
+        this.error = err.message || "创建回滚分支失败";
+        throw err;
+      } finally { this.loading = false; }
+    },
+
     async compareVersions(genId, leftVersion, rightVersion) {
       if (!genId || !leftVersion || !rightVersion || leftVersion === rightVersion) return null;
       this.comparing = true;
@@ -133,21 +245,7 @@ export const useVersionStore = defineStore("version", {
         const right = rightRaw?.data || rightRaw || {};
         const leftNodes = Array.isArray(left.nodes_snapshot) ? left.nodes_snapshot : [];
         const rightNodes = Array.isArray(right.nodes_snapshot) ? right.nodes_snapshot : [];
-        const leftMap = new Map(leftNodes.map((node, index) => [node.node_id, { node, index }]));
-        const rightMap = new Map(rightNodes.map((node, index) => [node.node_id, { node, index }]));
-        const added = [], removed = [], changed = [], same = [];
-        for (const [id, entry] of rightMap) {
-          const old = leftMap.get(id);
-          if (!old) { added.push({ node_id: id, title: entry.node.title || id }); continue; }
-          const fields = [];
-          for (const field of ["title", "summary", "content", "script", "node_type", "citation_refs", "source_chunk_ids", "layout_hint", "font_size_hint", "slide_background", "metadata"]) {
-            if (JSON.stringify(old.node[field] ?? null) !== JSON.stringify(entry.node[field] ?? null)) fields.push(field);
-          }
-          if (old.index !== entry.index) fields.push("order");
-          (fields.length ? changed : same).push({ node_id: id, title: entry.node.title || id, changes: fields });
-        }
-        for (const [id, entry] of leftMap) if (!rightMap.has(id)) removed.push({ node_id: id, title: entry.node.title || id });
-        this.comparison = { v1: leftVersion, v2: rightVersion, added, removed, changed, same };
+        this.comparison = diffNodes(leftNodes, rightNodes, leftVersion, rightVersion);
         return this.comparison;
       } catch (err) {
         this.error = err.message || "版本对比失败";
@@ -355,6 +453,7 @@ export const useVersionStore = defineStore("version", {
       this.versions = [];
       this.currentVersionDetail = null;
       this.genId = "";
+      this.projectId = "";
       this.pendingChanges = [];
       this.error = "";
       this.resetExport();

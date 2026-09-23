@@ -1,5 +1,11 @@
 import { defineStore } from 'pinia'
 import { teacherV1Api } from '../services/v1'
+import { API_BASE } from '../config/api'
+
+function normalizeAssetUrl(url) {
+  if (!url || /^https?:\/\//.test(url) || url.startsWith('blob:') || url.startsWith('data:')) return url || ''
+  return url.startsWith('/') ? `${API_BASE}${url}` : url
+}
 
 /**
  * S3 互动资源状态管理 — Interactive Store
@@ -73,8 +79,8 @@ export const useInteractiveStore = defineStore('interactive', {
           node_id,
           asset_type: data.asset_type || 'html5',
           status: data.status || 'processing',
-          file_url: data.file_url || '',
-          entry_url: data.entry_url || '',
+          file_url: normalizeAssetUrl(data.file_url),
+          entry_url: normalizeAssetUrl(data.entry_url),
           file_size: data.file_size || 0,
           items: Array.isArray(data.items) ? data.items : [],
           error: data.error || null
@@ -110,8 +116,8 @@ export const useInteractiveStore = defineStore('interactive', {
           this.assets[nodeId] = {
             ...this.assets[nodeId],
             status: data.status || this.assets[nodeId].status,
-            file_url: data.file_url || this.assets[nodeId].file_url,
-            entry_url: data.entry_url || this.assets[nodeId].entry_url,
+            file_url: normalizeAssetUrl(data.file_url) || this.assets[nodeId].file_url,
+            entry_url: normalizeAssetUrl(data.entry_url) || this.assets[nodeId].entry_url,
             file_size: data.file_size || this.assets[nodeId].file_size,
             items: Array.isArray(data.items) ? data.items : (this.assets[nodeId].items || []),
             error: data.error || null
