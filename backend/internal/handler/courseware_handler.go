@@ -418,3 +418,63 @@ func (h *CoursewareHandler) PageBindingsGet(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"page_bindings": bindings}, "error": "", "code": 200})
 }
+
+// =============================================================================
+// AI 对话消息持久化（契约 v1.0 §3.2 — 切 PPT / 刷新后 AI 对话不丢失）
+//
+//	GET    /api/v1/coursewares/:project_id/ai-messages — 拉按时间升序的全部对话气泡
+//	POST   /api/v1/coursewares/:project_id/ai-messages — 幂等 upsert 一批消息
+//	DELETE /api/v1/coursewares/:project_id/ai-messages — 清空（reset 时调用）
+// =============================================================================
+
+// AIMessagesList GET /:project_id/ai-messages —— 拉全部对话气泡。
+func (h *CoursewareHandler) AIMessagesList(c *gin.Context) {
+	msgs, err := h.svc.ListAIMessages(c.Request.Context(), c.Param("project_id"))
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"messages": msgs}, "error": "", "code": 200})
+}
+
+// AIMessagesUpsert POST /:project_id/ai-messages —— 幂等 upsert 一批消息。
+//
+// 请求体形如：
+//
+//	{ "messages": [
+//	    { "message_id": "msg_xxx", "role": "teacher", "text": "..." },
+//	    { "message_id": "msg_yyy", "role": "ai",     "text": "...",
+//	      "intent": {...}, "is_summary": true, "version_no": 3 }
+//	] }
+//
+// (project_id, message_id) 冲突时覆盖——同一会话重发不会产生重复气泡。
+func (h *CoursewareHandler) AIMessagesUpsert(c *gin.Context) {
+	projectID := c.Param("project_id")
+	var req struct {
+		Messages []service.AIMessageItem `json:"messages"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "data": nil, "error": "ai-messages 参数错误: " + err.Error(), "code": 400})
+		return
+	}
+	if len(req.Messages) == 0 {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"upserted": 0}, "error": "", "code": 200})
+		return
+	}
+	n, err := h.svc.UpsertAIMessages(c.Request.Context(), projectID, req.Messages)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"upserted": n}, "error": "", "code": 200})
+}
+
+// AIMessagesClear DELETE /:project_id/ai-messages —— 清空（modifyStore.reset 时调用）。
+func (h *CoursewareHandler) AIMessagesClear(c *gin.Context) {
+	n, err := h.svc.ClearAIMessages(c.Request.Context(), c.Param("project_id"))
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"cleared": n}, "error": "", "code": 200})
+}
