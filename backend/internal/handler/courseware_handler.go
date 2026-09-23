@@ -349,5 +349,6 @@ func (h *CoursewareHandler) mapError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrProjectNotFound), errors.Is(err, service.ErrVersionNotFound):
 		status = http.StatusNotFound
 	}
-	c.JSON(status, gin.H{"ok": false, "data": nil, "error": err.Error(), "code": status})
+	message := err.Error()
+	c.JSON(status, gin.H{"ok": false, "data": nil, "error": message, "code": status, "message": message})
 }

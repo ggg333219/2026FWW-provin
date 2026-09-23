@@ -205,6 +205,7 @@ func RegisterNewSkillRoutes(
 
 	// ---- S3: 课件生成 ----
 	gen := v1.Group("/gen")
+	gen.Use(handler.JWTAuthMiddleware())
 	{
 		gen.POST("/create", genHandler.Create)
 		gen.GET("/status/:task_id", genHandler.Status)
