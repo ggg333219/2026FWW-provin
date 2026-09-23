@@ -152,10 +152,10 @@ const exportIsActive = computed(() => ['pending', 'exporting'].includes(props.ex
 const exportFileName = computed(() => {
   const safeTitle = String(props.courseTitle || '未命名课件').replace(/[\\/:*?"<>|]/g, '_')
   const extension = selectedFormat.value === 'both' ? 'zip' : (selectedFormat.value === 'interactive' ? 'html' : (selectedFormat.value === 'lesson_plan' ? 'docx' : selectedFormat.value))
-  return `${safeTitle}-${props.versionLabel}.${extension}`
+  return `${safeTitle}_${props.versionLabel}.${extension}`
 })
 const exportDescription = computed(() => selectedFormat.value === 'both'
-  ? `导出文件：${String(props.courseTitle || '未命名课件')}-${props.versionLabel}（PPTX + DOCX + HTML5）`
+  ? `导出文件：${String(props.courseTitle || '未命名课件')}_${props.versionLabel}（PPTX + DOCX + HTML5）`
   : `导出文件：${exportFileName.value}`)
 const downloadFiles = computed(() => {
   const labels = { pptx: 'PPTX', docx: 'DOCX', html: 'HTML5', html5: 'HTML5', interactive: 'HTML5' }

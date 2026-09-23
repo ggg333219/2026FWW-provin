@@ -210,6 +210,7 @@ func RegisterNewSkillRoutes(
 
 	// ---- S3: 课件生成 ----
 	gen := v1.Group("/gen")
+	gen.Use(handler.JWTAuthMiddleware())
 	{
 		gen.POST("/create", genHandler.Create)
 		gen.GET("/status/:task_id", genHandler.Status)
@@ -223,6 +224,7 @@ func RegisterNewSkillRoutes(
 		generations.POST("/:generation_id/nodes/:node_id/interactive", interactiveHandler.Generate)
 		generations.POST("/:generation_id/pages/:page_id/interactive-link", interactiveHandler.LinkToPage)
 		v1.GET("/interactive/assets/:interactive_asset_id", interactiveHandler.Get)
+		v1.GET("/interactive/assets/:interactive_asset_id/preview", interactiveHandler.Preview)
 	}
 
 	// ---- P1: S3 大纲 → 内容生成（独立阶段）----

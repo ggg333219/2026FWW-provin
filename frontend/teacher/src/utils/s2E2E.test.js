@@ -304,7 +304,7 @@ describe('S2 前端链路（mock）', () => {
     expect(window.localStorage.getItem('fuww_mock_mode')).toBe('true')
   })
 
-  it('真实链路：后端 404 仅对当前请求回退 Mock，不全局切换', async () => {
+  it('真实链路：后端 404 直接抛出真实错误，不回退 Mock', async () => {
     // 模拟真实后端：materials 列表路由缺失(404)，但 rag 等路由真实存在(200)
     const seen = []
     globalThis.fetch = (url, opts = {}) => {
@@ -326,10 +326,9 @@ describe('S2 前端链路（mock）', () => {
       return Promise.reject(new TypeError('Failed to fetch'))
     }
 
-    // materials 404 → 回退 Mock 返回素材列表，但不设置全局 mock 模式
-    const list = await requestJson('/api/v1/teacher/materials/search')
-    expect(list.code).toBe(200)
-    expect(Array.isArray(list.data)).toBe(true)
+    // materials 404 → 保留真实 HTTP 错误，避免导出等失败请求返回假数据
+    const error = await requestJson('/api/v1/teacher/materials/search').catch((err) => err)
+    expect(error.httpStatus).toBe(404)
     expect(window.localStorage.getItem('fuww_mock_mode')).toBe(null)
 
     // rag/search 继续走真实 fetch（真实后端 200），而非 Mock

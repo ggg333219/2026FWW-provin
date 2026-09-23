@@ -22,7 +22,7 @@
           <input
             v-model="genIdInput"
             type="text"
-            placeholder="输入 Generation ID"
+            placeholder="Generation ID（项目版本可自动加载）"
             class="gen-id-input"
             @keyup.enter="loadData"
           />
@@ -45,7 +45,7 @@
               <h3>版本历史 ({{ versionStore.versionCount }})</h3>
               <div v-if="versionStore.loading" class="empty-tip">加载中...</div>
               <div v-else-if="versionStore.versions.length === 0" class="empty-tip">
-                输入 Generation ID 并加载版本
+                当前项目还没有版本，请先在 S3 保存新版本
               </div>
               <div v-else class="version-list">
                 <div
@@ -72,7 +72,7 @@
           <section class="s4-actions">
             <div class="section-card">
               <h3>版本操作</h3>
-              <div v-if="!versionStore.genId" class="empty-tip">请先加载版本</div>
+              <div v-if="!versionStore.genId && !versionStore.projectId" class="empty-tip">请先加载版本</div>
               <div v-else class="action-group">
                 <!-- 回滚 -->
                 <div class="action-row">
@@ -246,6 +246,7 @@ watch(() => route.query.project_id, async (id) => {
   projectStore.setActive(id)
   await projectStore.resume(id).catch(() => {})
   projectStore.updateStep('s4_version').catch(() => {})
+  await loadData()
 }, { immediate: true })
 onMounted(() => {
   if (!(route.query.generation_id || route.query.genId) && genIdInput.value) loadData()
@@ -274,30 +275,44 @@ const evidenceTrace = computed(() => {
 
 async function loadData() {
   const id = genIdInput.value.trim()
-  if (!id) return
-  await versionStore.loadVersions(id)
+  const projectId = projectStore.projectId || String(route.query.project_id || '')
+  if (!id && !projectId) return
+  if (id) versionStore.genId = id
+  if (projectId) await versionStore.loadProjectVersions(projectId)
+  else await versionStore.loadVersions(id)
   if (versionStore.versions.length > 0) {
-    await versionStore.loadVersion(id)
+    if (projectId) await versionStore.loadProjectVersion(projectId)
+    else await versionStore.loadVersion(id)
     compareRight.value = versionStore.versions[0]?.version || null
     compareLeft.value = versionStore.versions[1]?.version || null
   }
 }
 
-async function loadSelectedVersion(version) { await versionStore.loadVersion(versionStore.genId, version) }
-async function runCompare() { await versionStore.compareVersions(versionStore.genId, compareLeft.value, compareRight.value) }
+async function loadSelectedVersion(version) {
+  if (projectStore.projectId) await versionStore.loadProjectVersion(projectStore.projectId, version)
+  else await versionStore.loadVersion(versionStore.genId, version)
+}
+async function runCompare() {
+  if (projectStore.projectId) await versionStore.compareProjectVersions(projectStore.projectId, compareLeft.value, compareRight.value)
+  else await versionStore.compareVersions(versionStore.genId, compareLeft.value, compareRight.value)
+}
 function changeLabels(changes = []) {
   const labels = { title: '标题', summary: '摘要', content: '正文', script: '讲稿', node_type: '节点类型', citation_refs: '证据引用', source_chunk_ids: '来源切片', layout_hint: '版式', font_size_hint: '字号', slide_background: '配色', metadata: '样式/互动元数据', order: '顺序' }
   return changes.map((item) => labels[item] || item)
 }
 
 async function handleRollback() {
-  if (!rollbackTarget.value || !versionStore.genId) return
+  if (!rollbackTarget.value || (!versionStore.genId && !projectStore.projectId)) return
   try {
     const targetVersion = Number(rollbackTarget.value)
-    const targetDetail = await versionStore.loadVersion(versionStore.genId, targetVersion)
-    const result = await versionStore.rollbackTo(versionStore.genId, targetVersion)
+    const targetDetail = projectStore.projectId
+      ? await versionStore.loadProjectVersion(projectStore.projectId, targetVersion)
+      : await versionStore.loadVersion(versionStore.genId, targetVersion)
+    const result = projectStore.projectId
+      ? await versionStore.rollbackProject(projectStore.projectId, targetVersion)
+      : await versionStore.rollbackTo(versionStore.genId, targetVersion)
     const data = result?.data || result || {}
-    const newVersion = Number(data.current_version || data.new_version_no || versionStore.currentVersionDetail?.version || targetVersion + 1)
+    const newVersion = Number(data.new_draft_version_no || data.current_version || data.new_version_no || versionStore.currentVersionDetail?.version || targetVersion + 1)
     generationStore.setLastGenId(versionStore.genId)
     const nodes = data.nodes || targetDetail?.nodes || []
     generationStore.setNodes(nodes)
@@ -347,11 +362,13 @@ function handleStartExport(format) {
 
 async function handleContinueFromLocked() {
   const version = versionStore.currentVersionDetail?.version
-  if (!version || !versionStore.genId) return
+  if (!version || (!versionStore.genId && !projectStore.projectId)) return
   const nodes = versionStore.currentVersionDetail?.nodes || []
-  const result = await versionStore.rollbackTo(versionStore.genId, version)
+  const result = projectStore.projectId
+    ? await versionStore.rollbackProject(projectStore.projectId, version)
+    : await versionStore.rollbackTo(versionStore.genId, version)
   const data = result?.data || result || {}
-  const newVersion = Number(data.current_version || data.new_version_no || version + 1)
+  const newVersion = Number(data.new_draft_version_no || data.current_version || data.new_version_no || version + 1)
   generationStore.setLastGenId(versionStore.genId)
   const restoredNodes = data.nodes || nodes
   generationStore.setNodes(restoredNodes)

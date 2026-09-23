@@ -44,10 +44,8 @@ type CoursewareProject struct {
 // coursewareProjectRow —— gorm 表映射。
 type coursewareProjectRow struct {
 	// ID is the canonical key used by the persistent project workspace (A1-A5).
-	// ProjectID is retained for the earlier A6/A7 schema; reads accept either so
-	// projects created by the workspace can enter the AI modification flow.
-	ID          string    `gorm:"column:id;size:36"`
-	ProjectID   string    `gorm:"column:project_id;size:64;primaryKey"`
+	// The former A6/A7 project_id column is not present in the current schema.
+	ID          string    `gorm:"column:id;size:36;primaryKey"`
 	OwnerID     string    `gorm:"column:owner_id;size:64;index"`
 	Title       string    `gorm:"column:title;size:500"`
 	CurrentStep string    `gorm:"column:current_step;size:20"`
@@ -221,36 +219,11 @@ func NewCoursewareServiceWithDB(aiClient modifyClient, db *gorm.DB) *CoursewareS
 // 都不会被创建，模块1 的"绑定刷新后仍在"和模块2/3 的版本持久化在真实库里全部失效。
 // 因此子表单独迁移，遗留表降级为只补齐缺失列。
 func AutoMigrateCourseware(db *gorm.DB) error {
-	if err := db.AutoMigrate(&coursewareVersionRow{}, &coursewareDraftRow{}, &coursewarePageBindingRow{}); err != nil {
-		return err
-	}
-	if err := db.AutoMigrate(&coursewareProjectRow{}); err != nil {
-		if addErr := ensureCoursewareProjectColumns(db); addErr != nil {
-			return addErr
-		}
-		return nil
-	}
-	return nil
-}
-
-// ensureCoursewareProjectColumns 给遗留的 courseware_projects 表补齐本模块需要的列。
-// IF NOT EXISTS 保证可重复执行；已有的 id 主键与 owner_id/title 等列不被改动。
-func ensureCoursewareProjectColumns(db *gorm.DB) error {
-	columns := []struct{ name, ddl string }{
-		{"project_id", "VARCHAR(64) NOT NULL DEFAULT ''"},
-		{"owner_id", "VARCHAR(64) NOT NULL DEFAULT ''"},
-		{"title", "VARCHAR(500) NOT NULL DEFAULT ''"},
-		{"current_step", "VARCHAR(20) NOT NULL DEFAULT 's1_intent'"},
-		{"gen_id", "VARCHAR(64) DEFAULT ''"},
-		{"status", "VARCHAR(20) NOT NULL DEFAULT 'draft'"},
-	}
-	for _, col := range columns {
-		ddl := fmt.Sprintf("ALTER TABLE courseware_projects ADD COLUMN IF NOT EXISTS %s %s", col.name, col.ddl)
-		if err := db.Exec(ddl).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+	// courseware_projects is owned by CoursewareProjectService and its existing
+	// schema uses a UUID id primary key. Do not let the legacy A6/A7 row model
+	// rewrite that table; only create the version/draft/binding tables here.
+	// coursewarePageBindingRow is added by 模块 1（契约 v1.0 页面级资料绑定）。
+	return db.AutoMigrate(&coursewareVersionRow{}, &coursewareDraftRow{}, &coursewarePageBindingRow{})
 }
 
 // ---- A1 最小基础 ----
@@ -756,9 +729,13 @@ func (s *CoursewareService) CreateVersionSnapshotJSON(ctx context.Context, proje
 	if err != nil {
 		return nil, fmt.Errorf("版本快照序列化失败: %w", err)
 	}
-	nodes, _ := snapshot.Content.([]TeachingNodeItem)
+	var nodes []TeachingNodeItem
+	contentRaw, _ := json.Marshal(snapshot.Content)
+	_ = json.Unmarshal(contentRaw, &nodes)
 	nodesRaw, _ := json.Marshal(nodes)
-	presentation, _ := snapshot.Style.(map[string]string)
+	var presentation map[string]string
+	styleRaw, _ := json.Marshal(snapshot.Style)
+	_ = json.Unmarshal(styleRaw, &presentation)
 	version := &CoursewareVersion{
 		VersionID:        "ver_" + uuid.NewString()[:12],
 		ProjectID:        projectID,
@@ -1027,7 +1004,7 @@ func newGormCoursewareStore(db *gorm.DB) *gormCoursewareStore {
 
 func (g *gormCoursewareStore) CreateProject(ctx context.Context, p *CoursewareProject) error {
 	return g.db.WithContext(ctx).Create(&coursewareProjectRow{
-		ID: p.ProjectID, ProjectID: p.ProjectID, OwnerID: p.OwnerID, Title: p.Title,
+		ID: p.ProjectID, OwnerID: p.OwnerID, Title: p.Title,
 		CurrentStep: p.CurrentStep, GenID: p.GenID, Status: p.Status,
 		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	}).Error
@@ -1035,18 +1012,14 @@ func (g *gormCoursewareStore) CreateProject(ctx context.Context, p *CoursewarePr
 
 func (g *gormCoursewareStore) GetProject(ctx context.Context, projectID string) (*CoursewareProject, error) {
 	var row coursewareProjectRow
-	if err := g.db.WithContext(ctx).Where("project_id = ? OR id = ?", projectID, projectID).First(&row).Error; err != nil {
+	if err := g.db.WithContext(ctx).Where("id = ?", projectID).First(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrProjectNotFound
 		}
 		return nil, err
 	}
-	resolvedID := row.ProjectID
-	if resolvedID == "" {
-		resolvedID = row.ID
-	}
 	return &CoursewareProject{
-		ProjectID: resolvedID, OwnerID: row.OwnerID, Title: row.Title,
+		ProjectID: row.ID, OwnerID: row.OwnerID, Title: row.Title,
 		CurrentStep: row.CurrentStep, GenID: row.GenID, Status: row.Status,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil
@@ -1060,12 +1033,8 @@ func (g *gormCoursewareStore) ListProjects(ctx context.Context, ownerID string) 
 	}
 	out := make([]*CoursewareProject, 0, len(rows))
 	for _, r := range rows {
-		resolvedID := r.ProjectID
-		if resolvedID == "" {
-			resolvedID = r.ID
-		}
 		out = append(out, &CoursewareProject{
-			ProjectID: resolvedID, OwnerID: r.OwnerID, Title: r.Title,
+			ProjectID: r.ID, OwnerID: r.OwnerID, Title: r.Title,
 			CurrentStep: r.CurrentStep, GenID: r.GenID, Status: r.Status,
 			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 		})
@@ -1084,7 +1053,7 @@ func (g *gormCoursewareStore) DeleteProject(ctx context.Context, projectID strin
 		if err := tx.Where("project_id = ?", projectID).Delete(&coursewarePageBindingRow{}).Error; err != nil {
 			return err
 		}
-		res := tx.Where("project_id = ? OR id = ?", projectID, projectID).Delete(&coursewareProjectRow{})
+		res := tx.Where("id = ?", projectID).Delete(&coursewareProjectRow{})
 		if res.Error != nil {
 			return res.Error
 		}
@@ -1097,7 +1066,7 @@ func (g *gormCoursewareStore) DeleteProject(ctx context.Context, projectID strin
 
 func (g *gormCoursewareStore) UpdateProjectStep(ctx context.Context, projectID, step string) error {
 	res := g.db.WithContext(ctx).Model(&coursewareProjectRow{}).
-		Where("project_id = ? OR id = ?", projectID, projectID).
+		Where("id = ?", projectID).
 		Updates(map[string]any{"current_step": step, "updated_at": time.Now()})
 	if res.Error != nil {
 		return res.Error
@@ -1110,7 +1079,7 @@ func (g *gormCoursewareStore) UpdateProjectStep(ctx context.Context, projectID, 
 
 func (g *gormCoursewareStore) UpdateProjectGenID(ctx context.Context, projectID, genID string) error {
 	res := g.db.WithContext(ctx).Model(&coursewareProjectRow{}).
-		Where("project_id = ? OR id = ?", projectID, projectID).
+		Where("id = ?", projectID).
 		Updates(map[string]any{"gen_id": genID, "updated_at": time.Now()})
 	if res.Error != nil {
 		return res.Error
@@ -1123,7 +1092,7 @@ func (g *gormCoursewareStore) UpdateProjectGenID(ctx context.Context, projectID,
 
 func (g *gormCoursewareStore) UpdateProjectStatus(ctx context.Context, projectID, status string) error {
 	res := g.db.WithContext(ctx).Model(&coursewareProjectRow{}).
-		Where("project_id = ? OR id = ?", projectID, projectID).
+		Where("id = ?", projectID).
 		Updates(map[string]any{"status": status, "updated_at": time.Now()})
 	if res.Error != nil {
 		return res.Error
