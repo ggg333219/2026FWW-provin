@@ -15,7 +15,7 @@ from io import BytesIO
 
 from pptx import Presentation
 
-from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
+from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig, resolve_node_type
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
 
 # =============================================================================
@@ -133,18 +133,18 @@ class TestPPTExporter(unittest.TestCase):
         self.assertIn("讲解", text)
         self.assertIn("这是主要内容", text)
 
-    def test_node_type_precedes_legacy_type(self):
-        """标准 node_type 优先于冲突的旧 type 字段。"""
+    def test_type_precedes_node_type_like_preview(self):
+        """与预览侧保持一致：冲突时 type 优先于 node_type。"""
         nodes = [{
-            "node_id": "n1", "title": "标准封面", "node_type": "cover",
-            "type": "quiz", "content": "标准字段优先",
+            "node_id": "n1", "title": "课堂互动", "node_type": "cover",
+            "type": "quiz", "questions": ["哪个字段优先？"],
         }]
         buf = self.ppt.export_to_bytes(nodes, "双字段")
         prs = Presentation(buf)
         self.assertEqual(len(prs.slides), 1)
         slide_text = "\n".join(shape.text for shape in prs.slides[0].shapes if hasattr(shape, "text"))
-        self.assertIn("标准封面", slide_text)
-        self.assertNotIn("INTERACTION", slide_text)
+        self.assertIn("INTERACTION", slide_text)
+        self.assertIn("哪个字段优先？", slide_text)
 
     def test_key_points_and_core_points_are_both_exported(self):
         """新旧要点字段同时存在时合并导出，不再产生空白要点页。"""
@@ -199,6 +199,36 @@ class TestPPTExporter(unittest.TestCase):
         self.assertIn("起始标记", text)
         self.assertIn("结束标记", text)
         self.assertIn("正文（续）", text)
+
+    def test_two_column_uses_independent_left_and_right_panels(self):
+        """two_column 不再收敛为普通内容页，左右栏保持固定位置。"""
+        node = {
+            "node_id": "n-two", "node_type": "two_column", "title": "双栏教学",
+            "key_points": ["左栏要点A", "左栏要点B"],
+            "content": "右栏正文回退",
+            "segments": [{
+                "segment_type": "explanation", "text": "右栏讲授内容", "estimated_seconds": 60,
+            }],
+        }
+        self.assertEqual(resolve_node_type(node), "two_column")
+        prs = Presentation(self.ppt.export_to_bytes([node], "双栏验证"))
+        self.assertEqual(len(prs.slides), 1)
+
+        left_shapes = [
+            shape for shape in prs.slides[0].shapes
+            if hasattr(shape, "text") and "左栏要点A" in shape.text
+        ]
+        right_shapes = [
+            shape for shape in prs.slides[0].shapes
+            if hasattr(shape, "text") and "右栏讲授内容" in shape.text
+        ]
+        self.assertEqual(len(left_shapes), 1)
+        self.assertEqual(len(right_shapes), 1)
+        self.assertLess(left_shapes[0].left.inches, 6.0)
+        self.assertGreater(right_shapes[0].left.inches, 6.0)
+        all_text = "\n".join(shape.text for shape in prs.slides[0].shapes if hasattr(shape, "text"))
+        self.assertIn("TWO COLUMN", all_text)
+        self.assertIn("讲解 · 1分钟", all_text)
 
     # ── 模板 ──
 
