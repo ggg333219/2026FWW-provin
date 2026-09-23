@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,6 +70,15 @@ type CoursewareVersion struct {
 	ModifyInstr      string    `json:"modify_instruction"`
 	VersionSummary   string    `json:"version_summary"`
 	CreatedAt        time.Time `json:"created_at"`
+
+	// 契约 v1.0 模块 1：本次修改命中的页面 + 用户提供的证据 + AI 回写的引用。
+	// 仅在 modify 路径（POST /api/v1/gen/modify / courseware Modify）下被填充；
+	// 快照/回滚路径为空。
+	GenerationID string   `json:"generation_id,omitempty"`
+	PageID       string   `json:"page_id,omitempty"`
+	EvidenceRefs []string `json:"evidence_refs,omitempty"`
+	CitationRefs []string `json:"citation_refs,omitempty"`
+	EvidenceUsed []string `json:"evidence_used,omitempty"`
 }
 
 type coursewareVersionRow struct {
@@ -82,9 +92,73 @@ type coursewareVersionRow struct {
 	ModifyInstr      string    `gorm:"column:modify_instruction;size:1000"`
 	VersionSummary   string    `gorm:"column:version_summary;size:1000"`
 	CreatedAt        time.Time `gorm:"column:created_at"`
+	GenerationID     string    `gorm:"column:generation_id;size:64;index"`
+	PageID           string    `gorm:"column:page_id;size:64"`
+	EvidenceRefs     string    `gorm:"column:evidence_refs;type:text"` // JSON: ["chunk_001", ...]
+	CitationRefs     string    `gorm:"column:citation_refs;type:text"` // JSON: AI 回写
+	EvidenceUsed     string    `gorm:"column:evidence_used;type:text"` // JSON: AI 回写
 }
 
 func (coursewareVersionRow) TableName() string { return "courseware_versions" }
+
+// versionToRow 把内存模型投影到 gorm 行；带 JSON 编码的证据字段。
+// 返回的行指针可直接 Create。
+func versionToRow(v *CoursewareVersion) *coursewareVersionRow {
+	row := &coursewareVersionRow{
+		VersionID: v.VersionID, ProjectID: v.ProjectID, VersionNo: v.VersionNo,
+		ParentVersionID: v.ParentVersionID, NodesJSON: v.NodesJSON,
+		PresentationJSON: v.PresentationJSON, SnapshotJSON: v.SnapshotJSON,
+		ModifyInstr: v.ModifyInstr, VersionSummary: v.VersionSummary, CreatedAt: v.CreatedAt,
+		GenerationID: v.GenerationID, PageID: v.PageID,
+	}
+	if len(v.EvidenceRefs) > 0 {
+		if b, err := json.Marshal(v.EvidenceRefs); err == nil {
+			row.EvidenceRefs = string(b)
+		}
+	}
+	if len(v.CitationRefs) > 0 {
+		if b, err := json.Marshal(v.CitationRefs); err == nil {
+			row.CitationRefs = string(b)
+		}
+	}
+	if len(v.EvidenceUsed) > 0 {
+		if b, err := json.Marshal(v.EvidenceUsed); err == nil {
+			row.EvidenceUsed = string(b)
+		}
+	}
+	return row
+}
+
+// rowToVersion 把 gorm 行提升到内存模型；带 JSON 解码的证据字段。
+// 字段为空字符串时返回空切片（而不是 nil），便于前端判断。
+func rowToVersion(r coursewareVersionRow) *CoursewareVersion {
+	v := &CoursewareVersion{
+		VersionID: r.VersionID, ProjectID: r.ProjectID, VersionNo: r.VersionNo,
+		ParentVersionID: r.ParentVersionID, NodesJSON: r.NodesJSON,
+		PresentationJSON: r.PresentationJSON, SnapshotJSON: r.SnapshotJSON,
+		ModifyInstr: r.ModifyInstr, VersionSummary: r.VersionSummary, CreatedAt: r.CreatedAt,
+		GenerationID: r.GenerationID, PageID: r.PageID,
+	}
+	if r.EvidenceRefs != "" {
+		_ = json.Unmarshal([]byte(r.EvidenceRefs), &v.EvidenceRefs)
+	}
+	if v.EvidenceRefs == nil {
+		v.EvidenceRefs = []string{}
+	}
+	if r.CitationRefs != "" {
+		_ = json.Unmarshal([]byte(r.CitationRefs), &v.CitationRefs)
+	}
+	if v.CitationRefs == nil {
+		v.CitationRefs = []string{}
+	}
+	if r.EvidenceUsed != "" {
+		_ = json.Unmarshal([]byte(r.EvidenceUsed), &v.EvidenceUsed)
+	}
+	if v.EvidenceUsed == nil {
+		v.EvidenceUsed = []string{}
+	}
+	return v
+}
 
 // ---- 草稿（A2 最小内联：draft_json 存于 projects 表的扩展列）----
 // A2 的独立接口在原分配中属 A；这里内联最小实现供 A6 modify 后更新草稿。
@@ -167,6 +241,7 @@ type CoursewareService struct {
 type coursewareStore interface {
 	CreateProject(ctx context.Context, p *CoursewareProject) error
 	GetProject(ctx context.Context, projectID string) (*CoursewareProject, error)
+	GetProjectByGenID(ctx context.Context, genID string) (*CoursewareProject, error)
 	ListProjects(ctx context.Context, ownerID string) ([]*CoursewareProject, error)
 	DeleteProject(ctx context.Context, projectID string) error
 	UpdateProjectStep(ctx context.Context, projectID, step string) error
@@ -578,6 +653,164 @@ func (s *CoursewareService) ModifyHistory(ctx context.Context, projectID string)
 	return s.store.ListVersions(ctx, projectID)
 }
 
+// LookupProjectByGenID 按 generation_id 反查所属的 courseware 项目。
+// 用于 genHandler.Modify 在调用 AI 后决定要不要落版本快照。
+// 找不到时返回 (nil, ErrProjectNotFound)，调用方据此判断走透传还是落库。
+func (s *CoursewareService) LookupProjectByGenID(ctx context.Context, genID string) (*CoursewareProject, error) {
+	if s == nil || s.store == nil {
+		return nil, ErrProjectNotFound
+	}
+	return s.store.GetProjectByGenID(ctx, genID)
+}
+
+// SetGenID 把 AI Engine 返回的 generation_id 绑到指定 project 上。
+// genHandler.Modify 之后，AI Engine 后续的 GenerationStatus / GetPreview
+// 都会按这个 gen_id 工作，本方法让 CoursewareProjectService 与 AI Engine
+// 的会话边界对齐。
+func (s *CoursewareService) SetGenID(ctx context.Context, projectID, genID string) error {
+	if s == nil || s.store == nil {
+		return ErrProjectNotFound
+	}
+	return s.store.UpdateProjectGenID(ctx, projectID, genID)
+}
+
+// RecordModifyResult —— 契约 v1.0 §1.1 接口 3 配套的落库动作。
+//
+// genHandler.Modify 收到 AI Engine 返回后调用本方法，把以下信息作为
+// CoursewareVersion 快照持久化到 PostgreSQL：
+//   - 请求侧：page_id / evidence_refs / user_instruction
+//   - 响应侧：nodes（修改后） / version_number / citation_refs / evidence_used
+//
+// 同时，如果请求带 page_id + evidence_refs，会把它们回写到
+// courseware_page_bindings（用户在前端提供的"这一页引用这些证据"的意图
+// 即使 AI 没采纳也要落库，方便下次继续使用）。
+//
+// 设计为 fire-and-record：失败仅记录日志，不阻塞 AI 响应回前端；
+// 因此方法本身返回 nil 吞掉错误，调用方继续走透传逻辑。
+func (s *CoursewareService) RecordModifyResult(
+	ctx context.Context,
+	projectID string,
+	req GenerationModifyRequest,
+	resp GenerationModifyResponse,
+) {
+	if s == nil || s.store == nil {
+		return
+	}
+	if projectID == "" {
+		return
+	}
+	// 仅在 AI 明确说成功时落库；clarification / failed 不写历史。
+	if resp.Status != "" && resp.Status != "ok" && resp.Status != "success" && resp.Status != "applied" {
+		return
+	}
+
+	versionNo, err := s.store.NextVersionNo(ctx, projectID)
+	if err != nil {
+		return
+	}
+	nodesJSON, _ := json.Marshal(resp.Nodes)
+	if len(nodesJSON) == 0 {
+		nodesJSON = []byte("[]")
+	}
+	summary := strings.TrimSpace(req.UserInstruction)
+	if summary == "" {
+		summary = "AI 修改 v" + strconv.Itoa(resp.VersionNumber)
+	}
+
+	snap := &CoursewareVersion{
+		VersionID:      "ver_" + uuid.NewString()[:12],
+		ProjectID:      projectID,
+		VersionNo:      versionNo,
+		NodesJSON:      string(nodesJSON),
+		ModifyInstr:    summary,
+		VersionSummary: summary,
+		CreatedAt:      time.Now(),
+		GenerationID:   req.GenerationID,
+		PageID:         strings.TrimSpace(req.PageID),
+		EvidenceRefs:   append([]string{}, req.EvidenceRefs...),
+		CitationRefs:   append([]string{}, resp.CitationRefs...),
+		EvidenceUsed:   append([]string{}, resp.EvidenceUsed...),
+	}
+	_ = s.store.SaveVersion(ctx, snap)
+
+	// 回写证据绑定：用户在前端"点了这一页绑这些证据"的意图要落库，
+	// 即使 AI 这次没用上，下次 modify 仍能复用到这个项目+页。
+	if strings.TrimSpace(req.PageID) != "" && len(req.EvidenceRefs) > 0 {
+		_, _ = s.store.SetPageBindings(ctx, projectID, []PageEvidenceBinding{{
+			PageID:       req.PageID,
+			EvidenceRefs: append([]string{}, req.EvidenceRefs...),
+			AutoBound:    false,
+			BoundBy:      "user:modify_intent",
+			BoundAt:      time.Now(),
+		}})
+	}
+}
+
+// LatestGenerationContext —— 给前端一个"权威读"端点的数据源。
+// 返回：项目元数据 + 最新版本的节点 + 当前所有页绑定。
+// 用于修复"切 PPT 不重置 AI 对话 / 左侧绑定打开就要可见"两类前端问题。
+func (s *CoursewareService) LatestGenerationContext(ctx context.Context, projectID string) (*GenerationContext, error) {
+	if s == nil || s.store == nil {
+		return nil, ErrProjectNotFound
+	}
+	project, err := s.store.GetProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	versions, err := s.store.ListVersions(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	bindings, err := s.store.GetPageBindings(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	out := &GenerationContext{
+		ProjectID: project.ProjectID,
+		GenID:     project.GenID,
+		Status:    project.Status,
+		Step:      project.CurrentStep,
+		UpdatedAt: project.UpdatedAt,
+	}
+	if len(versions) > 0 {
+		latest := versions[len(versions)-1]
+		out.LatestVersion = latest
+		out.VersionNo = latest.VersionNo
+		out.VersionID = latest.VersionID
+		out.GenerationID = latest.GenerationID
+		out.PageID = latest.PageID
+		out.EvidenceRefs = latest.EvidenceRefs
+		out.CitationRefs = latest.CitationRefs
+		out.EvidenceUsed = latest.EvidenceUsed
+	}
+	if len(bindings) > 0 {
+		out.PageBindings = make([]PageEvidenceBinding, 0, len(bindings))
+		for _, b := range bindings {
+			out.PageBindings = append(out.PageBindings, b)
+		}
+	}
+	return out, nil
+}
+
+// GenerationContext —— 契约 v1.0 §3.2：latest generation 上下文响应。
+// 给前端用于恢复预览、切项目重置 AI 对话、显示绑定关系。
+type GenerationContext struct {
+	ProjectID     string                `json:"project_id"`
+	GenID         string                `json:"gen_id,omitempty"`
+	Status        string                `json:"status,omitempty"`
+	Step          string                `json:"current_step,omitempty"`
+	UpdatedAt     time.Time             `json:"updated_at"`
+	VersionID     string                `json:"version_id,omitempty"`
+	VersionNo     int                   `json:"version_no,omitempty"`
+	GenerationID  string                `json:"generation_id,omitempty"`
+	PageID        string                `json:"page_id,omitempty"`
+	EvidenceRefs  []string              `json:"evidence_refs,omitempty"`
+	CitationRefs  []string              `json:"citation_refs,omitempty"`
+	EvidenceUsed  []string              `json:"evidence_used,omitempty"`
+	LatestVersion *CoursewareVersion    `json:"latest_version,omitempty"`
+	PageBindings  []PageEvidenceBinding `json:"page_bindings,omitempty"`
+}
+
 // ---- A7: 回滚与审计 ----
 
 // RollbackResult —— 回滚响应。
@@ -819,6 +1052,21 @@ func (m *memCoursewareStore) GetProject(_ context.Context, projectID string) (*C
 	return &cp, nil
 }
 
+func (m *memCoursewareStore) GetProjectByGenID(_ context.Context, genID string) (*CoursewareProject, error) {
+	if genID == "" {
+		return nil, ErrProjectNotFound
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, p := range m.projects {
+		if p.GenID == genID {
+			cp := *p
+			return &cp, nil
+		}
+	}
+	return nil, ErrProjectNotFound
+}
+
 func (m *memCoursewareStore) ListProjects(_ context.Context, ownerID string) ([]*CoursewareProject, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1025,6 +1273,24 @@ func (g *gormCoursewareStore) GetProject(ctx context.Context, projectID string) 
 	}, nil
 }
 
+func (g *gormCoursewareStore) GetProjectByGenID(ctx context.Context, genID string) (*CoursewareProject, error) {
+	if genID == "" {
+		return nil, ErrProjectNotFound
+	}
+	var row coursewareProjectRow
+	if err := g.db.WithContext(ctx).Where("gen_id = ?", genID).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrProjectNotFound
+		}
+		return nil, err
+	}
+	return &CoursewareProject{
+		ProjectID: row.ID, OwnerID: row.OwnerID, Title: row.Title,
+		CurrentStep: row.CurrentStep, GenID: row.GenID, Status: row.Status,
+		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	}, nil
+}
+
 func (g *gormCoursewareStore) ListProjects(ctx context.Context, ownerID string) ([]*CoursewareProject, error) {
 	var rows []coursewareProjectRow
 	if err := g.db.WithContext(ctx).Where("owner_id = ?", ownerID).
@@ -1133,11 +1399,7 @@ func (g *gormCoursewareStore) NextVersionNo(ctx context.Context, projectID strin
 }
 
 func (g *gormCoursewareStore) SaveVersion(ctx context.Context, v *CoursewareVersion) error {
-	return g.db.WithContext(ctx).Create(&coursewareVersionRow{
-		VersionID: v.VersionID, ProjectID: v.ProjectID, VersionNo: v.VersionNo,
-		ParentVersionID: v.ParentVersionID, NodesJSON: v.NodesJSON, PresentationJSON: v.PresentationJSON,
-		SnapshotJSON: v.SnapshotJSON, ModifyInstr: v.ModifyInstr, VersionSummary: v.VersionSummary, CreatedAt: v.CreatedAt,
-	}).Error
+	return g.db.WithContext(ctx).Create(versionToRow(v)).Error
 }
 
 func (g *gormCoursewareStore) GetVersion(ctx context.Context, projectID string, versionNo int) (*CoursewareVersion, error) {
@@ -1149,11 +1411,7 @@ func (g *gormCoursewareStore) GetVersion(ctx context.Context, projectID string, 
 		}
 		return nil, err
 	}
-	return &CoursewareVersion{
-		VersionID: row.VersionID, ProjectID: row.ProjectID, VersionNo: row.VersionNo,
-		ParentVersionID: row.ParentVersionID, NodesJSON: row.NodesJSON, PresentationJSON: row.PresentationJSON,
-		SnapshotJSON: row.SnapshotJSON, ModifyInstr: row.ModifyInstr, VersionSummary: row.VersionSummary, CreatedAt: row.CreatedAt,
-	}, nil
+	return rowToVersion(row), nil
 }
 
 func (g *gormCoursewareStore) GetVersionByID(ctx context.Context, projectID, versionID string) (*CoursewareVersion, error) {
@@ -1164,9 +1422,7 @@ func (g *gormCoursewareStore) GetVersionByID(ctx context.Context, projectID, ver
 		}
 		return nil, err
 	}
-	return &CoursewareVersion{VersionID: row.VersionID, ProjectID: row.ProjectID, VersionNo: row.VersionNo,
-		ParentVersionID: row.ParentVersionID, NodesJSON: row.NodesJSON, PresentationJSON: row.PresentationJSON,
-		SnapshotJSON: row.SnapshotJSON, ModifyInstr: row.ModifyInstr, VersionSummary: row.VersionSummary, CreatedAt: row.CreatedAt}, nil
+	return rowToVersion(row), nil
 }
 
 func (g *gormCoursewareStore) ListVersions(ctx context.Context, projectID string) ([]*CoursewareVersion, error) {
@@ -1177,11 +1433,7 @@ func (g *gormCoursewareStore) ListVersions(ctx context.Context, projectID string
 	}
 	out := make([]*CoursewareVersion, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, &CoursewareVersion{
-			VersionID: r.VersionID, ProjectID: r.ProjectID, VersionNo: r.VersionNo,
-			ParentVersionID: r.ParentVersionID, NodesJSON: r.NodesJSON, PresentationJSON: r.PresentationJSON,
-			SnapshotJSON: r.SnapshotJSON, ModifyInstr: r.ModifyInstr, VersionSummary: r.VersionSummary, CreatedAt: r.CreatedAt,
-		})
+		out = append(out, rowToVersion(r))
 	}
 	return out, nil
 }

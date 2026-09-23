@@ -27,6 +27,7 @@ import (
 //	POST /api/v1/coursewares/:project_id/rollback     — 回滚（A7）
 //	PUT  /api/v1/coursewares/:project_id/page-bindings — 保存页面级证据绑定（契约 v1.0 模块1）
 //	GET  /api/v1/coursewares/:project_id/page-bindings — 读取页面级证据绑定（契约 v1.0 模块1）
+//	GET  /api/v1/coursewares/:project_id/latest-generation-context — 切 PPT 时按 project 拉权威读源（契约 v1.0 §3.2）
 type CoursewareHandler struct {
 	svc *service.CoursewareService
 }
@@ -152,6 +153,23 @@ func (h *CoursewareHandler) Context(c *gin.Context) {
 		"project": project, "draft": draft, "current_step": project.CurrentStep,
 		"generation_id": project.GenID,
 	}})
+}
+
+// LatestGenerationContext GET /:project_id/latest-generation-context ——
+// 契约 v1.0 §3.2 权威读端点。前端在以下两种场景必须用它而不是用本地内存：
+//  1. 切换 PPT / 刷新页面 → 拉项目 + 最新版本 + 当前所有页绑定，把 AI 面板
+//     和左侧绑定面板用一致数据重置，避免出现"上一个 PPT 的对话残留"；
+//  2. 打开 PPT 但还没点"生成" → 直接显示已有绑定关系，不需要等用户操作后再同步。
+//
+// 响应里 LatestVersion 是完整快照（含 NodesJSON）；前端按需解析。
+func (h *CoursewareHandler) LatestGenerationContext(c *gin.Context) {
+	projectID := c.Param("project_id")
+	ctx, err := h.svc.LatestGenerationContext(c.Request.Context(), projectID)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": ctx})
 }
 
 // Delete DELETE /:project_id —— 删除项目及关联草稿、版本。

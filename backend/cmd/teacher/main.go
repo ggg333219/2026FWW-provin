@@ -136,11 +136,6 @@ func main() {
 	}
 	outlineService := service.NewOutlineServiceWithDB(aiClient, db)
 	outlineHandler := handler.NewOutlineHandler(outlineService)
-	genHandler := handler.NewGenerationHandler(aiClient, outlineService, service.NewCoursewareProjectService(db))
-	interactiveHandler := handler.NewInteractiveHandler(aiClient)
-	versionHandler := handler.NewVersionHandler(aiClient)
-	exportHandler := handler.NewExportHandler(aiClient, service.NewCoursewareProjectService(db))
-	contentHandler := handler.NewContentHandler(aiClient)
 	// A1: 课件项目持久化（远程队友实现）
 	coursewareProjectHandler := handler.NewCoursewareProjectHandler(service.NewCoursewareProjectService(db))
 	// A6/A7: 修改对话 + 版本快照 + 回滚
@@ -148,6 +143,14 @@ func main() {
 		applogger.Warn("courseware 表迁移失败", zap.Error(err))
 	}
 	coursewareService := service.NewCoursewareServiceWithDB(aiClient, db)
+	// 把 coursewareService 透传给 genHandler：让 POST /api/v1/gen/modify 在
+	// AI Engine 返回后能把（请求 + 响应）作为 CoursewareVersion 快照落库，
+	// 同时把 evidence_refs 回写到 page_bindings（契约 v1.0 §1.1 + §3.2）。
+	genHandler := handler.NewGenerationHandler(aiClient, outlineService, service.NewCoursewareProjectService(db), coursewareService)
+	interactiveHandler := handler.NewInteractiveHandler(aiClient)
+	versionHandler := handler.NewVersionHandler(aiClient)
+	exportHandler := handler.NewExportHandler(aiClient, service.NewCoursewareProjectService(db))
+	contentHandler := handler.NewContentHandler(aiClient)
 	coursewareHandler := handler.NewCoursewareHandler(coursewareService)
 
 	r := newBaseEngine(cfg.Server.Mode)
@@ -215,11 +218,13 @@ func runS1Standalone(mode string, preferredPort int, runtimeDir string, aiClient
 	convHandler := handler.NewConversationHandler(aiClient)
 	outlineService := service.NewOutlineService(aiClient)
 	outlineHandler := handler.NewOutlineHandler(outlineService)
-	genHandler := handler.NewGenerationHandler(aiClient, outlineService)
+	coursewareService := service.NewCoursewareService(aiClient)
+	// 把 coursewareService 透传给 genHandler：S1 standalone 下 modify 仍会落
+	// 内存版的 CoursewareVersion + page_bindings，便于演示和联调。
+	genHandler := handler.NewGenerationHandler(aiClient, outlineService, coursewareService)
 	versionHandler := handler.NewVersionHandler(aiClient)
 	exportHandler := handler.NewExportHandler(aiClient)
 	contentHandler := handler.NewContentHandler(aiClient)
-	coursewareService := service.NewCoursewareService(aiClient)
 	coursewareHandler := handler.NewCoursewareHandler(coursewareService)
 
 	r.GET("/health", func(c *gin.Context) {
@@ -245,6 +250,8 @@ func runS1Standalone(mode string, preferredPort int, runtimeDir string, aiClient
 		// 契约 v1.0 模块1：页面级资料绑定（降级模式落内存，进程重启即失）
 		coursewares.PUT("/:project_id/page-bindings", coursewareHandler.PageBindingsPut)
 		coursewares.GET("/:project_id/page-bindings", coursewareHandler.PageBindingsGet)
+		// 契约 v1.0 §3.2：权威读端点（按项目 ID 拉最新生成上下文）
+		coursewares.GET("/:project_id/latest-generation-context", coursewareHandler.LatestGenerationContext)
 	}
 
 	// S1: 意图理解
