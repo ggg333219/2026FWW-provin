@@ -50,6 +50,9 @@ export const useModifyStore = defineStore('modifyPanel', {
      * （契约 v1.0 §3.2）：切 PPT / 新建课件进入 S3 时由 loadLatestContext 写入，
      * 证据侧栏直接读取，避免打开 PPT 后还要等"生成"才显示绑定关系。 */
     pageBindings: [],
+    /** 自上次 _flushPendingMessages 以来新增的、待 upsert 到 courseware_ai_messages
+     * 的对话气泡。在 sendModify / undo / redo / clarification 等业务动作末尾批量发送。*/
+    _pendingPersist: [],
   }),
 
   getters: {
@@ -134,9 +137,13 @@ export const useModifyStore = defineStore('modifyPanel', {
       if (!targetId) return null
       // 先用 bindProject 把内存里的对话清掉，再发请求
       this.bindProject(targetId)
-      try {
-        const resp = await projectModifyApi.latestGenerationContext(targetId)
-        const data = resp?.data || resp || {}
+      // 并发拉权威读源（版本/绑定）与 AI 对话气泡；任一失败都不阻断对方降级。
+      const [ctxResult, msgResult] = await Promise.allSettled([
+        projectModifyApi.latestGenerationContext(targetId),
+        this.loadAIMessages(targetId),
+      ])
+      if (ctxResult.status === 'fulfilled') {
+        const data = ctxResult.value?.data || ctxResult.value || {}
         // 当前项目已存在的版本号 → 同步版本链
         const versionNo = Number(data.version_no || 0)
         if (versionNo > 0) {
@@ -162,15 +169,24 @@ export const useModifyStore = defineStore('modifyPanel', {
         this.pageBindings = Array.isArray(data.page_bindings) ? data.page_bindings : []
         this._persist()
         return data
-      } catch (error) {
-        // 后端不可用时回退到已有 bindProject 结果，不阻断 S3 进入
-        console.warn('[modifyStore] latest-generation-context 拉取失败，使用本地状态', error)
-        return null
       }
+      // 后端不可用时回退到 bindProject 结果，不阻断 S3 进入
+      console.warn('[modifyStore] latest-generation-context 拉取失败，使用本地状态', ctxResult.reason)
+      return null
     },
 
-    /** 重置（新建课件/切换项目时） */
-    reset() {
+    /** 重置（新建课件/切换项目时）。
+     *
+     * 关键：保留 _pendingPersist 给 flush 调用处理；如果当前 projectId 还有未
+     * 落库的气泡，先尝试发出去再清，避免 create project 时丢掉旧项目的对话。
+     * 然后把 projectId / messages / 各版本栈清空，等待下一个 bindProject 接管。
+     */
+    async reset() {
+      const prevProjectId = this.projectId
+      // 先把旧项目的待落库气泡发出去（如果有）；失败不影响重置。
+      if (prevProjectId && this._pendingPersist.length) {
+        try { await this._flushPendingMessages() } catch {}
+      }
       this.projectId = ''
       this.messages = []
       this.inputText = ''
@@ -185,17 +201,97 @@ export const useModifyStore = defineStore('modifyPanel', {
       this.redoStack = []
       this.error = ''
       this.lastFailedInstruction = ''
+      this.pageBindings = []
+      this._pendingPersist = []
       this._persist()
+      // 注意：不主动 DELETE 后端对话；后端按 project_id 隔离，留着让用户切回时能恢复。
+      // 若业务上要求"新建课件丢弃全部历史"，由调用方在 createProject 前显式
+      // projectModifyApi.clearAIMessages(oldProjectId) 处理。
     },
 
     _pushMessage(role, text, extra = {}) {
-      this.messages.push({
+      const message = {
         id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         role,
         text,
+        created_at: new Date().toISOString(),
         ...extra,
-      })
+      }
+      this.messages.push(message)
       if (this.messages.length > 100) this.messages.splice(0, this.messages.length - 100)
+      // 标记为待落库，由 sendModify / clarification / undo / redo 等业务动作完成后
+      // 一次性 _flushPendingMessages 批量 upsert，避免每条消息都发一次 HTTP。
+      this._pendingPersist.push(message)
+      return message
+    },
+
+    /**
+     * 把自上次 flush 以来 _pushMessage 标记的全部气泡一次性 upsert 到后端。
+     * 契约 v1.0 §3.2：按 (project_id, message_id) 幂等，同一会话重发不会产生重复。
+     * 失败时仅 warn，不阻断本地流程；下次成功的 sendModify 会再带上未落库的部分。
+     */
+    async _flushPendingMessages() {
+      if (!this.projectId || this._pendingPersist.length === 0) return
+      const batch = this._pendingPersist.splice(0, this._pendingPersist.length)
+      const payload = batch.map((m) => this._toBackendMessage(m))
+      try {
+        await projectModifyApi.upsertAIMessages(this.projectId, payload)
+      } catch (error) {
+        // 失败时把 message 还回去，下一次 flush 再尝试
+        this._pendingPersist = [...batch, ...this._pendingPersist]
+        console.warn('[modifyStore] AI 消息批量落库失败', error)
+      }
+    },
+
+    /**
+     * 把前端的 message shape 转成后端 AIMessageItem：
+     * id/message_id、isClarification/is_clarification 等字段名差异在这里归一。
+     */
+    _toBackendMessage(m) {
+      return {
+        message_id: m.id,
+        role: m.role,
+        text: m.text,
+        intent: m.intent || undefined,
+        is_clarification: !!m.isClarification,
+        is_summary: !!m.isSummary,
+        is_error: !!m.isError,
+        version_no: Number(m.versionNo || 0),
+        created_at: m.created_at || new Date().toISOString(),
+      }
+    },
+
+    /**
+     * 契约 v1.0 §3.2：拉后端权威 AI 对话气泡，覆盖本地 messages。
+     * 切 PPT / 刷新后用这一份作为权威读源，避免 localStorage 残留。
+     */
+    async loadAIMessages(projectId) {
+      const targetId = String(projectId || this.projectId || '')
+      if (!targetId) return []
+      try {
+        const resp = await projectModifyApi.listAIMessages(targetId)
+        const msgs = (resp?.data || resp || {}).messages || []
+        this.messages = Array.isArray(msgs)
+          ? msgs.map((m) => ({
+              id: m.message_id || m.id,
+              role: m.role,
+              text: m.text,
+              intent: m.intent,
+              isClarification: !!m.is_clarification,
+              isSummary: !!m.is_summary,
+              isError: !!m.is_error,
+              versionNo: Number(m.version_no || 0),
+              created_at: m.created_at,
+            }))
+          : []
+        // 从后端拉来的消息视为已落库，避免启动时无脑重发
+        this._pendingPersist = []
+        this._persist()
+        return this.messages
+      } catch (error) {
+        console.warn('[modifyStore] 拉 AI 消息失败，使用本地缓存', error)
+        return this.messages
+      }
     },
 
     /**
@@ -232,6 +328,7 @@ export const useModifyStore = defineStore('modifyPanel', {
           }
           this._pushMessage('ai', `❓ ${data.clarification}`, { isClarification: true })
           this._persist()
+          await this._flushPendingMessages()
           return
         }
 
@@ -294,10 +391,13 @@ export const useModifyStore = defineStore('modifyPanel', {
 
         await this.loadVersionHistory()
         this._persist()
+        // 把刚才推送的全部气泡（teacher + ai 已执行 + ai summary）批量落库
+        await this._flushPendingMessages()
       } catch (e) {
         this.error = e?.message || '修改失败，请重试'
         this.lastFailedInstruction = teacherReply
         this._pushMessage('ai', `⚠️ ${this.error}`, { isError: true })
+        await this._flushPendingMessages()
       } finally {
         this.modifying = false
       }
@@ -336,9 +436,11 @@ export const useModifyStore = defineStore('modifyPanel', {
           await Promise.resolve(onApplied({ allNodes: data.nodes, modifiedNodes: data.nodes, intent: { action: 'rollback', target_ids: [] } }))
         }
         this._persist()
+        await this._flushPendingMessages()
       } catch (e) {
         this.error = e?.message || '撤销失败'
         this._pushMessage('ai', `⚠️ ${this.error}`, { isError: true })
+        await this._flushPendingMessages()
       } finally {
         this.modifying = false
       }
@@ -365,8 +467,11 @@ export const useModifyStore = defineStore('modifyPanel', {
           await Promise.resolve(onApplied({ allNodes: data.nodes, modifiedNodes: data.nodes, intent: { action: 'rollback', target_ids: [] } }))
         }
         this._persist()
+        await this._flushPendingMessages()
       } catch (e) {
         this.error = e?.message || '重做失败'
+        this._pushMessage('ai', `⚠️ ${this.error}`, { isError: true })
+        await this._flushPendingMessages()
       } finally {
         this.modifying = false
       }

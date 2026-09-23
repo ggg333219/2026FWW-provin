@@ -138,4 +138,33 @@ export const projectModifyApi = {
     requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/latest-generation-context`, {
       method: 'GET',
     }),
+
+  /**
+   * 契约 v1.0 §3.2：AI 对话消息持久化——切 PPT / 刷新后对话不丢失。
+   *
+   *  - listAIMessages 按 created_at 升序读出全部对话气泡
+   *  - upsertAIMessages 幂等写入一批气泡（按 message_id 去重，重发不重复）
+   *  - clearAIMessages 清空项目全部对话气泡（modifyStore.reset 时调用）
+   *
+   * 响应 data 形态：
+   *  list   → { messages: AIMessageItem[] }
+   *  upsert → { upserted: number }
+   *  clear  → { cleared:  number }
+   */
+  listAIMessages: (project_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/ai-messages`, {
+      method: 'GET',
+    }),
+
+  upsertAIMessages: (project_id, messages) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/ai-messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: Array.isArray(messages) ? messages : [] }),
+    }),
+
+  clearAIMessages: (project_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/ai-messages`, {
+      method: 'DELETE',
+    }),
 }
