@@ -13,7 +13,13 @@
           <p>AI 正在生成修订方案...</p>
         </div>
 
-        <template v-else>
+        <div v-else-if="errorMessage" class="revise-error" role="alert">
+          <strong>AI 修订失败</strong>
+          <p>{{ errorMessage }}</p>
+          <span>请关闭后重新发送，或检查后端与 AI 引擎状态。</span>
+        </div>
+
+        <template v-else-if="!errorMessage">
         <p class="dialog-hint">AI 已根据您的要求生成修订方案，请确认后应用：</p>
 
         <ul v-if="changeSummary.length" class="change-list">
@@ -59,7 +65,8 @@ defineProps({
   visible: { type: Boolean, default: false },
   loading: { type: Boolean, default: false },
   changeSummary: { type: Array, default: () => [] },
-  pendingNodes: { type: Array, default: () => [] }
+  pendingNodes: { type: Array, default: () => [] },
+  errorMessage: { type: String, default: '' }
 })
 
 defineEmits(['apply', 'cancel'])
@@ -128,6 +135,17 @@ defineEmits(['apply', 'cancel'])
   font-size: 14px;
 }
 .loading-spinner { font-size: 28px; }
+.revise-error {
+  padding: 14px 16px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fff1f2;
+  color: #991b1b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.revise-error p { margin: 6px 0 2px; word-break: break-word; }
+.revise-error span { color: #b45309; font-size: 12px; }
 .change-list {
   list-style: none;
   padding: 0;

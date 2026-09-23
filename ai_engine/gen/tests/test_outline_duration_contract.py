@@ -398,6 +398,38 @@ class TestOutlineBuilderDurationEndToEnd(unittest.TestCase):
         self._assert_go_contract(result["nodes"], expected_count=1)
         self.assertEqual(result["nodes"][0]["estimated_duration_minutes"], 12)
 
+    def test_revise_add_interactive_inserts_one_node_without_retyping_existing_nodes(self):
+        """新增互动环节不能把原有内容节点批量改成 interactive。"""
+        original = [
+            {"node_id": "node_001", "title": "概念讲解", "node_type": "content",
+             "summary": "介绍概念", "key_points": ["定义"], "estimated_duration_minutes": 10},
+            {"node_id": "node_002", "title": "冒泡排序", "node_type": "content",
+             "summary": "讲解流程", "key_points": ["交换"], "estimated_duration_minutes": 15},
+        ]
+        result = self.builder.revise(
+            original,
+            "请在冒泡排序之后增加一个互动环节，用投票检验学生是否理解时间复杂度",
+        )
+        revised = result["nodes"]
+        self.assertEqual(len(revised), 3)
+        self.assertEqual([n["node_id"] for n in revised], ["node_001", "node_002", "node_003"])
+        self.assertEqual([n["node_type"] for n in revised[:2]], ["content", "content"])
+        self.assertEqual(revised[2]["node_type"], "interactive")
+        self.assertEqual(revised[2]["interactive_plan"]["kind"], "poll")
+        self.assertTrue(revised[2]["interactive_plan"]["enabled"])
+        self.assertEqual(revised[2]["interactive_plan"]["delivery"], "html5_link")
+
+    def test_revise_add_choice_interactive_inserts_before_numbered_node(self):
+        original = [
+            {"node_id": "node_001", "title": "定义", "node_type": "content", "summary": "摘要"},
+            {"node_id": "node_002", "title": "复杂度", "node_type": "content", "summary": "摘要"},
+        ]
+        result = self.builder.revise(original, "在第2页之前增加一个选择题互动环节")
+        revised = result["nodes"]
+        self.assertEqual([n["node_id"] for n in revised], ["node_001", "node_003", "node_002"])
+        self.assertEqual(revised[1]["interactive_plan"]["kind"], "quiz")
+        self.assertEqual(revised[1]["interactive_plan"]["question_count"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

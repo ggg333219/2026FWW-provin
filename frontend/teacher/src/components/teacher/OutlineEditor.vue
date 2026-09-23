@@ -53,8 +53,8 @@
     </div>
 
     <!-- 错误提示 -->
-    <div v-if="outlineStore.error || outlineStore.confirmError" class="error-bar" role="alert">
-      {{ outlineStore.confirmError || outlineStore.error }}
+    <div v-if="outlineStore.error || outlineStore.confirmError || outlineStore.reviseError" class="error-bar" role="alert">
+      {{ outlineStore.confirmError || outlineStore.reviseError || outlineStore.error }}
     </div>
 
     <!-- 节点编辑器 -->
@@ -264,6 +264,7 @@
       :loading="revisingDialogLoading"
       :change-summary="outlineStore.changeSummary"
       :pending-nodes="outlineStore.pendingRevision?.nodes || []"
+      :error-message="outlineStore.reviseError"
       @apply="handleApplyRevision"
       @cancel="handleCancelRevision"
     />
@@ -454,7 +455,6 @@ async function handleSendRevise() {
     await outlineStore.reviseOutline(msg)
   } catch (err) {
     emit('error', err?.message || 'AI 修订失败')
-    showReviseDialog.value = false
   } finally {
     revisingDialogLoading.value = false
   }

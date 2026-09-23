@@ -62,6 +62,19 @@ def build_stage2_node_tree_schema() -> dict[str, Any]:
                             # normalize_stage2_nodes / assign_node_durations 完成。
                             # 保持可选以兼容旧 LLM 响应。
                             "estimated_duration_minutes": {"type": "number"},
+                            "interactive_plan": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "enabled": {"type": "boolean"},
+                                    "kind": {"type": "string", "enum": ["quiz", "flashcard", "poll", "game"]},
+                                    "duration_minutes": {"type": "number"},
+                                    "question_count": {"type": "integer"},
+                                    "auto_grading": {"type": "boolean"},
+                                    "delivery": {"type": "string", "enum": ["html5_link", "ppt_native", "standalone_html"]},
+                                },
+                                "required": ["enabled", "kind", "duration_minutes", "delivery"],
+                            },
                         },
                         "required": ["node_id", "title", "node_type"],
                     },
@@ -747,6 +760,34 @@ def normalize_text_list(value: Any) -> list[str]:
         elif item is not None:
             result.append(str(item).strip())
     return result
+
+
+def _normalize_interactive_plan(value: Any) -> dict[str, Any] | None:
+    """Normalize the optional outline-level interactive plan contract."""
+    if not isinstance(value, dict):
+        return None
+    kind = str(value.get("kind") or "quiz").strip().lower()
+    if kind not in {"quiz", "flashcard", "poll", "game"}:
+        kind = "quiz"
+    delivery = str(value.get("delivery") or "html5_link").strip().lower()
+    if delivery not in {"html5_link", "ppt_native", "standalone_html"}:
+        delivery = "html5_link"
+    try:
+        duration = max(1, round(float(value.get("duration_minutes") or 5)))
+    except (TypeError, ValueError):
+        duration = 5
+    try:
+        question_count = max(0, int(value.get("question_count") or 0))
+    except (TypeError, ValueError):
+        question_count = 0
+    return {
+        "enabled": bool(value.get("enabled", True)),
+        "kind": kind,
+        "duration_minutes": duration,
+        "question_count": question_count,
+        "auto_grading": bool(value.get("auto_grading", kind == "quiz")),
+        "delivery": delivery,
+    }
 
 
 def _to_string_list(value: Any) -> list[str]:
