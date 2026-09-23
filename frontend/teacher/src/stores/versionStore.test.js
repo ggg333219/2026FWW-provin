@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useVersionStore } from './versionStore'
 import { teacherV1Api } from '../services/v1'
+import { projectModifyApi } from '../services/v1/projectModifyApi'
 
 function createStorage() {
   const values = new Map()
@@ -15,6 +16,7 @@ function createStorage() {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   const localStorage = createStorage()
   globalThis.window = { localStorage }
   // 后端不可达 → requestJson 回退 Mock（契约路径 /api/v1/exp）
@@ -23,6 +25,29 @@ beforeEach(() => {
 })
 
 describe('versionStore S4 导出闭环（Mock）', () => {
+  it('项目版本可查看并按版本 ID 克隆分叉，保留旧历史', async () => {
+    const versions = [
+      { version_id: 'ver_2', version_no: 2, version_summary: '第二版', created_at: '2026-09-23' },
+      { version_id: 'ver_1', version_no: 1, version_summary: '首版', created_at: '2026-09-22' },
+    ]
+    vi.spyOn(projectModifyApi, 'versions').mockResolvedValue({ data: { items: versions } })
+    vi.spyOn(projectModifyApi, 'versionDetail').mockImplementation(async (_projectId, versionId) => ({ data: {
+      version_id: versionId,
+      version_no: versionId === 'ver_1' ? 1 : 2,
+      change_note: versionId === 'ver_1' ? '首版' : '第二版',
+      snapshot: { content: [{ node_id: 'tcp', title: versionId === 'ver_1' ? '握手' : 'TCP 三次握手' }] },
+    } }))
+    const rollback = vi.spyOn(projectModifyApi, 'rollback').mockResolvedValue({ data: { base_version_no: 1, new_draft_version_no: 3 } })
+
+    const store = useVersionStore()
+    await store.loadProjectVersions('proj_tcp')
+    const detail = await store.loadProjectVersion('proj_tcp', 1)
+    expect(detail.nodes[0].title).toBe('握手')
+    await store.rollbackProject('proj_tcp', 1)
+    expect(rollback).toHaveBeenCalledWith('proj_tcp', 'ver_1')
+    expect(store.versions).toHaveLength(2)
+  })
+
   it('版本加载与回滚保留页面证据绑定和呈现样式', async () => {
     const pageBindings = [{ page_id: 'page_1', evidence_refs: ['chunk_tcp_1'] }]
     const presentation = { template_id: 'deck-swiss-edu', palette: 'forest' }

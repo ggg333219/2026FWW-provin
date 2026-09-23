@@ -735,12 +735,13 @@ async function handleGenerateInteractive(node) {
       generationStore.setNodes(nodes);
       const page = generationPages.value.find((item) => item.node_id === node.node_id);
       if (page?.page_id && asset.interactive_asset_id) {
-        await interactiveStore.linkToPage({
+        const link = await interactiveStore.linkToPage({
           generation_id: generationStore.lastGenId,
           page_id: page.page_id,
           interactive_asset_id: asset.interactive_asset_id,
           label: node.title || "互动练习",
-        }).catch(() => {});
+        });
+        asset.entry_url = link.entry_url || asset.entry_url;
       }
       projectStore.scheduleSave(draftSnapshot(), 0);
     }
@@ -901,11 +902,25 @@ async function handleSaveNewVersion() {
     const generationVersion = Number(data.version_number || 0);
     let savedVersion = generationVersion;
     if (projectStore.projectId) {
+      const snapshot = {
+        outline: {
+          outline_id: outlineStore.outline_id,
+          outline_version: outlineStore.outline_version,
+          title: outlineStore.title,
+          nodes: outlineStore.nodes,
+        },
+        content: generationStore.currentScriptNodes,
+        page_bindings: versionPageBindings(),
+        style: draftSnapshot().presentation,
+      };
       const projectResponse = await projectModifyApi.createVersion(projectStore.projectId, {
         nodes: generationStore.currentScriptNodes,
         presentation: draftSnapshot().presentation,
         page_bindings: versionPageBindings(),
         version_summary: summary,
+        version_no: Math.max(baseVersion.value + 1, generationVersion || 1),
+        snapshot,
+        change_note: summary,
       });
       const projectVersion = projectResponse?.data || projectResponse || {};
       if (!savedVersion) savedVersion = Number(projectVersion.version_no || 0);

@@ -653,9 +653,13 @@ func (s *CoursewareService) CreateVersionSnapshotJSON(ctx context.Context, proje
 	if err != nil {
 		return nil, fmt.Errorf("版本快照序列化失败: %w", err)
 	}
-	nodes, _ := snapshot.Content.([]TeachingNodeItem)
+	var nodes []TeachingNodeItem
+	contentRaw, _ := json.Marshal(snapshot.Content)
+	_ = json.Unmarshal(contentRaw, &nodes)
 	nodesRaw, _ := json.Marshal(nodes)
-	presentation, _ := snapshot.Style.(map[string]string)
+	var presentation map[string]string
+	styleRaw, _ := json.Marshal(snapshot.Style)
+	_ = json.Unmarshal(styleRaw, &presentation)
 	version := &CoursewareVersion{
 		VersionID:        "ver_" + uuid.NewString()[:12],
 		ProjectID:        projectID,
