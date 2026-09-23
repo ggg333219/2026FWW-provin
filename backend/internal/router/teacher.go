@@ -149,6 +149,11 @@ func RegisterNewSkillRoutes(
 		projects.POST("/:project_id/versions", coursewareHandler.CreateVersion)
 		projects.GET("/:project_id/versions/:version_id", coursewareHandler.VersionDetail)
 		projects.POST("/:project_id/rollback", coursewareHandler.Rollback)
+		// 契约 v1.0 模块1：页面级证据绑定
+		projects.PUT("/:project_id/page-bindings", coursewareHandler.PageBindingsPut)
+		projects.GET("/:project_id/page-bindings", coursewareHandler.PageBindingsGet)
+		// 契约 v1.0 §3.2：最新生成上下文（切 PPT / 刷新页面权威读源）
+		projects.GET("/:project_id/latest-generation-context", coursewareHandler.LatestGenerationContext)
 	} else if coursewareHandler != nil {
 		// S1 standalone（无 JWT、无持久化 handler）
 		projects := v1.Group("/coursewares")
@@ -165,6 +170,9 @@ func RegisterNewSkillRoutes(
 		projects.POST("/:project_id/versions", coursewareHandler.CreateVersion)
 		projects.GET("/:project_id/versions/:version_id", coursewareHandler.VersionDetail)
 		projects.POST("/:project_id/rollback", coursewareHandler.Rollback)
+		projects.PUT("/:project_id/page-bindings", coursewareHandler.PageBindingsPut)
+		projects.GET("/:project_id/page-bindings", coursewareHandler.PageBindingsGet)
+		projects.GET("/:project_id/latest-generation-context", coursewareHandler.LatestGenerationContext)
 	}
 	// ---- S1: 意图理解 ----
 	intent := v1.Group("/intent")

@@ -23,6 +23,7 @@ import (
 	"smart-teaching-backend/pkg/config"
 	applogger "smart-teaching-backend/pkg/logger"
 	"smart-teaching-backend/pkg/oss"
+	"smart-teaching-backend/pkg/serveraddr"
 )
 
 func main() {
@@ -48,8 +49,10 @@ func main() {
 		return
 	}
 
+	// 端口从配置读，不再写死 8082；实际被占用时会顺延（见 serveraddr.Serve）。
 	applogger.Info("教师端系统启动中...",
-		zap.Int("port", 8082), // Default teacher port
+		zap.Int("port", cfg.Server.Port),
+		zap.String("mode", cfg.Server.Mode),
 	)
 	aiClient := service.NewAIEngineClient(cfg.AI.BaseURL, cfg.AI.Timeout)
 
@@ -58,14 +61,14 @@ func main() {
 	})
 	if err != nil {
 		applogger.Sugar.Warnf("数据库不可用，自动进入 S1 轻量模式: %v", err)
-		runS1Standalone(cfg.Server.Mode, aiClient)
+		runS1Standalone(cfg.Server.Mode, cfg.Server.Port, projectRoot, aiClient)
 		return
 	}
 
 	minioClient, err := oss.NewMinioClient(&cfg.OSS)
 	if err != nil {
 		applogger.Sugar.Warnf("MinIO 不可用，自动进入 S1 轻量模式: %v", err)
-		runS1Standalone(cfg.Server.Mode, aiClient)
+		runS1Standalone(cfg.Server.Mode, cfg.Server.Port, projectRoot, aiClient)
 		return
 	}
 
@@ -133,11 +136,6 @@ func main() {
 	}
 	outlineService := service.NewOutlineServiceWithDB(aiClient, db)
 	outlineHandler := handler.NewOutlineHandler(outlineService)
-	genHandler := handler.NewGenerationHandler(aiClient, outlineService, service.NewCoursewareProjectService(db))
-	interactiveHandler := handler.NewInteractiveHandler(aiClient)
-	versionHandler := handler.NewVersionHandler(aiClient)
-	exportHandler := handler.NewExportHandler(aiClient, service.NewCoursewareProjectService(db))
-	contentHandler := handler.NewContentHandler(aiClient)
 	// A1: 课件项目持久化（远程队友实现）
 	coursewareProjectHandler := handler.NewCoursewareProjectHandler(service.NewCoursewareProjectService(db))
 	// A6/A7: 修改对话 + 版本快照 + 回滚
@@ -145,6 +143,14 @@ func main() {
 		applogger.Warn("courseware 表迁移失败", zap.Error(err))
 	}
 	coursewareService := service.NewCoursewareServiceWithDB(aiClient, db)
+	// 把 coursewareService 透传给 genHandler：让 POST /api/v1/gen/modify 在
+	// AI Engine 返回后能把（请求 + 响应）作为 CoursewareVersion 快照落库，
+	// 同时把 evidence_refs 回写到 page_bindings（契约 v1.0 §1.1 + §3.2）。
+	genHandler := handler.NewGenerationHandler(aiClient, outlineService, service.NewCoursewareProjectService(db), coursewareService)
+	interactiveHandler := handler.NewInteractiveHandler(aiClient)
+	versionHandler := handler.NewVersionHandler(aiClient)
+	exportHandler := handler.NewExportHandler(aiClient, service.NewCoursewareProjectService(db))
+	contentHandler := handler.NewContentHandler(aiClient)
 	coursewareHandler := handler.NewCoursewareHandler(coursewareService)
 
 	r := newBaseEngine(cfg.Server.Mode)
@@ -165,9 +171,9 @@ func main() {
 		genHandler, interactiveHandler, versionHandler, exportHandler, contentHandler, coursewareProjectHandler, coursewareHandler,
 	)
 
-	applogger.Info("教师端服务运行中", zap.Int("port", 8082))
-	if err := r.Run(":8082"); err != nil {
-		applogger.Sugar.Fatalf("启动服务失败: %v", err)
+	applogger.Info("教师端服务运行中", zap.Int("port", cfg.Server.Port))
+	if err := serveraddr.Serve(r, cfg.Server.Port, "teacher", projectRoot, applogger.Sugar.Warnf); err != nil {
+		applogger.Sugar.Fatalf("启动教师端服务失败: %v", err)
 	}
 }
 
@@ -206,16 +212,19 @@ func newBaseEngine(mode string) *gin.Engine {
 
 // runS1Standalone 在 PostgreSQL/MinIO 未启动时只暴露 S1 所需路由。
 // 这样前端仍然经过 Go Backend 调用 AI Engine，不会退化为直连 Python。
-func runS1Standalone(mode string, aiClient service.AIEngine) {
+// preferredPort / runtimeDir 用于端口自动顺延与 .runtime 公告。
+func runS1Standalone(mode string, preferredPort int, runtimeDir string, aiClient service.AIEngine) {
 	r := newBaseEngine(mode)
 	convHandler := handler.NewConversationHandler(aiClient)
 	outlineService := service.NewOutlineService(aiClient)
 	outlineHandler := handler.NewOutlineHandler(outlineService)
-	genHandler := handler.NewGenerationHandler(aiClient, outlineService)
+	coursewareService := service.NewCoursewareService(aiClient)
+	// 把 coursewareService 透传给 genHandler：S1 standalone 下 modify 仍会落
+	// 内存版的 CoursewareVersion + page_bindings，便于演示和联调。
+	genHandler := handler.NewGenerationHandler(aiClient, outlineService, coursewareService)
 	versionHandler := handler.NewVersionHandler(aiClient)
 	exportHandler := handler.NewExportHandler(aiClient)
 	contentHandler := handler.NewContentHandler(aiClient)
-	coursewareService := service.NewCoursewareService(aiClient)
 	coursewareHandler := handler.NewCoursewareHandler(coursewareService)
 
 	r.GET("/health", func(c *gin.Context) {
@@ -238,6 +247,11 @@ func runS1Standalone(mode string, aiClient service.AIEngine) {
 		coursewares.POST("/:project_id/versions", coursewareHandler.CreateVersion)
 		coursewares.GET("/:project_id/versions/:version_id", coursewareHandler.VersionDetail)
 		coursewares.POST("/:project_id/rollback", coursewareHandler.Rollback)
+		// 契约 v1.0 模块1：页面级资料绑定（降级模式落内存，进程重启即失）
+		coursewares.PUT("/:project_id/page-bindings", coursewareHandler.PageBindingsPut)
+		coursewares.GET("/:project_id/page-bindings", coursewareHandler.PageBindingsGet)
+		// 契约 v1.0 §3.2：权威读端点（按项目 ID 拉最新生成上下文）
+		coursewares.GET("/:project_id/latest-generation-context", coursewareHandler.LatestGenerationContext)
 	}
 
 	// S1: 意图理解
@@ -292,8 +306,8 @@ func runS1Standalone(mode string, aiClient service.AIEngine) {
 		exp.GET("/download/:job_id/:extension", exportHandler.Download)
 	}
 
-	applogger.Info("S1 轻量服务运行中（无需 PostgreSQL/MinIO）", zap.Int("port", 8082))
-	if err := r.Run(":8082"); err != nil {
+	applogger.Info("S1 轻量服务运行中（无需 PostgreSQL/MinIO）", zap.Int("port", preferredPort))
+	if err := serveraddr.Serve(r, preferredPort, "teacher", runtimeDir, applogger.Sugar.Warnf); err != nil {
 		applogger.Sugar.Fatalf("启动 S1 轻量服务失败: %v", err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 
 	"github.com/gin-gonic/gin"
 
@@ -24,6 +25,9 @@ import (
 //	GET  /api/v1/coursewares/:project_id/modify-history — 修改记录（A6）
 //	GET  /api/v1/coursewares/:project_id/versions     — 版本列表（A7）
 //	POST /api/v1/coursewares/:project_id/rollback     — 回滚（A7）
+//	PUT  /api/v1/coursewares/:project_id/page-bindings — 保存页面级证据绑定（契约 v1.0 模块1）
+//	GET  /api/v1/coursewares/:project_id/page-bindings — 读取页面级证据绑定（契约 v1.0 模块1）
+//	GET  /api/v1/coursewares/:project_id/latest-generation-context — 切 PPT 时按 project 拉权威读源（契约 v1.0 §3.2）
 type CoursewareHandler struct {
 	svc *service.CoursewareService
 }
@@ -149,6 +153,23 @@ func (h *CoursewareHandler) Context(c *gin.Context) {
 		"project": project, "draft": draft, "current_step": project.CurrentStep,
 		"generation_id": project.GenID,
 	}})
+}
+
+// LatestGenerationContext GET /:project_id/latest-generation-context ——
+// 契约 v1.0 §3.2 权威读端点。前端在以下两种场景必须用它而不是用本地内存：
+//  1. 切换 PPT / 刷新页面 → 拉项目 + 最新版本 + 当前所有页绑定，把 AI 面板
+//     和左侧绑定面板用一致数据重置，避免出现"上一个 PPT 的对话残留"；
+//  2. 打开 PPT 但还没点"生成" → 直接显示已有绑定关系，不需要等用户操作后再同步。
+//
+// 响应里 LatestVersion 是完整快照（含 NodesJSON）；前端按需解析。
+func (h *CoursewareHandler) LatestGenerationContext(c *gin.Context) {
+	projectID := c.Param("project_id")
+	ctx, err := h.svc.LatestGenerationContext(c.Request.Context(), projectID)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": ctx})
 }
 
 // Delete DELETE /:project_id —— 删除项目及关联草稿、版本。
@@ -351,4 +372,49 @@ func (h *CoursewareHandler) mapError(c *gin.Context, err error) {
 	}
 	message := err.Error()
 	c.JSON(status, gin.H{"ok": false, "data": nil, "error": message, "code": status, "message": message})
+}
+
+// PageBindingsPut PUT /:project_id/page-bindings —— 保存页面级证据绑定。
+//
+// 契约 v1.0 模块1 接口1：请求体为 { "page_bindings": { "<page_id>": { evidence_refs, auto_bound, bound_by } } }。
+// upsert 语义——只写入传入的页面，其余页面绑定保持不变；
+// 传空 evidence_refs 表示清空该页的证据引用（教师手动解绑全部资料）。
+func (h *CoursewareHandler) PageBindingsPut(c *gin.Context) {
+	projectID := c.Param("project_id")
+	var req struct {
+		PageBindings map[string]service.PageEvidenceBinding `json:"page_bindings"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "data": nil, "error": "page_bindings 参数错误: " + err.Error(), "code": 400})
+		return
+	}
+	if req.PageBindings == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "data": nil, "error": "page_bindings 不能为空", "code": 400})
+		return
+	}
+	bindings := make([]service.PageEvidenceBinding, 0, len(req.PageBindings))
+	for pageID, binding := range req.PageBindings {
+		binding.PageID = pageID // 以 map key 为准，请求体内的 page_id 可省略
+		bindings = append(bindings, binding)
+	}
+	updated, err := h.svc.SavePageBindings(c.Request.Context(), projectID, bindings)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	sort.Strings(updated)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"updated_pages": updated}, "error": "", "code": 200})
+}
+
+// PageBindingsGet GET /:project_id/page-bindings —— 读取当前项目的页面级证据绑定。
+//
+// 契约 v1.0 模块1 接口2：响应 data.page_bindings 以 page_id 为键，
+// 每页含 page_id / evidence_refs / auto_bound / bound_by / bound_at。
+func (h *CoursewareHandler) PageBindingsGet(c *gin.Context) {
+	bindings, err := h.svc.GetPageBindings(c.Request.Context(), c.Param("project_id"))
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"page_bindings": bindings}, "error": "", "code": 200})
 }
