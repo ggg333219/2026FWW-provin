@@ -128,14 +128,14 @@ export async function requestJson(path, options = {}) {
       timeoutError.originalError = error
       throw timeoutError
     }
-    // 尝试 Mock 回退
+    // 后端已返回 HTTP 错误时，必须把真实错误交给调用方。
+    // 尤其是 PPT/DOCX 导出：版本不存在或导出失败不能被伪装成 Mock 文件。
+    if (error?.httpStatus) throw error
+
+    // 仅网络层不可达时允许 Mock 回退
     const mockPayload = handleMockRequest(path, options, error)
     if (mockPayload) {
-      // 仅网络层不可达（连接拒绝/断开，无 httpStatus 的 TypeError）才全局切换 Mock；
-      // HTTP 级错误（路由缺失）仅对当前请求回退 Mock，其余请求继续走真实后端。
-      if (!error.httpStatus) {
-        setMockMode()
-      }
+      setMockMode()
       if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
         window.dispatchEvent(new CustomEvent('fuww:mock-fallback', {
           detail: { path, reason: error?.message || '网络不可达' }
