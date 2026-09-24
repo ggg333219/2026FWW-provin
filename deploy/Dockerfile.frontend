@@ -1,7 +1,10 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY frontend/teacher/package.json frontend/teacher/package-lock.json ./
-RUN npm ci
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm config set fetch-retries 5 \
+    && npm config set fetch-timeout 120000 \
+    && npm ci
 COPY frontend/teacher/ ./
 ARG VITE_API_BASE
 ARG VITE_AI_API_BASE
