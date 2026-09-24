@@ -159,7 +159,13 @@ export const useInteractiveStore = defineStore('interactive', {
           interactive_asset_id,
           label
         })
-        return resp?.data || resp || {}
+        const data = resp?.data || resp || {}
+        // Go 返回的是相对路径；iframe 位于前端 5173 页面，必须补上后端基址，
+        // 否则浏览器会请求 5173/api/...，预览区域表现为空白。
+        return {
+          ...data,
+          entry_url: normalizeAssetUrl(data.entry_url),
+        }
       } catch (err) {
         this.error = err?.message || '关联互动资源失败'
         throw err

@@ -125,6 +125,21 @@ func TestModifySnapshotPerCall(t *testing.T) {
 	if versions[2].VersionNo != 3 {
 		t.Fatalf("版本号应自增到 3, 实际 %d", versions[2].VersionNo)
 	}
+	draftJSON, err := svc.GetDraft(context.Background(), p.ProjectID)
+	if err != nil {
+		t.Fatalf("读取修改后的草稿失败: %v", err)
+	}
+	var draft struct {
+		Generation struct {
+			Nodes []TeachingNodeItem `json:"nodes"`
+		} `json:"generation"`
+	}
+	if err := json.Unmarshal([]byte(draftJSON), &draft); err != nil {
+		t.Fatalf("修改后的草稿应保持对象结构: %v; raw=%s", err, draftJSON)
+	}
+	if len(draft.Generation.Nodes) != len(r1.AllNodes) {
+		t.Fatalf("修改后的草稿应保存完整生成节点, 实际 %d", len(draft.Generation.Nodes))
+	}
 	// 首个快照保存的是"修改前"状态
 	var snapNodes []TeachingNodeItem
 	_ = json.Unmarshal([]byte(versions[0].NodesJSON), &snapNodes)
@@ -156,6 +171,32 @@ func TestModifyClarification(t *testing.T) {
 	versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
 	if len(versions) != 0 {
 		t.Fatalf("追问时不应产生快照, 实际 %d", len(versions))
+	}
+}
+
+func TestModifyCanRemoveTeachingText(t *testing.T) {
+	ai := &fakeModifyAI{
+		intent: &ModifyIntent{
+			TargetType: "node", TargetIDs: []string{"node_3"},
+			Action: "simplify", Constraints: []string{"去掉讲授文本"},
+			Confidence: 0.95,
+		},
+		genResp: &GenContentStatusResponse{
+			Status: "done",
+			Nodes: []TeachingNodeItem{{
+				NodeID: "node_3", Script: "重新生成的讲授文本", Segments: []map[string]interface{}{{"text": "分段"}},
+			}},
+		},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+
+	result, err := svc.Modify(context.Background(), p.ProjectID, "去掉第三页讲授文本", sampleTeachingNodes())
+	if err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if result.AllNodes[2].Script != "" || len(result.AllNodes[2].Segments) != 0 {
+		t.Fatalf("应清空目标节点讲授文本和分段, 实际 script=%q segments=%v", result.AllNodes[2].Script, result.AllNodes[2].Segments)
 	}
 }
 
@@ -292,6 +333,14 @@ func TestCreateVersionSnapshotIncludesPageBindings(t *testing.T) {
 	}
 	if restored.PageBindings == nil || restored.Presentation["template_id"] != "deck-swiss-edu" {
 		t.Fatalf("回滚草稿丢失页面绑定或呈现: %+v", restored)
+	}
+}
+
+func TestVersionToRowIncludesLegacyPrimaryKey(t *testing.T) {
+	version := &CoursewareVersion{VersionID: "ver_test_001", ProjectID: "proj_test_001"}
+	row := versionToRow(version)
+	if row.ID == "" || row.ID != version.VersionID {
+		t.Fatalf("版本行必须填充物理主键 id，实际=%q version_id=%q", row.ID, row.VersionID)
 	}
 }
 

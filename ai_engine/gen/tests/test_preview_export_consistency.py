@@ -89,3 +89,24 @@ def test_six_node_snapshot_keeps_authored_semantics_in_preview_and_ppt():
     assert len(prs.slides) == 6
     assert all(shape.shape_type != 13 for slide in prs.slides for shape in slide.shapes)
     assert resolve_node_type(nodes[3]) == "two_column"
+
+
+def test_preview_applies_presentation_style_from_nodes():
+    nodes = [{
+        "node_id": "styled",
+        "type": "content",
+        "title": "样式预览",
+        "content": "样式应反映到实时预览。",
+        "metadata": {"presentation": {
+            "palette": "klein-blue",
+            "layout": "text",
+            "font_family": "serif",
+            "density": "minimal",
+        }},
+    }]
+
+    html = PreviewRenderer().render(nodes, "样式预览")
+
+    assert 'data-palette="klein-blue"' in html
+    assert "font-family: 'Songti SC'" in html
+    assert "--preview-slide-padding: 56px 64px 60px" in html

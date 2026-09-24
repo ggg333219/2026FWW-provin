@@ -10,8 +10,9 @@ import { teacherV1Api } from '../services/v1'
 function toPreviewNodes(nodes) {
   return (Array.isArray(nodes) ? nodes : []).map((node) => {
     const n = { ...node }
-    if (!n.script && n.scriptText) n.script = n.scriptText
-    if (!n.content && n.scriptText) n.content = n.scriptText
+    // 显式空值表示教师已移除讲授文本，不能再被旧的 scriptText 回填。
+    if (!Object.prototype.hasOwnProperty.call(n, 'script') && n.scriptText) n.script = n.scriptText
+    if (!Object.prototype.hasOwnProperty.call(n, 'content') && n.scriptText) n.content = n.scriptText
     if (n.nodeId && !n.node_id) n.node_id = n.nodeId
     if (!n.node_type && !n.type) n.node_type = ''
     if (!n.title) n.title = n.node_title || ''

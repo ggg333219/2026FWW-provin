@@ -118,7 +118,7 @@ const outlineStore = useOutlineStore()
 const generationStore = useGenerationStore()
 const messagesEl = ref(null)
 const selectedVersion = ref(null)
-const emit = defineEmits(['style-request'])
+const emit = defineEmits(['style-request', 'applied'])
 const liveNodes = computed(() => generationStore.currentScriptNodes?.length
   ? generationStore.currentScriptNodes
   : outlineStore.nodes)
@@ -159,6 +159,7 @@ async function applyResult({ allNodes, modifiedNodes, intent, instruction, prese
   }
   const current = liveNodes.value || []
   const currentById = new Map(current.map((node) => [node.node_id, node]))
+  const hasField = (node, field) => Object.prototype.hasOwnProperty.call(node || {}, field)
   const normalize = (n) => ({
     ...(currentById.get(n.node_id) || {}),
     ...n,
@@ -169,25 +170,17 @@ async function applyResult({ allNodes, modifiedNodes, intent, instruction, prese
     key_points: n.key_points || n.core_points || [],
     core_points: n.core_points || n.key_points || [],
     estimated_duration_minutes: n.estimated_duration_minutes || 5,
-    script: n.script || '',
-    segments: n.segments || [],
-    citation_refs: n.citation_refs || [],
-    source_chunk_ids: n.source_chunk_ids || [],
-    interactive_plan: n.interactive_plan || null,
+    // AI 局部结果可能只返回变更字段；缺失字段必须保留当前 PPT 内容。
+    script: hasField(n, 'script') ? (n.script || '') : (n.content || currentById.get(n.node_id)?.script || currentById.get(n.node_id)?.content || ''),
+    segments: hasField(n, 'segments') ? (n.segments || []) : (currentById.get(n.node_id)?.segments || []),
+    citation_refs: n.citation_refs || currentById.get(n.node_id)?.citation_refs || [],
+    source_chunk_ids: n.source_chunk_ids || currentById.get(n.node_id)?.source_chunk_ids || [],
+    interactive_plan: n.interactive_plan || currentById.get(n.node_id)?.interactive_plan || null,
   })
   const normalized = allNodes.map(normalize)
   if (generationStore.currentScriptNodes?.length || generationStore.lastGenId) {
-    const changedById = new Map((modifiedNodes || []).map((node) => [node.node_id, normalize(node)]))
-    const structuralChange = normalized.length !== generationStore.currentScriptNodes.length
-      || normalized.some((node, index) => generationStore.currentScriptNodes[index]?.node_id !== node.node_id)
-    if (structuralChange) {
-      generationStore.setNodes(normalized)
-    } else {
-      generationStore.currentScriptNodes.forEach((node, index) => {
-        const changed = changedById.get(node.node_id)
-        if (changed) generationStore.updateNode(index, changed)
-      })
-    }
+    // all_nodes 才是后端修改后的完整权威结果，不能依赖 modified_nodes 是否完整。
+    generationStore.setNodes(normalized)
     generationStore.setScript(
       normalized.map((node) => node.script || node.content || node.summary || '').filter(Boolean).join('\n\n'),
     )
@@ -196,6 +189,9 @@ async function applyResult({ allNodes, modifiedNodes, intent, instruction, prese
     outlineStore._reorder()
     outlineStore._persist()
   }
+
+  // 页面负责重新渲染预览并持久化草稿，修改面板只应用结构化结果。
+  emit('applied', { allNodes: normalized, modifiedNodes, intent, instruction, presentation })
 }
 
 async function handleSend() {

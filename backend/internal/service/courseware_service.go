@@ -82,8 +82,13 @@ type CoursewareVersion struct {
 }
 
 type coursewareVersionRow struct {
-	VersionID        string    `gorm:"column:version_id;size:64;primaryKey"`
+	// ID is the legacy physical primary key already present in deployed
+	// courseware_versions. Keep it populated even though the public contract
+	// exposes version_id as the business identifier.
+	ID               string    `gorm:"column:id;size:64;primaryKey"`
+	VersionID        string    `gorm:"column:version_id;size:64"`
 	ProjectID        string    `gorm:"column:project_id;size:64;index"`
+	OwnerID          string    `gorm:"column:owner_id;size:64"`
 	VersionNo        int       `gorm:"column:version_no"`
 	ParentVersionID  string    `gorm:"column:parent_version_id;size:64;index"`
 	NodesJSON        string    `gorm:"column:nodes_snapshot;type:text"`
@@ -105,7 +110,7 @@ func (coursewareVersionRow) TableName() string { return "courseware_versions" }
 // 返回的行指针可直接 Create。
 func versionToRow(v *CoursewareVersion) *coursewareVersionRow {
 	row := &coursewareVersionRow{
-		VersionID: v.VersionID, ProjectID: v.ProjectID, VersionNo: v.VersionNo,
+		ID: v.VersionID, VersionID: v.VersionID, ProjectID: v.ProjectID, VersionNo: v.VersionNo,
 		ParentVersionID: v.ParentVersionID, NodesJSON: v.NodesJSON,
 		PresentationJSON: v.PresentationJSON, SnapshotJSON: v.SnapshotJSON,
 		ModifyInstr: v.ModifyInstr, VersionSummary: v.VersionSummary, CreatedAt: v.CreatedAt,
@@ -475,6 +480,9 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 		updatedNodes = mergePartialResult(updatedNodes, resp.Nodes, intent.TargetIDs)
 		modifiedIDs = intent.TargetIDs
 	}
+	if wantsRemoveTeachingText(instruction, intent.Constraints) {
+		updatedNodes = clearTeachingText(updatedNodes, intent.TargetIDs)
+	}
 	// restyle：仅样式层，不改内容；样式字段由 AI 解析后透传给前端。
 
 	// 5) 修改前快照（快照 = 修改前的完整状态）
@@ -498,9 +506,9 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 		return nil, err
 	}
 
-	// 6) 更新草稿
-	draftJSON, _ := json.Marshal(updatedNodes)
-	_ = s.store.SaveDraft(ctx, projectID, string(draftJSON))
+	// 6) 更新草稿。保留项目草稿的其它上下文，只替换 generation.nodes；
+	// 直接把节点数组写入 draft 会导致 S3 刷新时无法恢复生成内容、意图和呈现配置。
+	_ = s.saveGenerationDraft(ctx, projectID, updatedNodes)
 	_ = s.store.UpdateProjectStatus(ctx, projectID, "done")
 
 	var modifiedNodes []TeachingNodeItem
@@ -521,6 +529,63 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 		NewVersionNo:      snap.VersionNo, // 快照即新版本号
 		Presentation:      intent.Presentation,
 	}, nil
+}
+
+func wantsRemoveTeachingText(instruction string, constraints []string) bool {
+	text := strings.ToLower(strings.Join(append([]string{instruction}, constraints...), " "))
+	for _, phrase := range []string{
+		"去掉讲授文本", "删除讲授文本", "移除讲授文本", "不要讲授文本", "隐藏讲授文本",
+		"去除讲稿", "删除讲稿", "移除讲稿", "不要讲稿", "隐藏讲稿",
+	} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func clearTeachingText(nodes []TeachingNodeItem, targetIDs []string) []TeachingNodeItem {
+	targetSet := make(map[string]struct{}, len(targetIDs))
+	for _, id := range targetIDs {
+		targetSet[id] = struct{}{}
+	}
+	cleared := make([]TeachingNodeItem, len(nodes))
+	copy(cleared, nodes)
+	for i := range cleared {
+		if len(targetSet) == 0 {
+			cleared[i].Script = ""
+			cleared[i].Segments = nil
+			continue
+		}
+		if _, ok := targetSet[cleared[i].NodeID]; ok {
+			cleared[i].Script = ""
+			cleared[i].Segments = nil
+		}
+	}
+	return cleared
+}
+
+func (s *CoursewareService) saveGenerationDraft(ctx context.Context, projectID string, nodes []TeachingNodeItem) error {
+	draft := map[string]interface{}{}
+	if raw, err := s.store.GetDraft(ctx, projectID); err == nil && strings.TrimSpace(raw) != "" {
+		var existing map[string]interface{}
+		if json.Unmarshal([]byte(raw), &existing) == nil && existing != nil {
+			draft = existing
+		}
+	}
+
+	generation := map[string]interface{}{}
+	if existing, ok := draft["generation"].(map[string]interface{}); ok {
+		generation = existing
+	}
+	generation["nodes"] = nodes
+	draft["generation"] = generation
+
+	encoded, err := json.Marshal(draft)
+	if err != nil {
+		return err
+	}
+	return s.store.SaveDraft(ctx, projectID, string(encoded))
 }
 
 func presentationJSON(p map[string]string) string {
@@ -1399,7 +1464,13 @@ func (g *gormCoursewareStore) NextVersionNo(ctx context.Context, projectID strin
 }
 
 func (g *gormCoursewareStore) SaveVersion(ctx context.Context, v *CoursewareVersion) error {
-	return g.db.WithContext(ctx).Create(versionToRow(v)).Error
+	row := versionToRow(v)
+	var project coursewareProjectRow
+	if err := g.db.WithContext(ctx).Select("owner_id").Where("id = ?", v.ProjectID).First(&project).Error; err != nil {
+		return err
+	}
+	row.OwnerID = project.OwnerID
+	return g.db.WithContext(ctx).Create(row).Error
 }
 
 func (g *gormCoursewareStore) GetVersion(ctx context.Context, projectID string, versionNo int) (*CoursewareVersion, error) {

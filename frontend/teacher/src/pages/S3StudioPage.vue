@@ -113,7 +113,7 @@
         @selection-change="handleEvidenceSelection"
       />
       <!-- C6: AI 修改对话面板（右侧浮动；projectId 绑定后显示） -->
-      <ModifyPanel class="s3-ai-panel" @style-request="handleStyleRequest" />
+      <ModifyPanel class="s3-ai-panel" @style-request="handleStyleRequest" @applied="handleModifyApplied" />
       <div v-if="currentPhase === 'outline'" class="phase-panel">
         <OutlineEditor
           :session-id="intentStore.sessionId"
@@ -509,11 +509,23 @@ onMounted(async () => {
   if (projectStore.projectId) {
     modifyStore.bindProject(projectStore.projectId);
     await modifyStore.loadVersionHistory();
+    // 刷新或直接打开 S3 时以后端草稿为准，不能只依赖页面跳转留下的本地缓存。
+    await projectStore.resume(projectStore.projectId).catch(() => {});
     await projectStore.updateStep("s3_studio").catch(() => {});
-    // 统一恢复入口已把后端 draft 放入 session；优先恢复项目快照，避免误用另一份课件的全局缓存。
+    // 后端草稿优先；只有后端没有可用草稿时才回退到统一恢复入口留下的本地缓存。
     try {
-      const rawDraft = window.localStorage.getItem("fuww_courseware_resume_draft");
-      const savedDraft = rawDraft ? JSON.parse(rawDraft) : null;
+      const backendDraft = projectStore.draft;
+      let savedDraft = backendDraft;
+      if (typeof savedDraft === "string") {
+        try { savedDraft = JSON.parse(savedDraft) || null; } catch { savedDraft = null; }
+      }
+      // 兼容旧版后端曾直接保存的节点数组，避免历史课件刷新后变成空白。
+      if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
+      if (!savedDraft || typeof savedDraft !== "object" || (!savedDraft.outline && !savedDraft.generation)) {
+        const rawDraft = window.localStorage.getItem("fuww_courseware_resume_draft");
+        savedDraft = rawDraft ? JSON.parse(rawDraft) : null;
+        if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
+      }
       if (savedDraft?.outline?.outline_id) {
         if (savedDraft.outline.editable_after_rollback || route.query.from_rollback_version) {
           outlineStore.restoreEditableSnapshot(savedDraft.outline);
@@ -572,6 +584,14 @@ onMounted(async () => {
     // 覆盖当前课件的恢复结果。
     if (!restoredGenerationNodes) await loadGenerationStatus();
   }
+  if (restoredGenerationNodes) {
+    // 草稿中的节点是 AI 修订后的权威内容，刷新时用 inline 节点重建预览，
+    // 避免旧 generation/version 快照覆盖最新修改。
+    await generationStore.renderCoursewarePreview(
+      outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
+      { genId: "" },
+    ).catch(() => {});
+  }
   if (route.query.phase === "outline") currentPhase.value = "outline";
   const evidenceReady = await ensureAutomaticEvidence();
   outlineReady.value = evidenceReady || !requiresAutomaticEvidence.value;
@@ -627,6 +647,21 @@ function handleOutlineCreated({ outline_id, outline_version }) {
 // 大纲确认完成，进入生成阶段
 function handleOutlineConfirmed() {
   currentPhase.value = "generating";
+}
+
+// AI 修订成功后立即刷新右侧 PPT 预览，并把最新节点写入项目草稿。
+async function handleModifyApplied({ allNodes = [] } = {}) {
+  // 即使当前内存中没有 generation 节点，也以修改接口返回的完整节点树恢复预览。
+  if (!generationStore.currentScriptNodes?.length && Array.isArray(allNodes) && allNodes.length) {
+    generationStore.setNodes(allNodes)
+  }
+  if (generationStore.currentScriptNodes?.length) {
+    await generationStore.renderCoursewarePreview(
+      outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
+      { genId: "" },
+    );
+  }
+  await projectStore.saveNow(draftSnapshot());
 }
 
 // 开始生成内容

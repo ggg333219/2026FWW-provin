@@ -97,7 +97,29 @@ class PreviewRenderer:
             HTML 字符串（可直接嵌入 iframe 或保存为 .html）
         """
         slides_html = self._build_slides(nodes)
-        return self._wrap_html(course_name, slides_html)
+        return self._wrap_html(course_name, slides_html, self._presentation_from_nodes(nodes))
+
+    @staticmethod
+    def _presentation_from_nodes(nodes: list[dict[str, Any]]) -> dict[str, str]:
+        """读取前端样式层写入节点 metadata 的全局呈现配置。"""
+        defaults = {
+            "palette": "classic",
+            "layout": "balanced",
+            "font_family": "system",
+            "density": "comfortable",
+        }
+        for node in nodes or []:
+            if not isinstance(node, dict):
+                continue
+            metadata = node.get("metadata") or {}
+            presentation = metadata.get("presentation") or node.get("presentation") or {}
+            if isinstance(presentation, dict):
+                for key in defaults:
+                    value = str(presentation.get(key) or "").strip()
+                    if value:
+                        defaults[key] = value
+                break
+        return defaults
 
     def render_node(self, node: dict[str, Any], index: int = 1) -> str:
         """生成单个节点的预览 HTML"""
@@ -434,7 +456,27 @@ class PreviewRenderer:
 
     # ── HTML 包装 ──
 
-    def _wrap_html(self, title: str, slides_html: str) -> str:
+    def _wrap_html(self, title: str, slides_html: str, presentation: dict[str, str] | None = None) -> str:
+        presentation = presentation or self._presentation_from_nodes([])
+        palette = presentation.get("palette", "classic")
+        layout = presentation.get("layout", "balanced")
+        font_family = presentation.get("font_family", "system")
+        density = presentation.get("density", "comfortable")
+        palette_css = {
+            "classic": ("#168f82", "#eef3f1", "#18322f", "#d9ebe6", "#0b4f49"),
+            "klein-blue": ("#315fd4", "#eef2f8", "#17253f", "#dce5f6", "#203f98"),
+        }.get(palette, ("#168f82", "#eef3f1", "#18322f", "#d9ebe6", "#0b4f49"))
+        font_css = {
+            "system": "-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif",
+            "source-han": "'Source Han Sans SC', 'Noto Sans CJK SC', sans-serif",
+            "serif": "'Songti SC', 'STSong', 'SimSun', serif",
+        }.get(font_family, "-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif")
+        padding_css = {
+            "minimal": "56px 64px 60px",
+            "compact": "36px 44px 40px",
+            "comfortable": "44px 52px 48px",
+        }.get(density, "44px 52px 48px")
+        body_padding = "28px" if layout == "visual" else ("16px" if layout == "text" else "20px")
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -574,10 +616,36 @@ class PreviewRenderer:
 
   /* ── 空态 ── */
   .empty-state {{ text-align: center; padding: 60px 20px; color: #94a3b8; font-size: 15px; }}
+
+  /* ── S3 样式层：由节点 metadata.presentation 驱动，保证修改后预览实时可见 ── */
+  :root {{ --preview-accent: {palette_css[0]}; --preview-page-bg: {palette_css[1]};
+           --preview-ink: {palette_css[2]}; --preview-accent-soft: {palette_css[3]};
+           --preview-deep: {palette_css[4]}; --preview-slide-padding: {padding_css}; }}
+  body {{ font-family: {font_css}; background: radial-gradient(circle at 8% 0%, #ffffff 0, var(--preview-page-bg) 42%, #e6ecea 100%); padding: {body_padding}; color: var(--preview-ink); }}
+  .presentation {{ max-width: 1180px; }}
+  .slide {{ padding: var(--preview-slide-padding); border: 1px solid rgba(24,50,47,.10); border-radius: 22px;
+            box-shadow: 0 18px 42px rgba(24,50,47,.09); min-height: 380px; }}
+  .slide h2 {{ color: var(--preview-ink); font-weight: 760; letter-spacing: -.025em; }}
+  .slide-num {{ color: var(--preview-accent); background: var(--preview-accent-soft); font-weight: 700; }}
+  .content-slide {{ border-top: 5px solid var(--preview-accent); background: rgba(255,255,255,.94); }}
+  .content-slide .key-points li, .content-slide .body {{ color: var(--preview-ink); }}
+  .content-slide .key-points li {{ background: linear-gradient(105deg, #fff, var(--preview-accent-soft)); border: 1px solid rgba(24,50,47,.07); }}
+  .cover-slide, .title-slide {{ background: linear-gradient(135deg, var(--preview-deep) 0%, var(--preview-accent) 100%); min-height: 460px; }}
+  .section-slide {{ background: linear-gradient(135deg, var(--preview-deep) 0%, var(--preview-accent) 100%); }}
+  .quiz-slide {{ border-left: 5px solid var(--preview-accent); border-top: 0; background: linear-gradient(145deg, #fff, var(--preview-accent-soft)); }}
+  .quiz-slide .questions .q-item {{ border-color: rgba(24,50,47,.10); box-shadow: 0 6px 16px rgba(24,50,47,.06); }}
+  .quiz-slide .questions .q-item::before {{ background: var(--preview-accent); }}
+  .script-block {{ border-left-color: var(--preview-accent); background: rgba(255,255,255,.72); }}
+  .script-block h4 {{ color: var(--preview-accent); }}
+  .presentation[data-layout="visual"] .slide {{ min-height: 430px; }}
+  .presentation[data-layout="visual"] .content-slide .key-points {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
+  .presentation[data-layout="text"] .slide {{ max-width: 920px; margin-left: auto; margin-right: auto; }}
+  .presentation[data-density="minimal"] .slide h2 {{ font-size: 28px; }}
+  .presentation[data-density="compact"] .slide {{ border-radius: 16px; }}
 </style>
 </head>
 <body>
-<div class="presentation">
+<div class="presentation" data-palette="{html.escape(palette)}" data-layout="{html.escape(layout)}" data-density="{html.escape(density)}">
 {slides_html}
 </div>
 </body>
