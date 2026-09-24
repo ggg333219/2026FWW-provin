@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildIntentEvidenceQuery, evidenceIds } from './intentEvidence'
+import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline } from './intentEvidence'
 
 describe('S1 意图驱动的自动证据检索', () => {
   it('用主题、知识点、难点和对象组成稳定查询并去重', () => {
@@ -16,5 +16,16 @@ describe('S1 意图驱动的自动证据检索', () => {
       citations: [{ chunk_id: 'a' }],
       relevant_chunks: [{ chunk_id: 'a' }, { chunk_id: 'b' }],
     })).toEqual(['a', 'b'])
+  })
+
+  it('识别旧版空正文形成的单节点占位大纲', () => {
+    expect(isPlaceholderOutline([{
+      title: '课程封面',
+      content: '当前课件仅含标题，未提供可切分正文',
+    }])).toBe(true)
+    expect(isPlaceholderOutline([
+      { title: '课程导入', summary: '介绍学习目标' },
+      { title: '核心知识', summary: '讲解核心概念' },
+    ])).toBe(false)
   })
 })

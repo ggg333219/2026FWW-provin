@@ -49,6 +49,20 @@
         <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }">返回补充资料</router-link>
       </div>
 
+      <div v-if="evidenceBootstrapState === 'error' && requiresAutomaticEvidence" class="evidence-gate" role="alert">
+        <div>
+          <strong>自动检索尚未完成，已暂停生成大纲</strong>
+          <span>{{ evidenceBootstrapError || '暂未检索到可绑定的证据，请重试或补充资料。' }}</span>
+        </div>
+        <div class="evidence-gate-actions">
+          <button :disabled="materialStore.searching" @click="retryAutomaticEvidence">
+            {{ materialStore.searching ? '正在检索…' : '重新自动检索' }}
+          </button>
+          <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }">上传补充资料</router-link>
+          <button class="plain" @click="continueWithIntentOnly">仅按 S1 意图生成</button>
+        </div>
+      </div>
+
       <div v-if="baseVersion > 0" class="version-branch-banner" role="status">
         <strong>当前基于 v{{ baseVersion }} 编辑</strong>
         <span>保存后将生成 v{{ baseVersion + 1 }}，原版本不会被覆盖。</span>
@@ -380,7 +394,7 @@ import { useCoursewareProjectStore } from "../stores/coursewareProjectStore";
 import { teacherV1Api } from "../services/v1";
 import { projectModifyApi } from "../services/v1/projectModifyApi";
 import { API_BASE, AI_API_BASE } from "../config/api";
-import { buildIntentEvidenceQuery, evidenceIds } from "../utils/intentEvidence";
+import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline } from "../utils/intentEvidence";
 
 const generationStore = useGenerationStore();
 const outlineStore = useOutlineStore();
@@ -416,6 +430,9 @@ const interactivePreviewUrl = ref("");
 const interactivePreviewTitle = ref("");
 const initializing = ref(true);
 const outlineReady = ref(false);
+const evidenceBootstrapState = ref("idle");
+const evidenceBootstrapError = ref("");
+const requiresAutomaticEvidence = computed(() => String(route.query.auto_evidence || "") === "1");
 
 const asyncActivity = computed(() => {
   if (modifyStore.modifying) return { title: "AI 正在修改课件", detail: "正在理解指令并局部更新相关页面，完成后会自动刷新预览。" };
@@ -471,6 +488,7 @@ const interactiveNodes = computed(() =>
 onMounted(async () => {
 	try {
 	let restoredGenerationNodes = false;
+	let restoredProjectOutline = false;
   // 恢复 S1 会话/意图（刷新或直接进入 S3 时 store 内存为空，
   // 不恢复会导致 sessionId 缺失 → AI 生成大纲被 "缺少 session_id" 拦截）
   intentStore.initialize();
@@ -503,6 +521,7 @@ onMounted(async () => {
           outlineStore._applyOutlineData(savedDraft.outline);
         }
         outlineStore._persist();
+        restoredProjectOutline = true;
       }
       if (savedDraft?.generation) {
         if (savedDraft.generation.generation_id) generationStore.setLastGenId(savedDraft.generation.generation_id);
@@ -537,7 +556,11 @@ onMounted(async () => {
     } catch {}
   }
   // 尝试从 localStorage 恢复大纲
-  const restored = outlineStore.restore();
+  const restored = restoredProjectOutline ? true : outlineStore.restore();
+  if (!restoredProjectOutline && restored && outlineStore.session_id && intentStore.sessionId
+      && outlineStore.session_id !== intentStore.sessionId) {
+    outlineStore.reset();
+  }
   if (!restoredGenerationNodes && restored && outlineStore.isConfirmed) {
     currentPhase.value = "generating";
   }
@@ -550,9 +573,9 @@ onMounted(async () => {
     if (!restoredGenerationNodes) await loadGenerationStatus();
   }
   if (route.query.phase === "outline") currentPhase.value = "outline";
-  await ensureAutomaticEvidence();
+  const evidenceReady = await ensureAutomaticEvidence();
+  outlineReady.value = evidenceReady || !requiresAutomaticEvidence.value;
   } finally {
-    outlineReady.value = true;
     initializing.value = false;
   }
 });
@@ -590,6 +613,10 @@ function statusLabel(status) {
 
 // 大纲创建完成
 function handleOutlineCreated({ outline_id, outline_version }) {
+  // OutlineBuilder 已使用整份证据包生成结构；创建完成后再把引用 ID
+  // 落到每个大纲节点，保证后续内容生成和版本快照都保留绑定关系。
+  bindEvidenceToWholeDraft();
+  projectStore.scheduleSave(draftSnapshot(), 0);
   console.log(
     "[S3StudioPage] 大纲创建完成:",
     outline_id,
@@ -873,33 +900,70 @@ function bindEvidenceToWholeDraft() {
   }
 }
 
+function discardPlaceholderOutline() {
+  if (isPlaceholderOutline(outlineStore.nodes)) outlineStore.reset();
+}
+
 async function ensureAutomaticEvidence() {
   if (isEvidencePacketUsable(evidencePacket.value)) {
     adoptEvidencePacket(evidencePacket.value);
+    discardPlaceholderOutline();
     projectStore.scheduleSave(draftSnapshot(), 0);
-    return evidencePacket.value;
+    evidenceBootstrapState.value = "ready";
+    evidenceBootstrapError.value = "";
+    return true;
   }
   const query = buildIntentEvidenceQuery(intentStore.intentSummary || {});
   if (!query) {
-    generationMode.value = "without_evidence";
-    return null;
+    evidenceBootstrapState.value = "error";
+    evidenceBootstrapError.value = "S1 教学意图不完整，无法构造自动检索条件。";
+    return false;
   }
-  const packet = await materialStore.generateEvidence({
-    query,
-    context: {
-      intent: intentStore.intentSummary || {},
-      project_id: projectStore.projectId,
-      binding_scope: "draft",
-      auto_bind: true,
-    },
-  });
-  if (isEvidencePacketUsable(packet)) {
-    adoptEvidencePacket(packet);
-    await projectStore.saveNow(draftSnapshot()).catch(() => {});
-    return packet;
+  evidenceBootstrapState.value = "loading";
+  evidenceBootstrapError.value = "";
+  try {
+    const packet = await materialStore.generateEvidence({
+      query,
+      context: {
+        intent: intentStore.intentSummary || {},
+        project_id: projectStore.projectId,
+        binding_scope: "draft",
+        auto_bind: true,
+      },
+    });
+    if (isEvidencePacketUsable(packet)) {
+      adoptEvidencePacket(packet);
+      discardPlaceholderOutline();
+      evidenceBootstrapState.value = "ready";
+      await projectStore.saveNow(draftSnapshot()).catch(() => {});
+      return true;
+    }
+    evidenceBootstrapState.value = "error";
+    evidenceBootstrapError.value = materialStore.error || "知识库暂未返回可用证据。";
+    return false;
+  } catch (error) {
+    evidenceBootstrapState.value = "error";
+    evidenceBootstrapError.value = error?.message || "自动检索失败，请重试。";
+    return false;
   }
+}
+
+async function retryAutomaticEvidence() {
+  const ready = await ensureAutomaticEvidence();
+  if (ready) outlineReady.value = true;
+}
+
+function continueWithIntentOnly() {
   generationMode.value = "without_evidence";
-  return null;
+  evidenceBootstrapState.value = "skipped";
+  evidenceBootstrapError.value = "";
+  // 明确由教师选择无资料生成时，仍只使用结构化 S1 意图，不能读取旧版 S2 Markdown。
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem("fuww_s2_markdown");
+    window.localStorage.setItem(`fuww_s2_generation_mode:${intentStore.sessionId}`, generationMode.value);
+  }
+  discardPlaceholderOutline();
+  outlineReady.value = true;
 }
 
 function handleEvidenceSelection(ids) {
@@ -1105,6 +1169,15 @@ function handleError(msg) {
   font-weight: 700;
   text-decoration: none;
 }
+
+.evidence-gate { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:0 0 16px; padding:16px 18px; border:1px solid #e5b66d; border-radius:14px; background:#fff8ea; color:#714d18; }
+.evidence-gate>div:first-child { display:flex; flex-direction:column; gap:5px; }
+.evidence-gate strong { font-size:14px; }
+.evidence-gate span { font-size:12px; color:#8b6b3d; }
+.evidence-gate-actions { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+.evidence-gate-actions button,.evidence-gate-actions a { padding:8px 12px; border:1px solid #ba8437; border-radius:9px; background:#8f5f20; color:#fff; font:600 12px/1.2 inherit; text-decoration:none; cursor:pointer; }
+.evidence-gate-actions button:disabled { opacity:.55; cursor:not-allowed; }
+.evidence-gate-actions .plain { background:#fff; color:#77501c; }
 .version-branch-banner {
   display: flex;
   align-items: center;

@@ -358,11 +358,20 @@ async function handleGenerateOutline() {
         if (raw) evidence = JSON.parse(raw)
       }
     } catch {}
-    // 尝试从 localStorage 读取 markdown 内容
+    // S1→S3 新主流程必须以结构化意图为主。旧版全局 Markdown 缓存可能属于
+    // 另一份课件，或只有“未提供正文”的占位文本；仅在完全没有 S1 意图时兼容读取。
     let markdown = ''
     try {
-      const m = window.localStorage.getItem('fuww_s2_markdown')
-      if (m) markdown = m
+      const intent = props.intentSummary || {}
+      const hasIntent = Boolean(
+        String(intent.topic || intent.title || '').trim()
+        || (Array.isArray(intent.knowledge_points) && intent.knowledge_points.length)
+        || (Array.isArray(intent.key_points) && intent.key_points.length)
+      )
+      if (!hasIntent) {
+        const m = window.localStorage.getItem('fuww_s2_markdown')
+        if (m) markdown = m
+      }
     } catch {}
 
     await outlineStore.createOutline({

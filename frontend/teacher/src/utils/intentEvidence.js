@@ -24,3 +24,13 @@ export function evidenceIds(packet) {
   ].map((item) => clean(item?.chunk_id || item?.id)).filter(Boolean)
   return [...new Set(values)]
 }
+
+/** 识别旧版空 Markdown 生成的单节点占位大纲，避免其跨项目缓存后继续复用。 */
+export function isPlaceholderOutline(nodes = []) {
+  if (!Array.isArray(nodes) || nodes.length !== 1) return false
+  const node = nodes[0] || {}
+  const text = [node.title, node.summary, node.content, ...(node.key_points || [])].join(' ')
+  return text.includes('当前课件仅含标题')
+    || text.includes('未提供可切分正文')
+    || text.includes('未提供正文')
+}
