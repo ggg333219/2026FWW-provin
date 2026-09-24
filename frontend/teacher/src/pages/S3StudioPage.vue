@@ -105,6 +105,8 @@
           :session-id="intentStore.sessionId"
           :intent-id="intentStore.intentId"
           :intent-summary="intentStore.intentSummary"
+          :evidence-packet="selectedEvidencePacket"
+          :ready="outlineReady"
           :auto-restore="true"
           @confirm-complete="handleOutlineConfirmed"
           @outline-created="handleOutlineCreated"
@@ -372,12 +374,13 @@ import { useGenerationStore } from "../stores/generationStore";
 import { useOutlineStore } from "../stores/outlineStore";
 import { useInteractiveStore } from "../stores/interactiveStore";
 import { useIntentStore } from "../stores/intentStore";
-import { useMaterialStore } from "../stores/materialStore";
+import { useMaterialStore, isEvidencePacketUsable } from "../stores/materialStore";
 import { useModifyStore } from "../stores/modifyStore";
 import { useCoursewareProjectStore } from "../stores/coursewareProjectStore";
 import { teacherV1Api } from "../services/v1";
 import { projectModifyApi } from "../services/v1/projectModifyApi";
 import { API_BASE, AI_API_BASE } from "../config/api";
+import { buildIntentEvidenceQuery, evidenceIds } from "../utils/intentEvidence";
 
 const generationStore = useGenerationStore();
 const outlineStore = useOutlineStore();
@@ -412,6 +415,7 @@ const baseVersion = ref(Number(route.query.base_version || 0));
 const interactivePreviewUrl = ref("");
 const interactivePreviewTitle = ref("");
 const initializing = ref(true);
+const outlineReady = ref(false);
 
 const asyncActivity = computed(() => {
   if (modifyStore.modifying) return { title: "AI 正在修改课件", detail: "正在理解指令并局部更新相关页面，完成后会自动刷新预览。" };
@@ -425,6 +429,7 @@ const asyncActivity = computed(() => {
 const evidenceId = (item, index) => String(item?.chunk_id || item?.id || `evidence-${index}`);
 const selectedEvidencePacket = computed(() => {
   if (!evidencePacket.value) return null;
+  if (!evidenceSelectionInitialized.value) return evidencePacket.value;
   const selected = new Set(selectedEvidenceIds.value);
   const filter = (items = []) => items.filter((item, index) => selected.has(evidenceId(item, index)));
   return {
@@ -492,7 +497,11 @@ onMounted(async () => {
       const rawDraft = window.localStorage.getItem("fuww_courseware_resume_draft");
       const savedDraft = rawDraft ? JSON.parse(rawDraft) : null;
       if (savedDraft?.outline?.outline_id) {
-        outlineStore._applyOutlineData(savedDraft.outline);
+        if (savedDraft.outline.editable_after_rollback || route.query.from_rollback_version) {
+          outlineStore.restoreEditableSnapshot(savedDraft.outline);
+        } else {
+          outlineStore._applyOutlineData(savedDraft.outline);
+        }
         outlineStore._persist();
       }
       if (savedDraft?.generation) {
@@ -541,7 +550,9 @@ onMounted(async () => {
     if (!restoredGenerationNodes) await loadGenerationStatus();
   }
   if (route.query.phase === "outline") currentPhase.value = "outline";
+  await ensureAutomaticEvidence();
   } finally {
+    outlineReady.value = true;
     initializing.value = false;
   }
 });
@@ -636,6 +647,7 @@ async function handleStartGeneration() {
 
     // 加载生成状态（页面列表）
     await loadGenerationStatus();
+    bindEvidenceToWholeDraft();
 
     // 渲染预览
     generationStore.setGenerateProgress(92, "正在加载预览");
@@ -825,11 +837,69 @@ async function handleEvidenceSearch(query) {
     context: { intent: intentStore.intentSummary || {}, project_id: projectStore.projectId },
   });
   if (packet) {
-    // 新一轮检索默认勾选新证据；后续用户取消勾选时再由受控状态持久化。
-    evidenceSelectionInitialized.value = false;
-    evidencePacket.value = packet;
+    adoptEvidencePacket(packet);
     projectStore.scheduleSave(draftSnapshot(), 0);
   }
+}
+
+function adoptEvidencePacket(packet) {
+  evidencePacket.value = packet;
+  selectedEvidenceIds.value = evidenceIds(packet);
+  evidenceSelectionInitialized.value = true;
+  evidenceScope.value = { scope: "draft", nodeId: "" };
+  generationMode.value = isEvidencePacketUsable(packet) ? "with_evidence" : "without_evidence";
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(`fuww_s2_generation_mode:${intentStore.sessionId}`, generationMode.value);
+  }
+  bindEvidenceToWholeDraft();
+}
+
+function bindEvidenceToWholeDraft() {
+  const refs = evidenceIds(selectedEvidencePacket.value);
+  if (!refs.length) return;
+  outlineStore.bindEvidenceRefs(refs);
+  if (generationStore.currentScriptNodes?.length) {
+    generationStore.setNodes(generationStore.currentScriptNodes.map((node) => ({
+      ...node,
+      citation_refs: refs,
+      source_chunk_ids: refs,
+      metadata: {
+        ...(node.metadata || {}),
+        evidence_scope: "draft",
+        evidence_auto_bound: true,
+        evidence_bound_by: "s1_intent_auto_search",
+      },
+    })));
+  }
+}
+
+async function ensureAutomaticEvidence() {
+  if (isEvidencePacketUsable(evidencePacket.value)) {
+    adoptEvidencePacket(evidencePacket.value);
+    projectStore.scheduleSave(draftSnapshot(), 0);
+    return evidencePacket.value;
+  }
+  const query = buildIntentEvidenceQuery(intentStore.intentSummary || {});
+  if (!query) {
+    generationMode.value = "without_evidence";
+    return null;
+  }
+  const packet = await materialStore.generateEvidence({
+    query,
+    context: {
+      intent: intentStore.intentSummary || {},
+      project_id: projectStore.projectId,
+      binding_scope: "draft",
+      auto_bind: true,
+    },
+  });
+  if (isEvidencePacketUsable(packet)) {
+    adoptEvidencePacket(packet);
+    await projectStore.saveNow(draftSnapshot()).catch(() => {});
+    return packet;
+  }
+  generationMode.value = "without_evidence";
+  return null;
 }
 
 function handleEvidenceSelection(ids) {

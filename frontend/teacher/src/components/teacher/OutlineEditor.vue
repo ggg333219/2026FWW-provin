@@ -302,7 +302,11 @@ const props = defineProps({
   /** 教学意图摘要（用于创建大纲） */
   intentSummary: { type: Object, default: null },
   /** 是否自动尝试从 localStorage 恢复大纲 */
-  autoRestore: { type: Boolean, default: true }
+  autoRestore: { type: Boolean, default: true },
+  /** S1 意图自动检索形成的整份课件证据包 */
+  evidencePacket: { type: Object, default: null },
+  /** 等待父级完成自动检索后再创建大纲，避免先生成后补证据 */
+  ready: { type: Boolean, default: true }
 })
 
 const emit = defineEmits(['confirm-complete', 'outline-created', 'error'])
@@ -331,9 +335,9 @@ if (props.autoRestore) {
 
 // 若无大纲且有 intent，自动创建
 watch(
-  () => [outlineStore.outline_id, outlineStore.nodes.length],
-  ([oid, nc]) => {
-    if (!oid && nc === 0 && props.intentSummary) {
+  () => [outlineStore.outline_id, outlineStore.nodes.length, props.ready],
+  ([oid, nc, ready]) => {
+    if (ready && !oid && nc === 0 && props.intentSummary) {
       handleGenerateOutline()
     }
   },
@@ -346,11 +350,13 @@ async function handleGenerateOutline() {
     return
   }
   try {
-    // 尝试从 localStorage 读取证据包
-    let evidence = null
+    // 优先使用父级按 S1 意图自动检索的证据包，兼容旧版 S2 localStorage 交接。
+    let evidence = props.evidencePacket || null
     try {
-      const raw = window.localStorage.getItem(`fuww_s2_evidence_packet:${props.sessionId}`)
-      if (raw) evidence = JSON.parse(raw)
+      if (!evidence) {
+        const raw = window.localStorage.getItem(`fuww_s2_evidence_packet:${props.sessionId}`)
+        if (raw) evidence = JSON.parse(raw)
+      }
     } catch {}
     // 尝试从 localStorage 读取 markdown 内容
     let markdown = ''
