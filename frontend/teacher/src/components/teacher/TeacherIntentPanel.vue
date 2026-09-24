@@ -230,7 +230,7 @@
             <span><b>教学意图已确认</b><small>{{ store.intentId }}</small></span>
           </div>
           <button class="next-button" @click="goNext">
-            <span>进入 S2 · 融合教学资料</span>
+            <span>进入 S3 · 自动检索并生成</span>
             <svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
           </button>
         </template>
@@ -241,12 +241,13 @@
 
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useIntentStore } from '../../stores/intentStore'
 import VoiceInputButton from '../voice/VoiceInputButton.vue'
 
 const store = useIntentStore()
 const router = useRouter()
+const route = useRoute()
 const draft = ref('')
 const messageList = ref(null)
 const composerInput = ref(null)
@@ -397,8 +398,9 @@ const useFollowup = (question) => {
 }
 const shortQuestion = (question) => question.replace(/[？?]/g, '').replace(/^你?更?/, '').slice(0, 22)
 const confirm = async () => {
-  await store.confirmIntent()
+  const confirmed = await store.confirmIntent()
   await scrollToLatest()
+  if (confirmed) await goNext()
 }
 const handleReset = () => {
   if (store.hasStarted && !window.confirm('重新开始会清空当前 S1 对话与意图摘要，是否继续？')) return
@@ -407,7 +409,15 @@ const handleReset = () => {
   draft.value = ''
   nextTick(() => composerInput.value?.focus())
 }
-const goNext = () => router.push({ name: 'S2Material', query: { sessionId: store.sessionId, intentId: store.intentId } })
+const goNext = () => router.push({
+  name: 'S3Studio',
+  query: {
+    project_id: route.query.project_id,
+    sessionId: store.sessionId,
+    intentId: store.intentId,
+    auto_evidence: '1',
+  },
+})
 
 onMounted(() => {
   store.initialize()

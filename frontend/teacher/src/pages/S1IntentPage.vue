@@ -9,7 +9,7 @@
         <div class="page-header-right">
           <div class="step-pills">
             <span class="pill active">S1 意图</span>
-            <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="pill">S2 资料</router-link>
+            <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="pill">资料上传（可选）</router-link>
             <router-link :to="{ name: 'S3Studio', query: { project_id: projectStore.projectId } }" class="pill">S3 生成</router-link>
             <router-link :to="{ name: 'S4Version', query: { project_id: projectStore.projectId } }" class="pill">S4 版本</router-link>
             <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
@@ -17,10 +17,10 @@
         </div>
       </div>
       <TeacherIntentPanel />
-      <!-- 下一步：S1 → S2 -->
+      <!-- 主流程：S1 → S3；资料上传保留为可选入口 -->
       <div class="next-step-bar">
-        <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="next-step-btn">
-          下一步：补充教学资料 →
+        <router-link :to="{ name: 'S3Studio', query: { project_id: projectStore.projectId, auto_evidence: '1' } }" class="next-step-btn">
+          下一步：自动检索并生成课件 →
         </router-link>
       </div>
     </div>
@@ -60,7 +60,7 @@ onBeforeUnmount(() => projectStore.saveNow(intentDraft()).catch(() => {}))
 onBeforeRouteLeave(async () => { await projectStore.saveNow(intentDraft()).catch(() => {}) })
 
 /**
- * S1 → S2 的冻结交接契约。
+ * S1 → S3 的冻结交接契约（S2 资料上传为可选补充入口）。
  *
  * 只发布已经确认的意图，避免 S2 在教师仍然澄清需求时使用半成品数据。
  * 保留当前 IntentSummary 的 snake_case 字段，同时兼容旧任务文档中的

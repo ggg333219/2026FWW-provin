@@ -26,6 +26,12 @@ beforeEach(() => {
 
 describe('versionStore S4 导出闭环（Mock）', () => {
   it('项目版本可查看并按版本 ID 克隆分叉，保留旧历史', async () => {
+    const outline = {
+      outline_id: 'outline_tcp',
+      outline_version: 2,
+      status: 'confirmed',
+      nodes: [{ node_id: 'outline_1', title: 'TCP 连接建立' }],
+    }
     const versions = [
       { version_id: 'ver_2', version_no: 2, version_summary: '第二版', created_at: '2026-09-23' },
       { version_id: 'ver_1', version_no: 1, version_summary: '首版', created_at: '2026-09-22' },
@@ -35,7 +41,10 @@ describe('versionStore S4 导出闭环（Mock）', () => {
       version_id: versionId,
       version_no: versionId === 'ver_1' ? 1 : 2,
       change_note: versionId === 'ver_1' ? '首版' : '第二版',
-      snapshot: { content: [{ node_id: 'tcp', title: versionId === 'ver_1' ? '握手' : 'TCP 三次握手' }] },
+      snapshot: {
+        content: [{ node_id: 'tcp', title: versionId === 'ver_1' ? '握手' : 'TCP 三次握手' }],
+        outline,
+      },
     } }))
     const rollback = vi.spyOn(projectModifyApi, 'rollback').mockResolvedValue({ data: { base_version_no: 1, new_draft_version_no: 3 } })
 
@@ -43,6 +52,7 @@ describe('versionStore S4 导出闭环（Mock）', () => {
     await store.loadProjectVersions('proj_tcp')
     const detail = await store.loadProjectVersion('proj_tcp', 1)
     expect(detail.nodes[0].title).toBe('握手')
+    expect(detail.outline).toEqual(outline)
     await store.rollbackProject('proj_tcp', 1)
     expect(rollback).toHaveBeenCalledWith('proj_tcp', 'ver_1')
     expect(store.versions).toHaveLength(2)
