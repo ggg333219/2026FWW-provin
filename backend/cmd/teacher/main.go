@@ -216,6 +216,8 @@ func newBaseEngine(mode string) *gin.Engine {
 func runS1Standalone(mode string, preferredPort int, runtimeDir string, aiClient service.AIEngine) {
 	r := newBaseEngine(mode)
 	convHandler := handler.NewConversationHandler(aiClient)
+	parseHandler := handler.NewParseHandler(aiClient)
+	knowledgeHandler := handler.NewKnowledgeHandler(aiClient)
 	outlineService := service.NewOutlineService(aiClient)
 	outlineHandler := handler.NewOutlineHandler(outlineService)
 	coursewareService := service.NewCoursewareService(aiClient)
@@ -259,6 +261,26 @@ func runS1Standalone(mode string, preferredPort int, runtimeDir string, aiClient
 	{
 		intent.POST("/extract", convHandler.ExtractIntent)
 		intent.POST("/confirm", convHandler.ConfirmIntent)
+	}
+
+	// S2/KB 同样不依赖 PostgreSQL 或 MinIO：解析结果与向量索引由 AI Engine
+	// 管理。轻量模式必须保留这些路由，否则 S1→S3 自动检索会固定 404，
+	// 前端只能错误降级成无资料生成。
+	parse := r.Group("/api/v1/parse")
+	{
+		parse.POST("/upload", parseHandler.Upload)
+		parse.POST("/process", parseHandler.ProcessFile)
+		parse.GET("/status/:task_id", parseHandler.ParseStatus)
+		parse.POST("/video", parseHandler.ProcessVideo)
+	}
+	rag := r.Group("/api/v1/rag")
+	{
+		rag.POST("/search", knowledgeHandler.Search)
+		rag.POST("/evidence", knowledgeHandler.Evidence)
+	}
+	knowledge := r.Group("/api/v1/knowledge")
+	{
+		knowledge.POST("/upload", knowledgeHandler.Upload)
 	}
 
 	outlines := r.Group("/api/v1/outlines")

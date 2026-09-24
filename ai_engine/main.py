@@ -27,6 +27,7 @@ from ai_engine.reconstructor import LessonReconstructor, ReconstructionConfig
 from ai_engine.recommendation.service import router as recommendation_router
 from ai_engine.gen.outline import OutlineBuilder, OutlineConfig
 from ai_engine.gen.modify_intent import ModifyIntentParser
+from ai_engine.gen.evidence_binding import bind_evidence_to_draft_nodes
 from ai_engine.gen.node import NodeGenerator, NodeGenConfig
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
@@ -665,6 +666,9 @@ class ModifyRequest(BaseModel):
     commands: list[dict[str, Any]]  # 结构化命令列表
     regenerate: bool = False
     course_name: str | None = None
+    page_id: str | None = None
+    evidence_refs: list[str] = Field(default_factory=list)
+    user_instruction: str = ""
 
 
 class InteractiveRequest(BaseModel):
@@ -1158,6 +1162,30 @@ async def render_preview(req: PreviewRequest):
         raise HTTPException(status_code=500, detail=f"预览渲染失败: {str(e)}")
 
 
+def _load_page_evidence(evidence_refs: list[str] | None) -> tuple[str, list[str]]:
+    """Load only explicitly bound chunks for page-scoped regeneration."""
+    if not evidence_refs:
+        return "", []
+    from importlib import import_module
+
+    store = import_module("ai_engine.rag.router")._store
+    blocks: list[str] = []
+    used: list[str] = []
+    for raw_ref in evidence_refs:
+        ref = str(raw_ref or "").strip()
+        if not ref or ref in used:
+            continue
+        chunk = store.get_chunk(ref)
+        content = str(getattr(chunk, "content", "") or "").strip() if chunk else ""
+        if not content:
+            continue
+        used.append(ref)
+        blocks.append(f"[{ref}] {content}")
+    if not blocks:
+        return "", []
+    return "仅依据以下已绑定证据修改，不得引用其他资料：\n" + "\n\n".join(blocks), used
+
+
 @app.post("/api/v1/gen/modify")
 async def modify_nodes(req: ModifyRequest):
     """[S4] 修改命令：应用编辑命令到节点树
@@ -1210,11 +1238,42 @@ async def modify_nodes(req: ModifyRequest):
 
     # 执行修补
     generator = NodeGenerator(NodeGenConfig()) if req.regenerate else None
-    regenerate_fn = (lambda nid, node: generator.generate_single(node, req.course_name)) if generator else None
+    evidence_context, evidence_used = _load_page_evidence(req.evidence_refs)
+
+    def regenerate_node(nid, node):
+        if not generator:
+            return node
+        applies_to_page = not req.page_id or str(nid) == str(req.page_id)
+        parts = []
+        if applies_to_page and req.user_instruction.strip():
+            parts.append(req.user_instruction.strip())
+        if applies_to_page and evidence_context:
+            parts.append(evidence_context)
+        return generator.generate_single(
+            node,
+            req.course_name,
+            extra_instruction="\n\n".join(parts),
+        )
+
+    regenerate_fn = regenerate_node if generator else None
     try:
         result = await asyncio.to_thread(patcher.apply, nodes, parse_result.commands, regenerate_fn)
     except Exception as e:
         raise _llm_endpoint_error(e, "修改命令执行失败")
+
+    # 把本次实际使用的绑定证据写回目标页；不让请求中的缺失 chunk 伪装成引用。
+    if evidence_used and not result.errors:
+        target_ids = {str(req.page_id)} if req.page_id else {
+            str(command.params.get("node_id"))
+            for command in parse_result.commands
+            if command.params.get("node_id")
+        }
+        for node in result.nodes:
+            if target_ids and str(node.get("node_id")) not in target_ids:
+                continue
+            refs = list(dict.fromkeys([*(node.get("source_chunk_ids") or []), *evidence_used]))
+            node["source_chunk_ids"] = refs
+            node["citation_refs"] = list(refs)
 
     # 保存修改结果
     version_number = None
@@ -1255,6 +1314,9 @@ async def modify_nodes(req: ModifyRequest):
         "changes": result.changes,
         "errors": result.errors,
         "version_number": version_number,
+        "page_id": req.page_id,
+        "citation_refs": evidence_used,
+        "evidence_used": evidence_used,
     }
 
 
@@ -1613,6 +1675,9 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         # generation pipeline must validate only the internal TeachingNode
         # enum, so normalize both confirmed and legacy paths at one boundary.
         nodes = normalize_generation_nodes(nodes)
+        # S1→S3 自动检索绑定的是整份 PPT 草稿。必须在 AI 任务与版本快照
+        # 层写入引用，不能只依赖前端渲染后补字段，否则刷新/回滚会丢绑定。
+        nodes = bind_evidence_to_draft_nodes(nodes, evidence_dict)
         task.nodes = [TeachingNode.model_validate(node) for node in nodes]
         task.progress_pct = 50.0
 
