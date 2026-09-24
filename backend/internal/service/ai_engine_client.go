@@ -755,11 +755,12 @@ type VersionLockResponse struct {
 }
 
 type ExportCreateRequest struct {
-	Format          string   `json:"format"`
-	Version         int      `json:"version"`
-	VersionID       string   `json:"version_id,omitempty"`
-	Formats         []string `json:"formats,omitempty"`
-	CoursewareTitle string   `json:"courseware_title,omitempty"`
+	Format          string             `json:"format"`
+	Version         int                `json:"version"`
+	VersionID       string             `json:"version_id,omitempty"`
+	Formats         []string           `json:"formats,omitempty"`
+	CoursewareTitle string             `json:"courseware_title,omitempty"`
+	Nodes           []TeachingNodeItem `json:"nodes,omitempty"`
 }
 
 type ExportCreateResponse struct {

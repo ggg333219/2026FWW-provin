@@ -714,6 +714,9 @@ class ExportRequest(BaseModel):
     format: ExportFormat = ExportFormat.PPTX
     version: Optional[int] = 0
     courseware_title: str = ""
+    # S4 项目版本导出时，Go 端的项目快照是权威数据源；允许直接传入
+    # 当前版本节点，避免依赖 AI Engine 进程本地的旧版本目录。
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ExportStatusResponse(BaseModel):

@@ -230,6 +230,31 @@ def test_exp_contract_returns_versioned_filename():
     assert body["version"] == 1
 
 
+def test_export_accepts_project_snapshot_nodes_without_engine_version(monkeypatch, tmp_path):
+    """项目版本由 Go 持久化时，导出不应依赖 AI Engine 本地版本目录。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main_module._task_store, "_use_redis", False)
+
+    generation_id = "course_project_snapshot_only"
+    exported = client.post(f"/api/v1/exp/{generation_id}", json={
+        "format": "interactive",
+        "version": 7,
+        "courseware_title": "高等数学1",
+        "nodes": [{
+            "node_id": "node_003",
+            "title": "定积分概念",
+            "node_type": "slide",
+            "content": "面积累积的思想",
+            "summary": "定积分的几何意义",
+        }],
+    })
+
+    assert exported.status_code == 200
+    body = exported.json()
+    assert body["filename"] == "高等数学1_v7.html"
+    assert body["version_no"] == 7
+
+
 def test_gen_modify_supports_content_task_ids():
     """测试 /api/v1/gen/modify 支持以 content_ 开头的任务 ID（内容修改场景）。"""
     import ai_engine.main as main_module

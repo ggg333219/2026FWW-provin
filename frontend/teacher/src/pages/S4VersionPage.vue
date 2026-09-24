@@ -358,7 +358,13 @@ async function handleSubmitModify() {
 
 function handleStartExport(format) {
   if (!versionStore.genId) return
-  versionStore.startExport(versionStore.genId, format, versionStore.currentVersionDetail?.version || null, courseTitle.value)
+  versionStore.startExport(
+    versionStore.genId,
+    format,
+    versionStore.currentVersionDetail?.version || null,
+    courseTitle.value,
+    versionStore.currentVersionDetail?.nodes || [],
+  )
 }
 
 async function handleContinueFromLocked() {

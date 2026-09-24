@@ -1895,14 +1895,20 @@ async def export_create(gen_id: str, req: ExportRequest):
     """
     job_id = f"exp_{uuid.uuid4().hex[:12]}"
 
-    # 按用户选中的版本导出；version<=0 时才回退最新版本。
-    vm = get_version_manager()
     requested_version = int(req.version or 0)
-    selected = vm.load_version(gen_id, requested_version) if requested_version > 0 else vm.load_version(gen_id)
-    if not selected:
-        raise HTTPException(status_code=404, detail="版本不存在")
-    nodes = selected.nodes_snapshot
-    selected_version = selected.version_number
+    # S4 项目版本以 Go/PostgreSQL 的快照为权威来源。传入 nodes 时直接
+    # 导出该快照，避免 AI Engine 重启或跨存储后找不到同名 generation 版本。
+    if req.nodes:
+        nodes = req.nodes
+        selected_version = requested_version if requested_version > 0 else 1
+    else:
+        # 兼容旧调用：按 generation_id 从 AI Engine 版本存储加载。
+        vm = get_version_manager()
+        selected = vm.load_version(gen_id, requested_version) if requested_version > 0 else vm.load_version(gen_id)
+        if not selected:
+            raise HTTPException(status_code=404, detail="版本不存在")
+        nodes = selected.nodes_snapshot
+        selected_version = selected.version_number
     courseware_title = (req.courseware_title or "课件").strip() or "课件"
 
     # 创建导出任务
