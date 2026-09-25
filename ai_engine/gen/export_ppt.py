@@ -350,7 +350,7 @@ class PPTExporter:
     @staticmethod
     def _node_body_text(node: dict[str, Any]) -> str:
         parts = []
-        for field in ("content", "script", "summary"):
+        for field in ("content", "summary"):
             value = node.get(field)
             if isinstance(value, str) and value.strip():
                 parts.append(value.strip())
@@ -503,11 +503,11 @@ class PPTExporter:
             key_items = [("摘要", summary, False)]
 
         body_items: list[tuple[str, str, bool]] = []
-        for label, field in (("正文", "content"), ("讲稿", "script")):
+        for label, field in (("正文", "content"),):
             value = node.get(field)
             if isinstance(value, str) and value.strip():
                 body_items.append((label, value.strip(), False))
-        segment_items = self._segment_items(node)
+        segment_items = []
         right_items = body_items + segment_items
         if body_items and segment_items:
             right_heading = "内容与讲授分段"
@@ -659,7 +659,7 @@ class PPTExporter:
 
     def _main_items(self, node: dict[str, Any]) -> list[tuple[str, str, bool]]:
         items: list[tuple[str, str, bool]] = []
-        for label, field in (("正文", "content"), ("讲稿", "script"), ("摘要", "summary")):
+        for label, field in (("正文", "content"), ("摘要", "summary")):
             value = node.get(field)
             if isinstance(value, str) and value.strip():
                 items.append((label, value.strip(), False))
@@ -673,21 +673,8 @@ class PPTExporter:
         return items
 
     def _segment_items(self, node: dict[str, Any]) -> list[tuple[str, str, bool]]:
-        items: list[tuple[str, str, bool]] = []
-        for segment in node.get("segments") or []:
-            segment = _as_mapping(segment)
-            text = str(segment.get("text") or segment.get("content") or "").strip()
-            if not text:
-                continue
-            raw_type = _enum_value(segment.get("segment_type")) or "explanation"
-            label = _SEGMENT_LABELS.get(raw_type, raw_type or "讲解")
-            seconds = segment.get("estimated_seconds")
-            if seconds in (None, "", 0):
-                seconds = segment.get("duration_seconds") or segment.get("estimated_duration")
-            duration = self._format_duration(seconds)
-            heading = f"{label} · {duration}" if duration else label
-            items.append((heading, text, False))
-        return items
+        # 按需求：导出PPT不展示讲稿分段内容，仅保留核心要点
+        return []
 
     @staticmethod
     def _format_duration(value: Any) -> str:
