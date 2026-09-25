@@ -140,7 +140,12 @@ func main() {
 	coursewareProjectHandler := handler.NewCoursewareProjectHandler(service.NewCoursewareProjectService(db))
 	// A6/A7: 修改对话 + 版本快照 + 回滚
 	if err := service.AutoMigrateCourseware(db); err != nil {
-		applogger.Warn("courseware 表迁移失败", zap.Error(err))
+		// 不致命，但要显眼：AutoMigrate 一旦报错就整体中断，缺的表/列不会补，
+		// 服务却照常起来，直到 S3 修改对话落版本快照时才以 SQLSTATE 42703 暴露。
+		applogger.Error("courseware 表迁移失败，模块1 的版本快照/页面绑定可能不可用",
+			zap.Error(err),
+			zap.String("hint", "确认 courseware_versions 等表结构与 internal/service/courseware_service.go 的模型一致"),
+		)
 	}
 	coursewareService := service.NewCoursewareServiceWithDB(aiClient, db)
 	// 把 coursewareService 透传给 genHandler：让 POST /api/v1/gen/modify 在

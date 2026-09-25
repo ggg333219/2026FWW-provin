@@ -1,0 +1,63 @@
+{
+  "layout_id": "cover",
+  "display_name": "课程封面页",
+  "slide_size": [13.333, 7.5],
+  "elements": {
+    "bg_rect": {
+      "type": "rect",
+      "x": 0,
+      "y": 0,
+      "width": 13.333,
+      "height": 7.5,
+      "fill_theme": "primary"
+    },
+    "left_accent_bar": {
+      "type": "rect",
+      "x": 0,
+      "y": 0,
+      "width": 0.23,
+      "height": 7.5,
+      "fill_theme": "accent"
+    },
+    "bottom_band": {
+      "type": "rect",
+      "x": 0.23,
+      "y": 6.92,
+      "width": 13.11,
+      "height": 0.58,
+      "fill_theme": "secondary"
+    },
+    "title_text": {
+      "type": "text",
+      "x": 1.05,
+      "y": 2.05,
+      "width": 11.23,
+      "height": 1.75,
+      "font_size": 40,
+      "bold": true,
+      "align": "center",
+      "valign": "middle",
+      "color_theme": "inverse"
+    },
+    "subtitle_text": {
+      "type": "text",
+      "x": 1.6,
+      "y": 4.0,
+      "width": 10.13,
+      "height": 0.95,
+      "font_size": 20,
+      "align": "center",
+      "color_theme": "inverse"
+    },
+    "brand_text": {
+      "type": "text",
+      "x": 1.08,
+      "y": 6.19,
+      "width": 3.4,
+      "height": 0.3,
+      "font_size": 11,
+      "bold": true,
+      "color_theme": "inverse"
+    }
+  }
+}

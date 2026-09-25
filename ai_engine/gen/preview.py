@@ -1,4 +1,4 @@
-"""
+﻿"""
 预览渲染模块 — S4 个性化满足
 
 职责：
@@ -23,6 +23,16 @@ import html
 import re
 from dataclasses import dataclass
 from typing import Any
+from .polish import polish_nodes
+from .presentation import (
+    DENSITY_PADDING,
+    FALLBACK_DENSITY_PADDING,
+    FALLBACK_FONT_STACK,
+    FALLBACK_PALETTE,
+    FONT_STACKS,
+    PALETTES,
+    presentation_from_nodes,
+)
 
 
 @dataclass
@@ -96,30 +106,17 @@ class PreviewRenderer:
         Returns:
             HTML 字符串（可直接嵌入 iframe 或保存为 .html）
         """
-        slides_html = self._build_slides(nodes)
-        return self._wrap_html(course_name, slides_html, self._presentation_from_nodes(nodes))
+        polished_nodes = polish_nodes(nodes)
+        slides_html = self._build_slides(polished_nodes)
+        return self._wrap_html(course_name, slides_html, self._presentation_from_nodes(polished_nodes))
 
     @staticmethod
     def _presentation_from_nodes(nodes: list[dict[str, Any]]) -> dict[str, str]:
-        """读取前端样式层写入节点 metadata 的全局呈现配置。"""
-        defaults = {
-            "palette": "classic",
-            "layout": "balanced",
-            "font_family": "system",
-            "density": "comfortable",
-        }
-        for node in nodes or []:
-            if not isinstance(node, dict):
-                continue
-            metadata = node.get("metadata") or {}
-            presentation = metadata.get("presentation") or node.get("presentation") or {}
-            if isinstance(presentation, dict):
-                for key in defaults:
-                    value = str(presentation.get(key) or "").strip()
-                    if value:
-                        defaults[key] = value
-                break
-        return defaults
+        """读取前端样式层写入节点 metadata 的全局呈现配置。
+
+        映射表与 PPTX 导出共用 gen/presentation.py，保证两端取值不会漂移。
+        """
+        return presentation_from_nodes(nodes)[0]
 
     def render_node(self, node: dict[str, Any], index: int = 1) -> str:
         """生成单个节点的预览 HTML"""
@@ -203,7 +200,7 @@ class PreviewRenderer:
         questions = self._as_raw_list(node.get("questions") or node.get("interactive_questions"))
         if not questions:
             questions = self._extract_key_points(node) or self._split_content_into_points(
-                str(node.get("content") or "").strip()
+                str(node.get("content") or node.get("summary") or "").strip()
             )
         items = "".join(self._render_question(q) for q in questions)
         script_html = self._render_script_block(node)
@@ -221,7 +218,7 @@ class PreviewRenderer:
         questions = self._interactive_questions(node)
         if not questions:
             questions = self._extract_key_points(node) or self._split_content_into_points(
-                str(node.get("content") or "").strip()
+                str(node.get("content") or node.get("summary") or "").strip()
             )
         items = "".join(self._render_question(q) for q in questions)
         script_html = self._render_script_block(node)
@@ -462,20 +459,10 @@ class PreviewRenderer:
         layout = presentation.get("layout", "balanced")
         font_family = presentation.get("font_family", "system")
         density = presentation.get("density", "comfortable")
-        palette_css = {
-            "classic": ("#168f82", "#eef3f1", "#18322f", "#d9ebe6", "#0b4f49"),
-            "klein-blue": ("#315fd4", "#eef2f8", "#17253f", "#dce5f6", "#203f98"),
-        }.get(palette, ("#168f82", "#eef3f1", "#18322f", "#d9ebe6", "#0b4f49"))
-        font_css = {
-            "system": "-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif",
-            "source-han": "'Source Han Sans SC', 'Noto Sans CJK SC', sans-serif",
-            "serif": "'Songti SC', 'STSong', 'SimSun', serif",
-        }.get(font_family, "-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif")
-        padding_css = {
-            "minimal": "56px 64px 60px",
-            "compact": "36px 44px 40px",
-            "comfortable": "44px 52px 48px",
-        }.get(density, "44px 52px 48px")
+        # 取值来自 gen/presentation.py，与 PPTX 导出共用同一张表
+        palette_css = PALETTES.get(palette, PALETTES[FALLBACK_PALETTE])
+        font_css = FONT_STACKS.get(font_family, FALLBACK_FONT_STACK)
+        padding_css = DENSITY_PADDING.get(density, FALLBACK_DENSITY_PADDING)
         body_padding = "28px" if layout == "visual" else ("16px" if layout == "text" else "20px")
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">

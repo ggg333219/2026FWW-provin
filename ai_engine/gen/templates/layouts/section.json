@@ -1,0 +1,53 @@
+{
+  "layout_id": "section",
+  "display_name": "章节分隔页",
+  "slide_size": [13.333, 7.5],
+  "elements": {
+    "left_block": {
+      "type": "rect",
+      "x": 0,
+      "y": 0,
+      "width": 4.2,
+      "height": 7.5,
+      "fill_theme": "primary"
+    },
+    "accent_divider": {
+      "type": "rect",
+      "x": 4.2,
+      "y": 0,
+      "width": 0.12,
+      "height": 7.5,
+      "fill_theme": "accent"
+    },
+    "section_number": {
+      "type": "text",
+      "x": 0.75,
+      "y": 1.35,
+      "width": 2.3,
+      "height": 1.0,
+      "font_size": 46,
+      "bold": true,
+      "color_theme": "inverse"
+    },
+    "section_title": {
+      "type": "text",
+      "x": 4.95,
+      "y": 2.25,
+      "width": 7.45,
+      "height": 1.7,
+      "font_size": 32,
+      "bold": true,
+      "valign": "middle",
+      "color_theme": "text"
+    },
+    "section_summary": {
+      "type": "text",
+      "x": 5.0,
+      "y": 4.15,
+      "width": 6.9,
+      "height": 1.0,
+      "font_size": 18,
+      "color_theme": "muted"
+    }
+  }
+}

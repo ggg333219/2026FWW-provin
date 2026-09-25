@@ -1,4 +1,4 @@
-"""PPTX 导出模块 — 结构化教学节点到可编辑 PowerPoint。
+﻿"""PPTX 导出模块 — 结构化教学节点到可编辑 PowerPoint。
 
 导出器只消费现有节点字段，不改变底层 Schema。页面类型、要点和讲授分段均采用
 与预览侧相同的兼容读取策略，并以原生文本/形状生成 Office、WPS 可编辑文件。
@@ -22,6 +22,7 @@ from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
+from .presentation import presentation_from_nodes, presentation_to_theme
 from .templates import get_theme
 
 
@@ -115,6 +116,10 @@ class PPTExporter:
     def __init__(self, config: ExportPPTConfig | None = None):
         self.config = config or ExportPPTConfig()
         self._theme = get_theme(self.config.default_template)
+        # 样式层是否启用：由 _render 依据节点 metadata.presentation 决定。
+        # 未启用时保持既有主题与圆角观感，历史课件导出零变化。
+        self._styled = False
+        self._panel_shape = MSO_SHAPE.ROUNDED_RECTANGLE
 
     def export(self, nodes: list[dict[str, Any]], course_name: str = "课件",
                template_id: str = "default") -> dict[str, Any]:
@@ -143,9 +148,23 @@ class PPTExporter:
 
     def _render(self, nodes: list[dict[str, Any]], course_name: str,
                 template_id: str) -> Presentation:
-        self._theme = get_theme(template_id or self.config.default_template)
         prs = self._create_presentation(template_id)
         normalized = [_as_mapping(node) for node in (nodes or [])]
+        # 样式层与预览同源，都读节点 metadata.presentation。取润色前的节点做判定，
+        # 避免润色参与样式决策；只有用户显式选过样式（或选了自带样式的模板）才启用，
+        # 没传 presentation 的历史课件仍走 catalog 里的既有主题。
+        presentation, explicit_keys = presentation_from_nodes(normalized)
+        self._theme, self._styled = presentation_to_theme(
+            presentation, explicit_keys, template_id or self.config.default_template)
+        self._panel_shape = MSO_SHAPE.RECTANGLE if self._styled else MSO_SHAPE.ROUNDED_RECTANGLE
+        # 导出前自动润色内容 + 全量质量检查
+        from .polish import polish_nodes
+        from .quality_checker import run_full_check
+        normalized = polish_nodes(normalized)
+        check_result = run_full_check(normalized)
+        warnings = check_result.get('warnings', [])
+        if warnings:
+            print(f'[PPT导出] 质量检查警告: {warnings}')
         auto_cover = self.config.include_auto_cover or not normalized
         toc_entries = self._toc_entries(normalized) if self.config.include_auto_toc else []
         leading_cover = auto_cover or (normalized and resolve_node_type(normalized[0]) == "cover")
@@ -281,7 +300,7 @@ class PPTExporter:
             for offset, text in enumerate(chunk):
                 row, col = divmod(offset, 2)
                 x, y = col_x[col], 1.6 + row * (card_h + gap_y)
-                self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, y, card_w, card_h,
+                self._add_shape(slide, self._panel_shape, x, y, card_w, card_h,
                                 self._theme.surface, line=self._theme.muted)
                 self._add_shape(slide, MSO_SHAPE.OVAL, x + 0.2, y + 0.26, 0.5, 0.5,
                                 self._theme.accent)
@@ -439,7 +458,7 @@ class PPTExporter:
         box_y, box_h = y + 0.52, 1.1
         for i, step in enumerate(steps):
             x = 0.72 + i * (box_w + arrow_w)
-            self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, box_y, box_w, box_h,
+            self._add_shape(slide, self._panel_shape, x, box_y, box_w, box_h,
                             self._theme.surface, line=self._theme.secondary)
             self._add_shape(slide, MSO_SHAPE.OVAL, x + box_w / 2 - 0.16, box_y + 0.1,
                             0.32, 0.32, self._theme.accent)
@@ -482,7 +501,7 @@ class PPTExporter:
         row_y = y + 0.52
         for i, point in enumerate(points):
             text = point if len(point) <= 40 else point[:39] + "…"
-            self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, 0.72, row_y, 11.88, row_h,
+            self._add_shape(slide, self._panel_shape, 0.72, row_y, 11.88, row_h,
                             self._theme.surface, line=self._theme.muted)
             self._add_shape(slide, MSO_SHAPE.OVAL, 0.94, row_y + row_h / 2 - 0.16,
                             0.32, 0.32, self._theme.accent)
@@ -623,7 +642,7 @@ class PPTExporter:
             y = 1.62
             for offset, text in enumerate(chunk):
                 number = chunk_index * 5 + offset + 1
-                self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, 0.72, y, 11.88, 0.78,
+                self._add_shape(slide, self._panel_shape, 0.72, y, 11.88, 0.78,
                                 self._theme.surface, line=self._theme.muted)
                 self._add_shape(slide, MSO_SHAPE.OVAL, 1.0, y + 0.19, 0.4, 0.4,
                                 self._theme.secondary)
@@ -636,7 +655,7 @@ class PPTExporter:
                 y += 0.9
             if chunk_index == len(chunks) - 1:
                 # 结尾收束条：致谢语固定在末页底部
-                self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, 0.72, 6.2, 11.88, 0.6,
+                self._add_shape(slide, self._panel_shape, 0.72, 6.2, 11.88, 0.6,
                                 self._theme.primary)
                 self._add_textbox(slide, "感谢聆听 · 本节内容到此结束", 0.72, 6.32, 11.88, 0.4,
                                   font_size=14, color=self._theme.inverse, bold=True,
@@ -761,7 +780,7 @@ class PPTExporter:
 
     def _add_panel(self, slide, heading: str, items: list[tuple[str, str, bool]],
                    x: float, y: float, width: float, height: float) -> None:
-        self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, y, width, height,
+        self._add_shape(slide, self._panel_shape, x, y, width, height,
                         self._theme.surface, line=self._theme.muted)
         self._add_textbox(slide, heading, x + 0.28, y + 0.18, width - 0.56, 0.36,
                           font_size=15, color=self._theme.secondary, bold=True)
@@ -809,7 +828,12 @@ class PPTExporter:
         shape.shadow.inherit = False
         if line:
             shape.line.color.rgb = self._rgb(line)
-            shape.line.transparency = 60
+            if self._styled:
+                # 样式层启用：改用 1px 实线描边。默认的 60% 透明描边是"柔和阴影"
+                # 观感，与方角 + 细线的设计语言冲突。
+                shape.line.width = Pt(0.75)
+            else:
+                shape.line.transparency = 60
         else:
             shape.line.fill.background()
         return shape

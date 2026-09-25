@@ -833,7 +833,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
     try:
         # ---- B6: 局部重生成分支 ----
         if req.target_node_ids and req.mode == "partial":
-            from gen.partial_content import run_partial_pipeline
+            from ai_engine.gen.partial_content import run_partial_pipeline
             generator = NodeGenerator()
             updated_nodes = run_partial_pipeline(
                 nodes=req.nodes,
@@ -1148,6 +1148,8 @@ async def render_preview(req: PreviewRequest):
             if snapshot.summary and snapshot.summary not in ("", "课件预览", "初始版本", f"版本 {version_number}"):
                 course_name = snapshot.summary
 
+        # 预览必须走 PreviewRenderer：它是唯一读取 metadata.presentation
+        # （配色/字体/密度）的渲染器，且内部已自行润色（见 preview.py render()）。
         html_content = renderer.render(nodes, course_name)
         return {
             "html": html_content,
