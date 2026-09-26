@@ -731,6 +731,10 @@ class GenContentRequest(BaseModel):
     """[B6] 修改动作：simplify/expand/rewrite/restyle 等"""
     modify_constraints: list[str] = Field(default_factory=list)
     """[B6] 教师修改约束"""
+    evidence_refs: list[str] = Field(default_factory=list)
+    """[契约 v1.0 模块1] 页面级绑定的证据 chunk_id 列表。
+    与 /gen/modify 的 evidence_refs 同义：只允许引用这些 chunk 的原文。
+    Go 端 Modify 从 courseware_page_bindings 取目标节点的绑定后透传。"""
 
 
 class GenContentStatusResponse(BaseModel):
@@ -835,12 +839,18 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         if req.target_node_ids and req.mode == "partial":
             from ai_engine.gen.partial_content import run_partial_pipeline
             generator = NodeGenerator()
+            # 页面级绑定证据（契约 v1.0 模块1）：教师显式绑到这些页上的 chunk
+            # 优先级高于课件级 context_markdown，放在前面一起作为参考材料。
+            bound_evidence, _bound_used = _load_page_evidence(req.evidence_refs)
+            partial_context = "\n\n".join(
+                part for part in (bound_evidence.strip(), (req.context_markdown or "").strip()) if part
+            )
             updated_nodes = run_partial_pipeline(
                 nodes=req.nodes,
                 target_node_ids=req.target_node_ids,
                 modify_action=req.modify_action or "rewrite",
                 modify_constraints=req.modify_constraints,
-                context_markdown=req.context_markdown,
+                context_markdown=partial_context,
                 course_name=req.course_name,
                 generator=generator,
             )
@@ -891,7 +901,9 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                         {"script": "", "segments": []},
                     )
                 else:
-                    script_data = generator.generate_single(node, req.course_name)
+                    script_data = generator.generate_single(
+                        node, req.course_name, context_markdown=req.context_markdown
+                    )
 
                     merged = {**node, **script_data}
                 completed.append(merged)

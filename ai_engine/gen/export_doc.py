@@ -55,6 +55,7 @@ class DOCExporter:
             {"path": "输出路径", "sections": N, "file_size": N}
         """
         doc = self._build_document(nodes, course_name)
+        _format_normalizer(doc)
 
         safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in course_name)
         output_path = Path(self.config.output_dir) / f"{safe_name}.docx"
@@ -70,6 +71,7 @@ class DOCExporter:
     def export_to_bytes(self, nodes: list[dict[str, Any]], course_name: str = "课件") -> io.BytesIO:
         """导出为内存字节流（供直接上传 MinIO）"""
         doc = self._build_document(nodes, course_name)
+        _format_normalizer(doc)
         buf = io.BytesIO()
         doc.save(buf)
         buf.seek(0)
@@ -161,21 +163,78 @@ class DOCExporter:
 # （ascii/hAnsi/eastAsia 三处同时设置）。
 # =============================================================================
 
-LESSON_PLAN_FONT = "微软雅黑"
+# 统一字体规范：中文正文宋体，西文/数字Times New Roman，标题黑体
+FONT_CN_BODY = "宋体"
+FONT_CN_HEADING = "黑体"
+FONT_EN_BODY = "Times New Roman"
 
 
-def _apply_ea_font(run: Any, name: str = LESSON_PLAN_FONT) -> None:
-    """DOCX run 设置中文字体：ascii/hAnsi 走 name，eastAsia 单独设置（WPS 识别关键）。"""
-    run.font.name = name
+def _apply_run_font(run: Any, cn_name: str = FONT_CN_BODY, en_name: str = FONT_EN_BODY) -> None:
+    """统一设置Run的中英文字体，同时写ascii/hAnsi/eastAsia三个属性，WPS/Word全兼容。"""
+    run.font.name = en_name
     rpr = run._element.get_or_add_rPr()
     rfonts = rpr.get_or_add_rFonts()
-    rfonts.set(qn("w:eastAsia"), name)
+    rfonts.set(qn("w:ascii"), en_name)
+    rfonts.set(qn("w:hAnsi"), en_name)
+    rfonts.set(qn("w:eastAsia"), cn_name)
+
+
+def _format_normalizer(doc: Document) -> None:
+    """全局格式清洗：遍历所有段落、Run、表格，强制统一字体，不修改粗体/颜色/字号。"""
+    # 1. 统一文档默认Style
+    styles = doc.styles
+    for style_name, cn_font in [("Normal", FONT_CN_BODY), ("List Bullet", FONT_CN_BODY), ("List Number", FONT_CN_BODY)]:
+        try:
+            st = styles[style_name]
+            st.font.name = FONT_EN_BODY
+            st.font.size = Pt(12)
+            rpr = st.element.get_or_add_rPr()
+            rfonts = rpr.get_or_add_rFonts()
+            rfonts.set(qn("w:ascii"), FONT_EN_BODY)
+            rfonts.set(qn("w:hAnsi"), FONT_EN_BODY)
+            rfonts.set(qn("w:eastAsia"), cn_font)
+        except:
+            pass
+    for h_level in [1,2,3]:
+        try:
+            st = styles[f"Heading {h_level}"]
+            st.font.name = FONT_EN_BODY
+            rpr = st.element.get_or_add_rPr()
+            rfonts = rpr.get_or_add_rFonts()
+            rfonts.set(qn("w:ascii"), FONT_EN_BODY)
+            rfonts.set(qn("w:hAnsi"), FONT_EN_BODY)
+            rfonts.set(qn("w:eastAsia"), FONT_CN_HEADING)
+        except:
+            pass
+
+    # 2. 遍历所有段落Run
+    for para in doc.paragraphs:
+        is_heading = para.style.name.startswith("Heading") or para.style.name == "Title"
+        cn_font = FONT_CN_HEADING if is_heading else FONT_CN_BODY
+        for run in para.runs:
+            _apply_run_font(run, cn_font=cn_font)
+
+    # 3. 遍历所有表格单元格Run
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        _apply_run_font(run, cn_font=FONT_CN_BODY)
+
+    # 4. 遍历页眉页脚
+    for section in doc.sections:
+        for hf in [section.header, section.footer]:
+            for para in hf.paragraphs:
+                for run in para.runs:
+                    _apply_run_font(run, cn_font=FONT_CN_BODY)
 
 
 def _set_run(run: Any, text: str | None = None, size: float | None = None, bold: bool = False) -> None:
     if text is not None:
         run.text = text
-    _apply_ea_font(run)
+    cn_font = FONT_CN_HEADING if bold and size >= 14 else FONT_CN_BODY
+    _apply_run_font(run, cn_name=cn_font)
     if size is not None:
         run.font.size = Pt(size)
     if bold:
@@ -206,6 +265,7 @@ class LessonPlanDOCExporter:
             {"path": 输出路径, "sections": 章节数, "file_size": 字节数}
         """
         doc = self._build_document(plan)
+        _format_normalizer(doc)
         plan_dict = _plan_as_mapping(plan)
         safe_name = "".join(
             c if c.isalnum() or c in " _-" else "_" for c in plan_dict.get("course_name") or "教案"
@@ -223,6 +283,7 @@ class LessonPlanDOCExporter:
     def export_to_bytes(self, plan: Any) -> io.BytesIO:
         """导出为内存字节流（供上传 MinIO）。"""
         doc = self._build_document(plan)
+        _format_normalizer(doc)
         buf = io.BytesIO()
         doc.save(buf)
         buf.seek(0)

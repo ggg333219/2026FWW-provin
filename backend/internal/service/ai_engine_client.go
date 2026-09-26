@@ -834,6 +834,8 @@ type GenContentRequest struct {
 	TargetNodeIDs     []string `json:"target_node_ids,omitempty"`
 	ModifyAction      string   `json:"modify_action,omitempty"`
 	ModifyConstraints []string `json:"modify_constraints,omitempty"`
+	// 契约 v1.0 模块1：目标页绑定的证据 chunk_id，由 Python 侧解析成原文注入提示词
+	EvidenceRefs []string `json:"evidence_refs,omitempty"`
 }
 
 type GenContentStatusResponse struct {

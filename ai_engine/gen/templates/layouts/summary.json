@@ -24,11 +24,20 @@
     "summary_card_list": {
       "type": "card_list",
       "x": 0.72,
-      "y": 1.62,
+      "y": 1.5,
       "width": 11.88,
-      "card_height": 0.78,
-      "card_gap": 0.12,
-      "max_cards": 5
+      "card_height": 0.7,
+      "card_gap": 0.1,
+      "max_cards": 3
+    },
+    "notes_region": {
+      "type": "text_list",
+      "x": 0.72,
+      "y": 3.95,
+      "width": 11.88,
+      "height": 2.1,
+      "font_size": 14,
+      "color_theme": "text"
     },
     "ending_bar": {
       "type": "rounded_rect",

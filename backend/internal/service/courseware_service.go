@@ -410,6 +410,37 @@ func (s *CoursewareService) GetPageBindings(ctx context.Context, projectID strin
 	return s.store.GetPageBindings(ctx, projectID)
 }
 
+// targetEvidenceRefs 收集目标页在页面级绑定里的证据 chunk_id（契约 v1.0 模块1）。
+//
+// 绑定以 page_id 为 key，而 S3 的页面即节点（page_001 ↔ node_001），
+// 因此直接按 target id 取。未绑定的目标返回 nil。
+// 绑定表读不到时同样返回 nil —— 证据是增强项，不该让局部修改整体失败。
+func (s *CoursewareService) targetEvidenceRefs(ctx context.Context, projectID string, targetIDs []string) []string {
+	if len(targetIDs) == 0 {
+		return nil
+	}
+	bindings, err := s.store.GetPageBindings(ctx, projectID)
+	if err != nil {
+		return nil
+	}
+	var refs []string
+	seen := make(map[string]bool, len(targetIDs))
+	for _, id := range targetIDs {
+		binding, ok := bindings[id]
+		if !ok {
+			continue
+		}
+		for _, ref := range binding.EvidenceRefs {
+			if ref == "" || seen[ref] {
+				continue
+			}
+			seen[ref] = true
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
 // ---- A6: 修改编排 + 版本快照 ----
 
 // ModifyResult —— modify 响应。
@@ -426,7 +457,8 @@ type ModifyResult struct {
 
 // Modify 修改编排：解析意图 → （低置信度则追问）→ 局部生成 → 更新草稿 → 版本快照。
 func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction string, nodes []TeachingNodeItem) (*ModifyResult, error) {
-	if _, err := s.store.GetProject(ctx, projectID); err != nil {
+	project, err := s.store.GetProject(ctx, projectID)
+	if err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(instruction) == "" {
@@ -467,12 +499,17 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 	// 4) 内容类动作（simplify/expand/rewrite）→ B6 局部重生成
 	switch intent.Action {
 	case "simplify", "expand", "rewrite":
+		// CourseName 与 EvidenceRefs 都必须显式带上：Python 侧靠它们决定
+		// 「基于哪份材料改」。此前只传 nodes，局部修改等于凭空重写，
+		// 与 S3 大纲/内容生成走 RAG 的行为不一致。
 		resp, err := s.aiClient.GenerateContent(ctx, GenContentRequest{
 			Nodes:             updatedNodes,
 			Mode:              "partial",
+			CourseName:        project.Title,
 			TargetNodeIDs:     intent.TargetIDs,
 			ModifyAction:      intent.Action,
 			ModifyConstraints: intent.Constraints,
+			EvidenceRefs:      s.targetEvidenceRefs(ctx, projectID, intent.TargetIDs),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("局部重生成失败: %w", err)

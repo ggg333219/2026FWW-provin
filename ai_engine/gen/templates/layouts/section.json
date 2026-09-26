@@ -48,6 +48,15 @@
       "height": 1.0,
       "font_size": 18,
       "color_theme": "muted"
+    },
+    "section_list_region": {
+      "type": "text_list",
+      "x": 4.95,
+      "y": 5.3,
+      "width": 7.45,
+      "height": 1.6,
+      "font_size": 16,
+      "color_theme": "text"
     }
   }
 }

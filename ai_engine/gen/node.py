@@ -57,6 +57,39 @@ def _safe_estimated_seconds(value: Any) -> int:
     return max(_SEGMENT_SECONDS_MIN, min(_SEGMENT_SECONDS_MAX, seconds))
 
 
+def _normalize_single_segments(raw: Any, node_id: str) -> list[dict]:
+    """规整 generate_single 拿到的 segments（单节点路径）。
+
+    逐段校验规则与 `_normalize_enhanced_scripts` 同源：非 dict 跳过、缺 text 跳过、
+    segment_type / 时长给默认值。两处差别：
+
+      - segment_id 缺失时按序号补 `seg_001` 形态。整批生成里 node_id 可能串台，
+        所以那里缺 id 宁可丢弃；单节点只有一个 node_id，补号不会产生歧义，
+        为了一颗漏写的 id 丢掉整段内容不划算。
+      - node_id 一律用本节点的权威值覆盖，避免模型自创 id（prompt 明令禁止）。
+    """
+    if not isinstance(raw, list):
+        return []
+    segments: list[dict] = []
+    for index, seg in enumerate(raw, start=1):
+        if not isinstance(seg, dict):
+            continue
+        text = str(seg.get("text") or "").strip()
+        if not text:
+            continue
+        segments.append({
+            "segment_id": str(seg.get("segment_id") or "").strip() or f"seg_{index:03d}",
+            "text": text,
+            "node_id": node_id,
+            "segment_type": str(seg.get("segment_type") or "explanation").strip(),
+            "estimated_seconds": _safe_estimated_seconds(seg.get("estimated_seconds")),
+            "difficulty": str(seg.get("difficulty") or "medium").strip(),
+            "interaction_hint": str(seg.get("interaction_hint") or "").strip(),
+            "knowledge_card": seg.get("knowledge_card") or {},
+        })
+    return segments
+
+
 @dataclass
 class NodeGenConfig:
     """节点生成配置"""
@@ -120,12 +153,16 @@ class NodeGenerator:
 
     def generate_single(self, node: dict[str, Any], course_name: str | None = None,
                         max_attempts: Optional[int] = None,
-                        extra_instruction: str = "") -> dict[str, Any]:
+                        extra_instruction: str = "",
+                        context_markdown: str = "") -> dict[str, Any]:
         """生成单个节点的讲稿（供 S4 修补时部分重生成使用）
 
         max_attempts: 收紧 LLM 重试次数（1 = 不重试），None 时按环境变量/默认值。
         extra_instruction: [B6] 局部重生成时的修改指令（如"精简内容，增加生活案例"），
                            追加到 user_prompt，不传则行为与原版完全一致。
+        context_markdown: 检索到的参考材料（知识库证据）。非空时作为「参考材料」块
+                          追加到 user_prompt，格式与 outline.py 的 _format_evidence 一致。
+                          不传则 prompt 与之前逐字相同（向后兼容）。
         """
         node_id = str(node.get("node_id") or "node_unknown")
         title = str(node.get("title") or "未命名节点")
@@ -157,11 +194,28 @@ class NodeGenerator:
             )
             if extra_instruction:
                 user_prompt += f"\n【修改要求】\n{extra_instruction}\n"
+            if context_markdown:
+                user_prompt += (
+                    "\n【参考材料】\n"
+                    "以下是从知识库检索到的相关资料，生成讲稿时须以其为准，"
+                    "不得编造材料中不存在的知识点：\n"
+                    f"{context_markdown}\n"
+                )
             result = self._get_llm(max_attempts).chat_json(system_prompt, user_prompt,
                                                            temperature=self.config.temperature)
+            segments = _normalize_single_segments(result.get("segments"), node_id)
+            script = self._clean_text(result.get("script"))
+            if not script and segments:
+                # prompt 约定 script = 所有 segments.text 拼接，模型漏给 script 时补齐，
+                # 保证两者不会互相矛盾（与 _normalize_enhanced_scripts 同一处理）
+                script = "".join(seg["text"] for seg in segments)
             return {
                 "node_id": node_id, "title": title,
-                "script": self._clean_text(result.get("script")) or fallback["script"],
+                "script": script or fallback["script"],
+                # 不混用 fallback 的 segments：那会和模型给的 script 对不上，
+                # 预览里「讲授文本」与「分段」各说各话比没有分段更糟。
+                # 模型整批失败走下面的 except 分支，返回的 fallback 本身自洽。
+                "segments": segments,
                 "mindmap_markdown": self._clean_text(result.get("mindmap_markdown")) or fallback["mindmap_markdown"],
                 "interactive_questions": result.get("interactive_questions") or fallback["interactive_questions"],
                 "reteach_script": self._clean_text(result.get("reteach_script")) or fallback["reteach_script"],
@@ -293,14 +347,28 @@ class NodeGenerator:
                          core_points: list, examples: list, confusions: list) -> dict:
         details = "; ".join(core_points[:3]) if core_points else summary or title
         example_text = examples[0] if examples else f"可以结合{title}的典型应用场景帮助学生理解。"
-        script = (
-            f"这一部分我们围绕「{title}」来讲。"
-            f"先抓住几个关键点: {details}。"
-            f"讲到这里时，可以用「{example_text}」作为课堂例子。"
-            "最后再回到本节点结论，帮助学生形成完整理解。"
-        )
+        # 兜底讲稿与 segments 同源：script 严格等于各 segment.text 拼接，与生成 prompt
+        # 的约定（"script = 所有 segments.text 拼接"）保持一致。此前只回 script 不回
+        # segments，导致局部重生成路径（partial_content 按 segments 落库）每次都会把
+        # 该节点的分段清空，预览里的「分段」区块随之消失。
+        parts = [
+            ("opening", f"这一部分我们围绕「{title}」来讲。", 30),
+            ("explanation", f"先抓住几个关键点: {details}。", 60),
+            ("example", f"讲到这里时，可以用「{example_text}」作为课堂例子。", 60),
+            ("summary", "最后再回到本节点结论，帮助学生形成完整理解。", 30),
+        ]
+        segments = [
+            {
+                "segment_id": f"seg_{index:03d}", "text": text, "node_id": node_id,
+                "segment_type": segment_type, "estimated_seconds": seconds,
+            }
+            for index, (segment_type, text, seconds) in enumerate(parts, start=1)
+        ]
         return {
-            "node_id": node_id, "title": title, "script": script,
+            "node_id": node_id, "title": title,
+            # 与改动前的 script 逐字相同，只是改成由 segments 拼出，避免两处漂移
+            "script": "".join(seg["text"] for seg in segments),
+            "segments": segments,
             "mindmap_markdown": f"- {title}",
             "interactive_questions": [f"你觉得「{title}」最关键的点是什么？"],
             "reteach_script": f"重新解释{title}的核心概念。",

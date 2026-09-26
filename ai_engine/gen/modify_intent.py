@@ -1,4 +1,4 @@
-"""B5: 修改意图理解与节点定位。
+﻿"""B5: 修改意图理解与节点定位。
 
 把教师的自然语言修改指令解析为结构化修改操作：
   POST /api/v1/ai/parse_modify
@@ -19,8 +19,8 @@ import json
 import logging
 from typing import Any
 
-from core.config import settings
-from core.llm import LLMClient
+from ai_engine.core.config import settings
+from ai_engine.core.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 

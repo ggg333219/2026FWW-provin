@@ -148,6 +148,66 @@ func TestModifySnapshotPerCall(t *testing.T) {
 	}
 }
 
+// TestModifyPartialCarriesCourseNameAndBoundEvidence —— 局部重生成必须带上
+// course_name 与目标页绑定的证据 chunk_id。
+//
+// 回归的是「局部修改凭空重写」：此前 Go 侧构造 GenContentRequest 时只填了
+// nodes/target/action/constraints，course_name 与证据都没传，Python 侧拿不到
+// 任何材料，只能靠模型自由发挥 —— 与 S3 大纲/内容生成走 RAG 的行为不一致。
+func TestModifyPartialCarriesCourseNameAndBoundEvidence(t *testing.T) {
+	ai := &fakeModifyAI{
+		intent: &ModifyIntent{
+			TargetType: "node", TargetIDs: []string{"node_2"},
+			Action: "expand", Confidence: 0.9,
+		},
+		genResp: &GenContentStatusResponse{Status: "done"},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc) // 项目标题为 "排序算法"
+
+	// node_2 绑定两个 chunk（含一个重复项，应去重），node_3 的不该被带上
+	if _, err := svc.SavePageBindings(context.Background(), p.ProjectID, []PageEvidenceBinding{
+		{PageID: "node_2", EvidenceRefs: []string{"chunk_a", "chunk_b", "chunk_a"}},
+		{PageID: "node_3", EvidenceRefs: []string{"chunk_z"}},
+	}); err != nil {
+		t.Fatalf("SavePageBindings: %v", err)
+	}
+
+	if _, err := svc.Modify(context.Background(), p.ProjectID, "第二页展开讲讲", sampleTeachingNodes()); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if ai.lastGenReq == nil {
+		t.Fatal("应调用局部生成")
+	}
+	if ai.lastGenReq.CourseName != "排序算法" {
+		t.Fatalf("course_name 应为项目标题, 实际 %q", ai.lastGenReq.CourseName)
+	}
+	got := ai.lastGenReq.EvidenceRefs
+	if len(got) != 2 || got[0] != "chunk_a" || got[1] != "chunk_b" {
+		t.Fatalf("应只带目标页绑定并去重, 实际 %v", got)
+	}
+}
+
+// TestModifyPartialWithoutBindingsSendsNoEvidence —— 未绑定时不伪造证据。
+func TestModifyPartialWithoutBindingsSendsNoEvidence(t *testing.T) {
+	ai := &fakeModifyAI{
+		intent: &ModifyIntent{
+			TargetType: "node", TargetIDs: []string{"node_2"},
+			Action: "simplify", Confidence: 0.9,
+		},
+		genResp: &GenContentStatusResponse{Status: "done"},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+
+	if _, err := svc.Modify(context.Background(), p.ProjectID, "第二页精简", sampleTeachingNodes()); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if len(ai.lastGenReq.EvidenceRefs) != 0 {
+		t.Fatalf("无绑定时不应带证据, 实际 %v", ai.lastGenReq.EvidenceRefs)
+	}
+}
+
 // TestModifyClarification —— A6: 低置信度返回追问，不执行修改。
 func TestModifyClarification(t *testing.T) {
 	ai := &fakeModifyAI{

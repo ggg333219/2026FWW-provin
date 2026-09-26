@@ -58,6 +58,15 @@
       "font_size": 11,
       "bold": true,
       "color_theme": "inverse"
+    },
+    "cover_points_region": {
+      "type": "text_list",
+      "x": 1.6,
+      "y": 5.05,
+      "width": 10.13,
+      "height": 1.0,
+      "font_size": 14,
+      "color_theme": "inverse"
     }
   }
 }
