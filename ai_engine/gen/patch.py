@@ -91,8 +91,14 @@ class NodePatcher:
                     try:
                         new_node = regenerate_fn(node_id, node)
                         if new_node:
-                            nodes[nodes.index(node)] = new_node
-                            node = new_node
+                            # 合并而非整体替换：regenerate_fn（generate_single）只返回
+                            # script / segments / point_details 等少数几个 key，直接替换
+                            # 会冲掉 type / node_type / key_points / summary / figure /
+                            # teaching_plan —— 幻灯片会当场退化成"没有要点、没有图示"，
+                            # 而且下一次局部修改还会接着丢别的字段。
+                            merged_node = {**node, **new_node}
+                            nodes[nodes.index(node)] = merged_node
+                            node = merged_node
                     except Exception as e:
                         return {"error": f"重生成节点 {node_id} 失败: {e}"}
                 return {

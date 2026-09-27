@@ -13,6 +13,10 @@
 gen/svg_renderer.py 渲染的 SVG 承载**。内容该画哪些字段不再由本模块决定 ——
 那是 gen/page_spec.py 的职责；本模块只负责「外壳 class 与整页 CSS」。
 
+幻灯片是给学生看的，讲稿与分段不上屏：page_spec 把它们标成 ROLE_TEACHER，
+由本模块渲染进**幻灯片下方的折叠区** `<details class="script-panel">`（默认收起）。
+这样教师审阅时讲稿仍随手可读，投影出去的页面却不含讲授文本。
+
 这样做的原因：此前预览、PPTX 导出、SVG 三个渲染器各自去 node 里挑字段，
 同一个页面三处内容对不上，局部修改只在预览里可见。字段挑选收敛到 page_spec
 之后，渲染器之间只剩下摆版差异。
@@ -28,7 +32,13 @@ import html
 from dataclasses import dataclass
 from typing import Any
 
-from .page_spec import build_page_spec, resolve_kind
+from .page_spec import (
+    Block,
+    ROLE_TEACHER,
+    block_to_html,
+    build_page_spec,
+    resolve_kind,
+)
 from .polish import polish_nodes
 from .presentation import (
     DENSITY_PADDING,
@@ -59,6 +69,26 @@ _SLIDE_CLASSES = {
     "summary": "summary-slide",
     "content": "content-slide",
 }
+
+
+def _script_panel_html(blocks: list[Block]) -> str:
+    """幻灯片下方的讲稿折叠区（教师用）。
+
+    幻灯片是给学生看的，讲稿与分段不上屏；但教师审阅时仍要读得到，所以留在同一份
+    HTML 里、默认折叠。内容仍由 page_spec 的 ROLE_TEACHER 区块经 block_to_html
+    渲染 —— markup 一字未改，只是换了位置。
+
+    没有 teacher 区块时整块不输出：旧节点（无 script 无 segments）不该多出一条
+    空的折叠条，`verify_preview_render.py` 的「不产生空区块」正是断言这一点。
+    """
+    body = "".join(block_to_html(b) for b in blocks if b.role == ROLE_TEACHER)
+    if not body.strip():
+        return ""
+    return f"""
+<details class="script-panel">
+  <summary>🎤 讲授文本与分段（教师用，不投影给学生）</summary>
+  <div class="script-panel-body">{body}</div>
+</details>"""
 
 
 class PreviewRenderer:
@@ -102,8 +132,9 @@ class PreviewRenderer:
 
         预览的默认调色板历来是 classic（`_wrap_html` 的 `PALETTES[FALLBACK_PALETTE]`），
         所以这里直接用 `theme_from_palette` 而不是 `presentation_to_theme` ——
-        后者的 catalog 兜底（2D5F58）是导出侧的默认，会给历史课件换色。
-        两个函数都在 presentation.py 里，调色板取值仍是同一张表。
+        后者还会看模板自带的调色板（catalog 主题）。两个函数都在 presentation.py 里，
+        调色板取值仍是同一张表；导出侧在没有 palette 时同样落到 classic，
+        两端从同一套令牌出发。
         """
         palette = presentation.get("palette", FALLBACK_PALETTE)
         font_family = presentation.get("font_family", "system")
@@ -140,10 +171,11 @@ class PreviewRenderer:
         # 页型同步传给 build_page_spec，避免在这里与 _resolve_type 各判一次
         spec = build_page_spec(node, index, node_type)
         svg = render_page_spec_to_svg(spec, self._theme)
-        return f"""<div class="slide {slide_class}">
+        slide = f"""<div class="slide {slide_class}">
   <div class="slide-num">{index}</div>
   {svg}
 </div>"""
+        return slide + _script_panel_html(spec.blocks)
 
     # ── HTML 包装 ──
 
@@ -294,6 +326,31 @@ class PreviewRenderer:
   .kc-tags {{ display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }}
   .kc-tags span {{ font-size: 11px; background: #eef3fa; color: #445; padding: 1px 8px;
                    border-radius: 999px; }}
+
+  /* ── 讲稿折叠区：幻灯片给学生看，讲稿与分段只给教师看，默认收起 ── */
+  .script-panel {{ margin: 10px 0 26px; border: 1px dashed #cbd5e4; border-radius: 14px;
+                   background: #fbfcfe; }}
+  .script-panel > summary {{ cursor: pointer; padding: 12px 18px; font-size: 13px; font-weight: 600;
+                            color: #5f6c84; list-style: none; }}
+  .script-panel > summary::-webkit-details-marker {{ display: none; }}
+  .script-panel > summary::before {{ content: "▸"; display: inline-block; margin-right: 8px;
+                                     transition: transform .15s; }}
+  .script-panel[open] > summary::before {{ transform: rotate(90deg); }}
+  .script-panel-body {{ padding: 2px 18px 18px; }}
+  .script-panel-body > .script-block:first-child {{ margin-top: 0; }}
+
+  /* ── 要点展开：要点原文一行，下面是延伸出来的说明 ── */
+  .point-details {{ list-style: none; display: grid; gap: 8px; }}
+  .point-details .kp-item {{ padding: 7px 12px; border-left: 3px solid #4361ee;
+                             background: rgba(67,97,238,.05); border-radius: 0 8px 8px 0; }}
+  .point-details .kp-highlight {{ display: block; font-size: 14px; }}
+  .kp-detail {{ margin-top: 3px; font-size: 12.5px; line-height: 1.65; color: #4a5468; }}
+
+  /* ── 大字结论：规划器给的 key_conclusion，学生离开这一页时该记住的那句话 ── */
+  .conclusion-block {{ margin: 0; padding: 8px 0 8px 16px;
+                       border-left: 6px solid var(--preview-accent); }}
+  .conclusion-text {{ margin: 0; font-size: 21px; font-weight: 700; line-height: 1.45;
+                      color: var(--preview-ink); letter-spacing: .2px; }}
 
   /* ── 空态 ── */
   .empty-state {{ text-align: center; padding: 60px 20px; color: #94a3b8; font-size: 15px; }}

@@ -157,20 +157,32 @@ def presentation_to_theme(
 ) -> tuple[PPTTheme, bool]:
     """样式层 → PPTX 主题。返回 (主题, 是否启用了样式层)。
 
-    只有用户显式选过样式（或选了自带样式的模板）才启用样式层；
-    没传 presentation 的历史课件落回 catalog 里的既有主题，导出配色与改动前一致。
+    取值顺序与预览完全一致（见 preview.PreviewRenderer._theme_from_presentation）：
+    用户显式选的 palette → 模板自带的 palette → 默认调色板 classic。
+
+    这里以前在没有 palette 时回落到 catalog 主题（primary 2D5F58、accent E89B52），
+    而预览从来不用 catalog —— 于是"没选样式"的课件，预览是亮青绿的 classic，
+    导出是暗墨绿的 catalog.default，八个令牌没一个对得上。预览是样式的单一事实
+    来源，导出跟着它走，两边才会是同一页。
+
+    `styled` 保留在返回值里供调用方判断"是否套用了调色板"；现在这条路径恒为 True
+    —— 预览从不以"无样式"渲染，导出也不该。
     """
     palette_key = values.get("palette") if "palette" in explicit else None
     if not palette_key:
         palette_key = TEMPLATE_DEFAULT_PALETTE.get(str(template_id or "").strip().lower())
+    font_family = values.get("font_family") if "font_family" in explicit else "system"
 
     if palette_key in PALETTES:
-        font_family = values.get("font_family") if "font_family" in explicit else "system"
         return theme_from_palette(palette_key, font_family or "system"), True
 
+    # 自带配色的 catalog 主题（academic / minimal）继续保留，只有 default 让位给 classic
     theme = get_theme(template_id)
-    if "font_family" in explicit:
-        font = PPTX_FONTS.get(values.get("font_family") or "")
-        if font:
-            theme = replace(theme, title_font=font, body_font=font)
-    return theme, False
+    if theme.template_id != "default":
+        if "font_family" in explicit:
+            font = PPTX_FONTS.get(values.get("font_family") or "")
+            if font:
+                theme = replace(theme, title_font=font, body_font=font)
+        return theme, True
+
+    return theme_from_palette(FALLBACK_PALETTE, font_family or "system"), True

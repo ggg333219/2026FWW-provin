@@ -85,6 +85,30 @@ def build_stage2_node_tree_schema() -> dict[str, Any]:
     }
 
 
+def _point_details_schema() -> dict[str, Any]:
+    """内容页「要点展开」的 JSON Schema 片段（两个 stage3 schema 共用，避免漂移）。
+
+    每个要点配 1~2 句展开，是内容页正文的主角：`key_points` 只有标题，学生看到的是
+    「相邻元素两两比较」；`point_details` 才回答「所以呢」。
+
+    **刻意不放进 `required`** —— 模型漏给时页面上少一块展开即可；一旦写进 required，
+    某次 schema 校验失败会让整批讲稿退兜底（`generate_all` 的 except 分支），代价远
+    大于少一块展开。与既有的 `difficulty` / `knowledge_card` 同一处置。
+    """
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "point": {"type": "string"},
+                "detail": {"type": "string"},
+            },
+            "required": ["point", "detail"],
+        },
+    }
+
+
 def build_stage3_script_schema() -> dict[str, Any]:
     return {
         "name": "stage3_node_scripts",
@@ -102,6 +126,7 @@ def build_stage3_script_schema() -> dict[str, Any]:
                             "node_id": {"type": "string"},
                             "title": {"type": "string"},
                             "script": {"type": "string"},
+                            "point_details": _point_details_schema(),
                             "segments": {
                                 "type": "array",
                                 "items": {
@@ -142,6 +167,7 @@ def build_enhanced_script_schema() -> dict[str, Any]:
                             "node_id": {"type": "string"},
                             "title": {"type": "string"},
                             "script": {"type": "string"},
+                            "point_details": _point_details_schema(),
                             "segments": {
                                 "type": "array",
                                 "items": {
@@ -399,6 +425,8 @@ def normalize_stage3_scripts(scripts: list[dict[str, Any]] | None, valid_node_id
                 "questions": normalize_text_list(questions_raw) or normalize_text_list(interactive_raw),
                 "interactive_questions": normalize_text_list(interactive_raw) or normalize_text_list(questions_raw),
                 "segments": segments,
+                # 内容页「要点展开」的正文来源。缺失时页面上少一块，不会变形。
+                "point_details": normalize_point_details((item or {}).get("point_details")),
                 "layout_hint": _normalize_optional_text((item or {}).get("layout_hint")),
                 "font_size_hint": _normalize_optional_text((item or {}).get("font_size_hint")),
                 "text_alignment": _normalize_optional_text((item or {}).get("text_alignment")),
@@ -759,6 +787,31 @@ def normalize_text_list(value: Any) -> list[str]:
                 result.append(text.strip())
         elif item is not None:
             result.append(str(item).strip())
+    return result
+
+
+def normalize_point_details(value: Any) -> list[dict[str, str]]:
+    """把 point_details 归一成 [{"point", "detail"}]。
+
+    这是内容页「要点展开」的正文来源 —— 由 S3（讲稿阶段）为每个要点写 1~2 句展开，
+    所以局部修改（同样走 S3 的 generate_single）能连它一起重生成，改动才在幻灯片上
+    看得见。
+
+    放在 schema.py 而不是 gen/page_spec.py，是因为 schema.py 不依赖任何 ai_engine
+    子模块，是唯一不会引起循环导入的共享位置（gen/__init__ → node → schema）。
+    口径与原实现一致：任一字段为空的条目直接丢弃；`point` 缺失时用 `detail` 兜底，
+    避免出现只有标题没有展开的空壳。
+    """
+    if not isinstance(value, (list, tuple)):
+        return []
+    result: list[dict[str, str]] = []
+    for raw in value:
+        item = raw if isinstance(raw, dict) else {"detail": raw}
+        point = str(item.get("point") or item.get("title") or "").strip()
+        detail = str(item.get("detail") or item.get("text") or "").strip()
+        if not point and not detail:
+            continue
+        result.append({"point": point or detail, "detail": detail})
     return result
 
 

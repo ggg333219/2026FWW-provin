@@ -24,9 +24,9 @@ HTML 放进 <foreignObject>：浏览器自己排版换行，HTML 源码里文本
 from __future__ import annotations
 
 import math
-import xml.sax.saxutils as saxutils
 from typing import Any
 
+from .diagrams import render_figure_svg
 from .page_spec import (
     Block,
     PageSpec,
@@ -36,6 +36,7 @@ from .page_spec import (
     build_page_spec,
     extract_key_points,
     resolve_kind,
+    xml_escape,
 )
 from .presentation import presentation_from_nodes, presentation_to_theme
 from .templates import PPTTheme, get_layout
@@ -65,14 +66,16 @@ _LAYOUT_BY_KIND = {
     "content": "content_left_right",
 }
 
-#: 页面类型 → (主区块区域元素名, 次区块区域元素名)。None 表示该页无此区域。
+#: 页面类型 → (主区块区域名, 次区块区域名, 图示区域名)。None 表示该页无此区域。
+#: 内容页把右栏一分为二：上半图示、下半正文 —— 图示单独一个区域才能拿到固定的
+#: 版面高度，而不是和正文抢同一段空间。
 _REGIONS_BY_KIND = {
-    "cover": ("cover_points_region", None),
-    "section": ("section_list_region", None),
-    "summary": ("summary_card_list", "notes_region"),
-    "quiz": ("main_content", None),
-    "interactive": ("main_content", None),
-    "content": ("right_panel_content", "left_panel_content"),
+    "cover": ("cover_points_region", None, None),
+    "section": ("section_list_region", None, None),
+    "summary": ("summary_card_list", "notes_region", None),
+    "quiz": ("main_content", None, None),
+    "interactive": ("main_content", None, None),
+    "content": ("right_panel_content", "left_panel_content", "figure_region"),
 }
 
 #: 区域元素名 → 该区域标题元素名（标题画在区域左上角）
@@ -81,8 +84,13 @@ _REGION_TITLE_ELEMENTS = {
     "left_panel_content": "left_panel_title",
 }
 
+#: 左栏（核心要点）的三个元素。节点没有 key_points 时整栏一起抹掉，见
+#: _widen_right_column —— 区域为空时 _lay_out_region 本来就不画内容，留下的
+#: 只有版式里的那块底板，看上去就是一个空方框。
+_LEFT_COLUMN_ELEMENTS = ("left_panel", "left_panel_title", "left_panel_content")
+
 #: 版式里这些元素不画自己 —— 它们的位置交给 Block 填充
-_CONTENT_BEARING_TYPES = {"text_list", "card_list"}
+_CONTENT_BEARING_TYPES = {"text_list", "card_list", "figure"}
 
 #: 页型 → 标题前缀。切到 SVG 之前这些 emoji 挂在各页的 <h2> 上，
 #: 现在标题画在版式 title_bar 里，前缀在这里补齐以保持观感。
@@ -120,10 +128,9 @@ resolve_key_points = extract_key_points
 # ---- 基础工具 ----
 
 def _esc(text: Any) -> str:
-    """XML 转义。除 `&<>` 外还转义引号 —— 这些值也会出现在属性里
-    （aria-label / font-family），`saxutils.escape` 默认不管引号。
-    """
-    return saxutils.escape(str(text or ""), {'"': "&quot;", "'": "&apos;"})
+    """XML 转义。实现在 page_spec.xml_escape —— HTML 片段与 SVG 属性共用一份，
+    避免两处各写一遍慢慢漂移。"""
+    return xml_escape(text)
 
 
 def _color(theme: PPTTheme, token: str) -> str:
@@ -231,6 +238,19 @@ def _block_units(block: Block) -> float:
         return max(1.0, math.ceil(chars / 44))
     if block.kind == "bullets":
         return max(1.0, len(block.items) * 0.62)
+    if block.kind == "conclusion":
+        # 大字结论：一行半的高度给足，它是这一页最该被看见的东西
+        chars = sum(len(p) for p in block.paragraphs)
+        return max(1.6, math.ceil(chars / 22) * 1.2)
+    if block.kind == "details":
+        # 每个要点 = 一行标题 + 展开的正文行数
+        return sum(
+            1.0 + math.ceil(len(str(entry.get("detail") or "")) / 42)
+            for entry in block.items
+        ) or 1.0
+    if block.kind == "figure":
+        # 图示在内容页独占 figure_region，这里的权重只在与别的区块同区域时起作用
+        return 4.0
     return 1.0
 
 
@@ -298,9 +318,16 @@ def _lay_out_blocks(
             available -= reserved
 
     for block, block_height in zip(blocks, _allocate_heights(blocks, available)):
-        parts.append(
-            _foreign_object(0.0, cursor, width, block_height, block_to_html(block), block.role)
-        )
+        if block.kind == "figure":
+            # 图示走原生 SVG 图元、不套 foreignObject：它正是最需要「SVG → 位图」
+            # 也活下来的部分，而 foreignObject 在部分转换器里不渲染。
+            figure_svg = render_figure_svg(block.figure, theme, width, block_height)
+            if figure_svg:
+                parts.append(f'<g transform="translate(0, {cursor:.1f})">{figure_svg}</g>')
+        else:
+            parts.append(
+                _foreign_object(0.0, cursor, width, block_height, block_to_html(block), block.role)
+            )
         cursor += block_height + _BLOCK_GAP
 
     return "".join(parts)
@@ -339,6 +366,61 @@ def _lay_out_region(
     return f'<g transform="translate({x + _REGION_PADDING:.1f}, {y + _REGION_PADDING:.1f})">{inner}</g>'
 
 
+def _merge_right_column(elements: dict[str, dict]) -> dict[str, dict]:
+    """没有图示时，把右栏的图示面板与正文面板合并成一整块。
+
+    版式 JSON 描述的是「有图示」时的默认形态。图示缺失还照画，右栏上半会留一块
+    空白面板 —— 不如让正文占满。标题与正文区按其在下方面板内的原偏移整体上移，
+    底边内缩量保持不变，正文才不会顶到面板边框。
+    """
+    top, bottom = elements.get("figure_panel"), elements.get("right_panel")
+    content, title = elements.get("right_panel_content"), elements.get("right_panel_title")
+    if not (top and bottom and content):
+        return {}
+
+    merged_y = float(top.get("y", 0))
+    bottom_edge = float(bottom.get("y", 0)) + float(bottom.get("height", 0))
+    shift = merged_y - float(bottom.get("y", 0))  # 下方面板整体上移的量（负值）
+
+    overrides = {
+        "right_panel": {"y": merged_y, "height": bottom_edge - merged_y},
+        # 上移多少就长高多少
+        "right_panel_content": {
+            "y": float(content.get("y", 0)) + shift,
+            "height": float(content.get("height", 0)) - shift,
+        },
+    }
+    if title:
+        overrides["right_panel_title"] = {"y": float(title.get("y", 0)) + shift}
+    return overrides
+
+
+def _widen_right_column(elements: dict[str, dict]) -> dict[str, dict]:
+    """没有核心要点时，抹掉左栏、把右栏整体左移并撑满。
+
+    与 _merge_right_column 同源：版式 JSON 描述的是「左右两栏都在」的默认形态，
+    缺一样就按缺了的样子重算。右栏左移量 = 左栏左边距 − 右栏左边距（负值），
+    凡是起点在右栏左边界及其右侧的元素都跟着平移同样的量、并补上等宽 ——
+    图示面板、正文面板与它们的标题内容一起变宽，右栏净多出三分之一。
+
+    标题条、页脚这些 x 小于右栏左边界的通栏元素不参与，它们的宽度本就是整页。
+    """
+    left, right = elements.get("left_panel"), elements.get("right_panel")
+    if not (left and right):
+        return {}
+
+    shift = float(left.get("x", 0)) - float(right.get("x", 0))
+    right_x = float(right.get("x", 0))
+    if shift >= 0:
+        return {}
+
+    return {
+        name: {"x": float(elem.get("x", 0)) + shift, "width": float(elem.get("width", 0)) - shift}
+        for name, elem in elements.items()
+        if name not in _LEFT_COLUMN_ELEMENTS and float(elem.get("x", 0)) >= right_x
+    }
+
+
 def render_page_spec_to_svg(
     spec: PageSpec,
     theme: PPTTheme,
@@ -361,9 +443,40 @@ def render_page_spec_to_svg(
     width, height = slide_w * _PX_PER_INCH, slide_h * _PX_PER_INCH
     slide_area = width * height
 
-    primary_region, secondary_region = _REGIONS_BY_KIND.get(spec.kind, (None, None))
-    primary_blocks = [b for b in spec.blocks if b.role == ROLE_PRIMARY]
+    primary_region, secondary_region, figure_region = _REGIONS_BY_KIND.get(
+        spec.kind, (None, None, None)
+    )
+    # 图示单独一路：它有专属区域，不与正文抢同一段空间。
+    # ROLE_TEACHER 的区块（讲稿、分段）不上幻灯片 —— 这里按 role 取值，天然排除。
+    figure_blocks = [b for b in spec.blocks if b.kind == "figure"]
+    primary_blocks = [b for b in spec.blocks if b.role == ROLE_PRIMARY and b.kind != "figure"]
     secondary_blocks = [b for b in spec.blocks if b.role == ROLE_SECONDARY]
+
+    if spec.kind == "content":
+        # 缺图示 → 右栏上下合并；缺核心要点 → 抹掉左栏、右栏撑满。两者可以同时发生，
+        # 且会改到同一个元素（right_panel）：合并改 y/height，撑满改 x/width。
+        # 所以按元素名**累加**覆盖项，不能整条 replace —— 否则后一次会把前一次丢掉，
+        # 右栏变成"又宽又矮地贴在下方"，上方空出一大块。
+        overrides: dict[str, dict] = {}
+        dropped: set[str] = set()
+        if not figure_blocks:
+            merged = _merge_right_column(elements)
+            for name, geom in merged.items():
+                overrides.setdefault(name, {}).update(geom)
+            if merged:
+                # 版式里缺元素时合并会返回空（老版式/换版式），那时保持原样：
+                # 宁可多画一块面板，也不要凭空把版面拆出一块空洞
+                dropped.add("figure_panel")
+        if not secondary_blocks:
+            for name, geom in _widen_right_column(elements).items():
+                overrides.setdefault(name, {}).update(geom)
+            dropped.update(_LEFT_COLUMN_ELEMENTS)
+        if overrides or dropped:
+            elements = {
+                name: {**elem, **overrides.get(name, {})}
+                for name, elem in elements.items()
+                if name not in dropped
+            }
 
     sizing = 'width="100%"' if responsive else f'width="{width:.0f}" height="{height:.0f}"'
     parts = [
@@ -395,6 +508,7 @@ def render_page_spec_to_svg(
     for region_name, region_blocks in (
         (primary_region, primary_blocks),
         (secondary_region, secondary_blocks),
+        (figure_region, figure_blocks),
     ):
         if not region_name or not region_blocks:
             continue

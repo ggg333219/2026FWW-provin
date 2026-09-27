@@ -328,6 +328,10 @@ const (
 )
 
 // IntentSummary 结构化教学意图摘要
+//
+// 注意：本结构目前**只透传、不落库** —— outline 行上只有 intent_id（指向 AI 引擎的
+// 意图会话），意图摘要本身没有对应的表。因此「按 outline_id 反查意图」在服务端做
+// 不到；要让表达规划器拿到意图，只能由客户端在请求里带上。
 type IntentSummary struct {
 	Topic            *string  `json:"topic,omitempty"`
 	DurationMinutes  *int     `json:"duration_minutes,omitempty"`
@@ -612,6 +616,14 @@ type TeachingNodeItem struct {
 	FontSizeHint    string `json:"font_size_hint,omitempty"`
 	TextAlignment   string `json:"text_alignment,omitempty"`
 	SlideBackground string `json:"slide_background,omitempty"`
+	// 教学内容表达字段（教学表达规划器链路）。Go 的 encoding/json 反序列化到本结构时
+	// 会忽略未声明字段，因此引擎侧每新增一个节点字段，这里不同步就等于在网关这一跳丢弃。
+	// PointDetails 不带 omitempty：与 segments/questions 同为引擎恒定输出的列表字段。
+	// 其余三个是真正可选的（只有拿到规划的页才有），omitempty 与引擎的「缺失即降级」一致。
+	PointDetails  []map[string]any `json:"point_details"`
+	Figure        map[string]any   `json:"figure,omitempty"`
+	KeyConclusion string           `json:"key_conclusion,omitempty"`
+	TeachingPlan  map[string]any   `json:"teaching_plan,omitempty"`
 }
 
 type GenerationCreateRequest struct {
@@ -836,6 +848,13 @@ type GenContentRequest struct {
 	ModifyConstraints []string `json:"modify_constraints,omitempty"`
 	// 契约 v1.0 模块1：目标页绑定的证据 chunk_id，由 Python 侧解析成原文注入提示词
 	EvidenceRefs []string `json:"evidence_refs,omitempty"`
+	// 教学意图摘要。Python 侧的表达规划器靠它决定「这一页该怎么教」；不传是合法
+	// 输入（规划器退化为只从节点自身推断），因此用 omitempty + 指针。
+	//
+	// 注意：IntentSummary 目前在 Go 侧**没有落库**（只在 intent 抽取 → 大纲 → 节点
+	// 之间透传），所以这里补不了「按 outline_id 反查」—— 客户端带着 intent 发
+	// /gen/content 时才能填上。详见 IntentSummary 的注释。
+	Intent *IntentSummary `json:"intent,omitempty"`
 }
 
 type GenContentStatusResponse struct {

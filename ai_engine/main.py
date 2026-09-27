@@ -1,5 +1,9 @@
 from datetime import datetime
 import sys
+# 必须模块级导入：函数内写 `import logging` 会让 logging 成为**该函数的局部名**
+# （编译期决定），于是同一函数中更早的 logging 引用抛 UnboundLocalError 而非
+# NameError —— 那种情况下顶层的 import 也救不了，降级日志本身会把链路带崩。
+import logging
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -735,6 +739,13 @@ class GenContentRequest(BaseModel):
     """[契约 v1.0 模块1] 页面级绑定的证据 chunk_id 列表。
     与 /gen/modify 的 evidence_refs 同义：只允许引用这些 chunk 的原文。
     Go 端 Modify 从 courseware_page_bindings 取目标节点的绑定后透传。"""
+    intent: dict[str, Any] = Field(default_factory=dict)
+    """教学意图摘要（IntentSummary：topic / style / target_student /
+    key_difficulties / expected_outcomes …）。
+
+    这是「教学意图 → 核心知识点 → 怎么教 → 页面」这条链路里，意图第一次真正抵达
+    表达决策层。**缺席是合法输入**：规划器会退化为只从节点自身推断表达形式，
+    不报错、不缺页。"""
 
 
 class GenContentStatusResponse(BaseModel):
@@ -823,6 +834,110 @@ async def generate_content(req: GenContentRequest):
     )
 
 
+def _plan_deck_safe(intent: Any, nodes: list[dict], evidence: str) -> dict[str, dict]:
+    """规划整份课件的教学表达；任何失败都退回「没有规划」，绝不拖垮内容生成。
+
+    规划是**加分项**：拿不到 plan 时，节点上就没有 teaching_plan / figure /
+    key_conclusion，预览退化成改动前的样子 —— 这比整个内容生成失败好得多。
+    """
+    try:
+        from ai_engine.gen.teaching_plan import plan_deck
+        return plan_deck(intent, nodes, evidence=evidence)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "[Content Pipeline] 教学表达规划失败，本批不挂规划：%s", exc
+        )
+        return {}
+
+
+def _attach_teaching_plan(node: dict[str, Any], plan: Any) -> dict[str, Any]:
+    """把规划器对**这一页**的决策挂到节点上。
+
+    teaching_plan / figure / key_conclusion 都由这里落盘，而不是让讲稿 LLM 回显 ——
+    plan_to_figure 是纯机械映射，表达决策只在规划阶段发生一次；让模型复述一遍，只
+    会在「抄漏了」时制造图示与规划不一致，没有任何好处。
+
+    figure / key_conclusion 只有内容页会消费（page_spec._content_blocks），挂在封面
+    / 测验页上不会改变它们的渲染，所以这里不做页型判断。
+
+    空 dict 与 None 同等对待：它一条决策都没有。挂上去会让下游看到"这页规划过"
+    （`"teaching_plan" in node` 为真）却读不到任何内容，比缺席更难排查。
+    """
+    if not isinstance(plan, dict) or not plan:
+        return node
+    from ai_engine.gen.teaching_plan import plan_to_figure
+
+    merged = {**node, "teaching_plan": plan}
+    conclusion = str(plan.get("key_conclusion") or "").strip()
+    if conclusion:
+        merged["key_conclusion"] = conclusion
+    figure = plan_to_figure(plan)
+    if figure:
+        merged["figure"] = figure
+    return merged
+
+
+#: 交给规划器的参考材料长度上限。规划只需要「不得编造材料中不存在的知识点」这一层
+#: 依据，不需要读全文；塞进整份原文只会把节点树挤出模型窗口。
+_PLAN_EVIDENCE_LIMIT = 2000
+
+
+def _evidence_brief(evidence: Any) -> str:
+    """把 S3 的证据包压成规划器可用的参考材料。
+
+    ``/api/v1/gen/create`` 拿到的是 EvidencePacket 的 dict（``/gen/content`` 拿的是
+    chunk 引用列表，走 ``_load_page_evidence``），其中 ``synthesized_context`` 已是 LLM
+    浓缩过的上下文，正是规划需要的粒度；为空时退回拼接相关 chunk 正文。
+    """
+    if not isinstance(evidence, dict):
+        return ""
+    parts: list[str] = []
+    synthesized = str(evidence.get("synthesized_context") or "").strip()
+    if synthesized:
+        parts.append(synthesized)
+    else:
+        for chunk in evidence.get("relevant_chunks") or []:
+            if not isinstance(chunk, dict):
+                continue
+            text = str(chunk.get("content") or "").strip()
+            if text:
+                parts.append(text)
+            if sum(len(part) for part in parts) >= _PLAN_EVIDENCE_LIMIT:
+                break
+    return "\n\n".join(parts)[:_PLAN_EVIDENCE_LIMIT]
+
+
+#: 讲稿生成结果里可以并回节点的字段。刻意**不含** node_id / title / node_type / type /
+#: content / summary —— 这几个由大纲确定，讲稿生成器无权改写。
+_SCRIPT_MERGE_KEYS = (
+    "script", "segments", "point_details",
+    "key_points", "core_points", "questions", "interactive_questions",
+    "layout_hint", "font_size_hint", "text_alignment", "slide_background",
+)
+
+
+def _merge_script_into_node(node: dict[str, Any], script_data: Any) -> dict[str, Any]:
+    """把讲稿生成结果并回节点，只在讲稿侧**确有内容**时覆盖。
+
+    不能写成 ``{**node, **script_data}``（``_run_content_pipeline`` 的增强分支是那么写的，
+    但那条链路此前从未真实跑过）：``normalize_stage3_scripts`` 会给缺失字段填默认值 ——
+    ``title`` 缺失填 ``node_id``、``key_points`` 缺失填 ``[]``、``node_type`` 取讲稿模型
+    自报的值。整体合并的结果是：讲稿模型漏一个标题，页面上就出现 "n3" 当标题；讲稿模型
+    把封面页报成 content，封面就退回普通内容页。这些都是老师已经确认过的大纲信息。
+
+    只增不减：``None`` / ``""`` / ``[]`` / ``{}`` 一律不覆盖，其余照收 ——
+    ``point_details`` 正是靠这一步才到得了预览与导出。
+    """
+    if not isinstance(script_data, dict):
+        return {**node}
+    merged = {**node}
+    for key in _SCRIPT_MERGE_KEYS:
+        value = script_data.get(key)
+        if value:
+            merged[key] = value
+    return merged
+
+
 def _run_content_pipeline(content_id: str, req: GenContentRequest):
     """后台内容生成管道：逐节点生成讲稿（同步，daemon 线程）
 
@@ -872,6 +987,29 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         completed = []
         errors = []
 
+        # 教学表达规划：一次规划整份课件。「这一页该不该出图」只有在全局节奏里才判断
+        # 得准（连着三页都是流程图，第四页就该换一种表达），所以不逐节点调。
+        # 规划失败不阻断生成 —— 见 _plan_deck_safe。
+        bound_evidence, _bound_used = _load_page_evidence(req.evidence_refs)
+        plan_evidence = "\n\n".join(
+            part for part in (bound_evidence.strip(), (req.context_markdown or "").strip()) if part
+        )
+        plans = _plan_deck_safe(req.intent, nodes, plan_evidence)
+
+        # 增强批量生成原本写在循环体内：对 N 个节点会把**整批**讲稿生成 N 次，
+        # 最坏延迟与 token 费用都放大 N 倍。提到循环外只算一次；失败则退回逐节点
+        # 单生成（下面的 script_data is None 分支），行为不劣于改动前。
+        enhanced_scripts: list[dict] = []
+        if req.enhanced:
+            try:
+                enhanced_scripts = generator.generate_enhanced(
+                    nodes, req.context_markdown, req.course_name
+                ).get("scripts", []) or []
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger(__name__).warning(
+                    "[Content Pipeline] 批量增强生成失败，退回逐节点生成：%s", exc
+                )
+
         for idx, node in enumerate(nodes):
             try:
                 task["current_node_id"] = node.get("node_id", "")
@@ -895,17 +1033,30 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                         ),
                     }
                 elif req.enhanced:
-                    result = generator.generate_enhanced(nodes, req.context_markdown, req.course_name)
                     script_data = next(
-                        (s for s in result.get("scripts", []) if s.get("node_id") == node.get("node_id")),
-                        {"script": "", "segments": []},
+                        (s for s in enhanced_scripts if s.get("node_id") == node.get("node_id")),
+                        None,
                     )
+                    # 批量结果里没有这一页时逐节点补生成。此前这里既没赋值 merged、
+                    # 也没兜住缺页：首个节点走增强分支会 UnboundLocalError，之后每个
+                    # 节点都会把**上一页**的 merged 再 append 一次，页数直接翻倍。
+                    if script_data is None:
+                        script_data = generator.generate_single(
+                            node, req.course_name,
+                            context_markdown=req.context_markdown,
+                            teaching_plan=plans.get(str(node.get("node_id") or "")),
+                        )
+                    merged = {**node, **script_data}
                 else:
                     script_data = generator.generate_single(
-                        node, req.course_name, context_markdown=req.context_markdown
+                        node, req.course_name,
+                        context_markdown=req.context_markdown,
+                        teaching_plan=plans.get(str(node.get("node_id") or "")),
                     )
 
                     merged = {**node, **script_data}
+
+                merged = _attach_teaching_plan(merged, plans.get(str(node.get("node_id") or "")))
                 completed.append(merged)
                 task["completed_nodes"] = idx + 1
                 task["nodes"] = list(completed)
@@ -914,7 +1065,6 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                 _persist_content_task_sync(content_id, task)
 
             except Exception as node_err:
-                import logging
                 logging.getLogger(__name__).warning(
                     "[Content Pipeline] node %s error: %s", node.get("node_id"), str(node_err)
                 )
@@ -937,7 +1087,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         _persist_content_task_sync(content_id, task)
 
     except Exception as e:
-        import logging, traceback
+        import traceback
         logging.getLogger(__name__).error(
             "[Content Pipeline ERROR] content_id=%s error=%s\n%s",
             content_id, str(e), traceback.format_exc()
@@ -1654,7 +1804,6 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
                     )
                     evidence_dict = synthesized.model_dump() if hasattr(synthesized, "model_dump") else dict(synthesized)
             except Exception as e:
-                import logging
                 logging.getLogger(__name__).warning(
                     "[S3 Evidence] 自动证据获取失败，改为无证据生成: session_id=%s, error=%s",
                     req.session_id, str(e)
@@ -1695,6 +1844,13 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         task.nodes = [TeachingNode.model_validate(node) for node in nodes]
         task.progress_pct = 50.0
 
+        # Stage 3.5: 教学表达规划 —— 先决定"每一页该怎么教"，再写讲稿。
+        #
+        # 这是老师端真正在走的链路（/api/v1/gen/create），与 /gen/content 那条链路共用
+        # 同一套规划器。规划结果不在这里落盘，而是随写稿结果一起经 _attach_teaching_plan
+        # 挂到节点上（见下方合并段）—— 表达决策只发生一次，不让模型复述。
+        plans = _plan_deck_safe(req.intent, nodes, _evidence_brief(evidence_dict))
+
         # Stage 4: 讲稿生成（增强版）
         # 有 markdown 时用 LessonGenerator（已验证 LLM 路径正确），无 markdown 时降级为 NodeGenerator
         task.stage = GenerationStage.GENERATING
@@ -1725,23 +1881,26 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             scripts_dict = {"scripts": scripts_list}
         else:
             generator = NodeGenerator()
-            scripts_dict = generator.generate_all(nodes, "", course_name)
+            scripts_dict = generator.generate_all(nodes, "", course_name, plans=plans)
             scripts_list = scripts_dict.get("scripts", [])
             node_ids = {n["node_id"] for n in nodes}
         task.progress_pct = 80.0
 
-        # 合并节点
+        # 合并节点：讲稿结果并回节点，再挂上本页的教学表达规划。
+        #
+        # 这里以前只挑 script / segments 两个键，其余一律丢弃 —— point_details 由
+        # _run_batch_generation 产出、也已通过 schema.normalize_stage3_scripts 的白名单，
+        # 却唯独栽在这一步，于是"要点展开"永远到不了预览与导出。
         merged_nodes = []
         for node in nodes:
             script_data = next(
                 (s for s in scripts_list if s.get("node_id") == node.get("node_id")),
                 {"script": "", "segments": []},
             )
-            merged = {**node}
-            if isinstance(script_data, dict):
-                merged["script"] = script_data.get("script", "")
-                merged["segments"] = script_data.get("segments", [])
-            merged_nodes.append(merged)
+            merged = _merge_script_into_node(node, script_data)
+            merged_nodes.append(
+                _attach_teaching_plan(merged, plans.get(str(node.get("node_id") or "")))
+            )
         task.nodes = merged_nodes
 
         # Stage 5: 内容自适应校验（标注超长节点字号/分页提示）
@@ -1779,7 +1938,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         _persist_task_sync(task)
 
     except Exception as e:
-        import logging, traceback
+        import traceback
         logging.getLogger(__name__).error(
             "[Pipeline ERROR] gen_id=%s task_id=%s error=%s\n%s",
             getattr(task, 'generation_id', '?'), task_id, str(e), traceback.format_exc()

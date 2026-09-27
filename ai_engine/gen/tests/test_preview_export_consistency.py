@@ -173,19 +173,24 @@ def test_export_follows_presentation_style():
     assert all(shape.shape_type != 13 for slide in prs.slides for shape in slide.shapes)
 
 
-def test_export_legacy_theme_unchanged():
-    """没传样式层的历史课件，配色必须与改动前一致。"""
+def test_export_legacy_theme_matches_preview():
+    """没传样式层的历史课件，配色必须与预览同一套（classic 调色板）。
+
+    改动前这条断言的是 catalog.default 的 2D5F58 —— 预览从来不用 catalog，
+    于是"没选样式"的课件预览是亮青绿、导出是暗墨绿，八个令牌没一个对得上。
+    预览是样式的单一事实来源，导出跟着它走。
+    """
     prs = Presentation(PPTExporter().export_to_bytes(_six_node_snapshot(), "旧课件"))
     fills = _solid_fills(prs)
 
-    assert "2D5F58" in fills, "历史课件未使用 catalog.default 主色"
-    assert "315FD4" not in fills, "历史课件被误加了样式层配色"
+    assert "168F82" in fills, "历史课件未使用预览的 classic 主色"
+    assert "315FD4" not in fills, "历史课件被误加了别的调色板"
 
 
-def test_presentation_to_theme_only_activates_on_explicit_choice():
-    """样式层只在用户显式选择（或选了自带样式的模板）时生效。"""
+def test_presentation_to_theme_falls_back_to_preview_palette():
+    """取值顺序：显式 palette → 模板自带 palette → 默认调色板 classic。"""
     theme, styled = presentation_to_theme(*presentation_from_nodes([{}]), "default")
-    assert styled is False and theme.primary == "2D5F58"
+    assert styled is True and theme.primary == "168F82"
 
     styled_nodes = [{"metadata": {"presentation": {"palette": "klein-blue"}}}]
     theme, styled = presentation_to_theme(*presentation_from_nodes(styled_nodes), "default")
@@ -194,3 +199,7 @@ def test_presentation_to_theme_only_activates_on_explicit_choice():
     # 选了自带样式的模板但前端没给 palette → 用该模板的默认配色
     theme, styled = presentation_to_theme(*presentation_from_nodes([{}]), "deck-swiss-edu")
     assert styled is True and theme.primary == "315FD4"
+
+    # 自带配色的 catalog 主题（academic）仍保留自己的令牌，不让位给 classic
+    theme, styled = presentation_to_theme(*presentation_from_nodes([{}]), "academic")
+    assert styled is True and theme.primary == "2D5F58"

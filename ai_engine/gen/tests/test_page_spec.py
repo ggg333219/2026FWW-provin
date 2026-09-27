@@ -2,7 +2,7 @@
 
 这里锁的是「这一页该画什么」—— 此前预览 / 导出 / SVG 三个渲染器各自去 node
 里挑字段，导致同一页面三处内容对不上、局部修改只在预览里可见。本文件断言
-字段挑选已收敛到单一入口，且内容页以讲稿分段为主体。
+字段挑选已收敛到单一入口，且内容页以「图示 + 要点展开」为主体、讲稿不上幻灯片。
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ if str(_ROOT) not in sys.path:
 from ai_engine.gen.page_spec import (  # noqa: E402
     ROLE_PRIMARY,
     ROLE_SECONDARY,
+    ROLE_TEACHER,
     SEG_LABEL_MISSING,
     SEG_LABEL_UNKNOWN,
     block_to_html,
@@ -134,6 +135,9 @@ def test_normalize_segments_keeps_difficulty_icon():
 
 # =============================================================================
 # 4. 内容页区块模型（本次需求的核心）
+#
+# 幻灯片是给学生看的：主体是「图示 + 正文 + 要点展开」；
+# 讲稿与分段是教师用的，标成 ROLE_TEACHER，由 preview 渲染进页下方折叠区。
 # =============================================================================
 
 def _content_node() -> dict:
@@ -143,6 +147,10 @@ def _content_node() -> dict:
         "title": "冒泡排序",
         "summary": "相邻比较，逆序交换。",
         "key_points": ["每轮确定一个最大值"],
+        "point_details": [
+            {"point": "每轮确定一个最大值", "detail": "第 i 轮结束后，末尾 i 个元素已就位。"},
+        ],
+        "figure": {"kind": "flow", "title": "一轮比较", "items": ["比较", "交换", "后移"]},
         "script": "第一段讲稿。第二段讲稿。",
         "segments": [
             {"segment_id": "seg_001", "text": "我们先看一个例子。", "segment_type": "opening",
@@ -153,57 +161,92 @@ def _content_node() -> dict:
     }
 
 
-def test_content_page_puts_segments_first_and_demotes_key_points():
-    """内容页：讲稿分段是主体（primary），核心要点降为次要（secondary）。"""
+def _kinds(spec, role: str) -> list[str]:
+    return [b.kind for b in spec.blocks if b.role == role]
+
+
+def test_content_page_slide_shows_figure_and_point_details():
+    """幻灯片主体是「图示 + 要点展开」—— 呈现要点延伸出来的东西。"""
     spec = build_page_spec(_content_node(), 1)
+    primary = _kinds(spec, ROLE_PRIMARY)
 
-    primary = [b.kind for b in spec.blocks if b.role == ROLE_PRIMARY]
-    secondary = [b.kind for b in spec.blocks if b.role == ROLE_SECONDARY]
-
-    assert primary[0] == "segments", "分段必须是首个主区块"
-    assert "bullets" in secondary, "核心要点应降到次要位"
-    assert "bullets" not in primary
+    assert "figure" in primary, "图示没上幻灯片"
+    assert "details" in primary, "要点展开没上幻灯片"
+    assert primary.index("figure") < primary.index("details"), "图示应排在要点展开之前"
 
 
-def test_content_page_promotes_script_when_segments_absent():
-    """没有分段时，讲稿原文接过主体位置 —— 不能因此整页没有主内容。"""
+def test_content_page_keeps_script_and_segments_off_the_slide():
+    """讲稿与分段是教师用的：primary / secondary 里都不该有。"""
+    spec = build_page_spec(_content_node(), 1)
+    on_slide = _kinds(spec, ROLE_PRIMARY) + _kinds(spec, ROLE_SECONDARY)
+
+    assert "script" not in on_slide
+    assert "segments" not in on_slide
+    assert sorted(_kinds(spec, ROLE_TEACHER)) == ["script", "segments"]
+
+
+def test_content_page_demotes_key_points_when_anything_else_is_primary():
+    """要点只在「整页没有别的正文」时才占主位。
+
+    有展开（details）或正文（text）时它都让位 —— 幻灯片的主位是给学生看的
+    实质内容，要点清单本身不是内容，是索引。
+    """
+    assert "bullets" in _kinds(build_page_spec(_content_node(), 1), ROLE_SECONDARY)
+
+    # 去掉展开、但仍有正文：正文占主位，要点仍让位
     node = _content_node()
-    node.pop("segments")
+    node.pop("point_details")
+    assert "bullets" in _kinds(build_page_spec(node, 1), ROLE_SECONDARY)
+
+    # 展开与正文都没有：要点顶上主位，不能整页没有内容
+    bare = _content_node()
+    bare.pop("point_details")
+    bare.pop("summary")
+    bare.pop("figure")
+    spec = build_page_spec(bare, 1)
+    assert "bullets" in _kinds(spec, ROLE_PRIMARY)
+
+
+def test_content_page_keeps_body_even_when_points_exist():
+    """content/summary 不能被要点挤掉 —— n3 节点两者都有，且 content 有同源断言。"""
+    node = _content_node()
+    node.pop("point_details")
     spec = build_page_spec(node, 1)
 
-    primary = [(b.kind, b.role) for b in spec.blocks if b.role == ROLE_PRIMARY]
-    assert ("script", ROLE_PRIMARY) in primary
+    text_blocks = [b for b in spec.blocks if b.kind == "text"]
+    assert text_blocks and "相邻比较，逆序交换。" in block_to_html(text_blocks[0])
+    # 正文与要点各出一次：要点块不能因为正文兜底又被拆一遍
+    bullets = block_to_html(next(b for b in spec.blocks if b.kind == "bullets"))
+    assert bullets.count("kp-item") == 1
 
 
-def test_content_page_script_demoted_when_segments_present():
-    """有分段时 script 是分段文本的拼接，降为次要避免与分段重复占主位。"""
-    spec = build_page_spec(_content_node(), 1)
-    script_blocks = [b for b in spec.blocks if b.kind == "script"]
-    assert script_blocks and script_blocks[0].role == ROLE_SECONDARY
+def test_content_page_without_new_fields_degrades_gracefully():
+    """老课件没有 point_details / figure：退化成要点列表，不出现空白页。"""
+    spec = build_page_spec({"type": "content", "title": "旧课件", "key_points": ["甲"]}, 1)
+
+    assert not [b for b in spec.blocks if b.kind in ("figure", "details")]
+    assert block_to_html(next(b for b in spec.blocks if b.kind == "bullets"))
 
 
-def test_partial_modification_changes_primary_block():
-    """回归：局部修改只覆盖 script/segments，必须落在主区块上才看得见。
+def test_partial_modification_changes_slide_content():
+    """回归：局部修改只覆盖 script/segments，于是「改了看不见」。
 
-    改动前分段不在内容页主体里（导出的内容页甚至完全不读它），
-    于是「改了看不见」。这里锁住「改了就看得到」。
+    幻灯片现在画的是 point_details 与 figure，局部修改必须回写这两个字段
+    才看得见 —— 这里锁住「改了就看得到」。
     """
     node = _content_node()
-    before = build_page_spec(node, 1)
-    before_text = block_to_html(next(b for b in before.blocks if b.kind == "segments"))
+    before = render_page_spec_to_svg(build_page_spec(node, 1), get_theme("default"))
 
     modified = {
         **node,
-        "script": "改后的讲稿。",
-        "segments": [{"segment_id": "seg_001", "text": "改后的第一段。",
-                      "segment_type": "summary", "estimated_seconds": 45}],
+        "point_details": [{"point": "每轮确定一个最大值", "detail": "改后的展开说明。"}],
+        "figure": {"kind": "flow", "title": "改后的图示", "items": ["甲", "乙"]},
     }
-    after = build_page_spec(modified, 1)
-    after_html = block_to_html(next(b for b in after.blocks if b.kind == "segments"))
+    after = render_page_spec_to_svg(build_page_spec(modified, 1), get_theme("default"))
 
-    assert "我们先看一个例子。" in before_text and "改后的第一段。" not in before_text
-    assert "改后的第一段。" in after_html and "我们先看一个例子。" not in after_html
-    assert after_html != before_text
+    assert "改后的展开说明。" in after and "改后的展开说明。" not in before
+    assert "改后的图示" in after and "改后的图示" not in before
+    assert "第 i 轮结束后" not in after
 
 
 # =============================================================================
@@ -308,27 +351,38 @@ def test_text_escapes_html():
 # 7. SVG 渲染
 # =============================================================================
 
-def test_svg_is_well_formed_xml_and_carries_content():
+def test_svg_is_well_formed_xml_and_carries_student_content():
     import xml.dom.minidom as minidom
 
     svg = render_page_spec_to_svg(build_page_spec(_content_node(), 1), get_theme("default"))
 
     minidom.parseString(svg)  # 抛异常即失败
     assert 'xmlns="http://www.w3.org/1999/xhtml"' in svg, "foreignObject 内层必须声明 XHTML 命名空间"
-    assert "我们先看一个例子。" in svg
     assert "每轮确定一个最大值" in svg
+    assert "第 i 轮结束后" in svg
+
+
+def test_svg_omits_teacher_blocks():
+    """讲稿与分段不上幻灯片 —— 它们由 preview 渲染进折叠区，不在 SVG 里。"""
+    svg = render_page_spec_to_svg(build_page_spec(_content_node(), 1), get_theme("default"))
+
+    assert "第一段讲稿。第二段讲稿。" not in svg
+    assert "我们先看一个例子。" not in svg
+    assert '<section class="script-block">' not in svg
+    assert '<section class="segments-block">' not in svg
 
 
 def test_svg_does_not_truncate_long_text():
     """旧实现按 32 字硬折行、标题截断 40 字，会把一句话切碎。"""
     long_title = "冒泡排序的稳定性与时间复杂度分析以及常见误区辨析" * 3
-    long_text = "这是一段很长的讲稿内容，用来验证渲染时不会在中途被截断。" * 6
-    node = {"type": "content", "title": long_title, "script": long_text}
+    long_detail = "这是一段很长的展开说明，用来验证渲染时不会在中途被截断。" * 6
+    node = {"type": "content", "title": long_title,
+            "point_details": [{"point": "要点", "detail": long_detail}]}
 
     svg = render_page_spec_to_svg(build_page_spec(node, 1), get_theme("default"))
 
     assert long_title in svg, "标题被截断"
-    assert long_text in svg, "讲稿被截断或折行切碎"
+    assert long_detail in svg, "展开说明被截断或折行切碎"
 
 
 def test_svg_skips_full_bleed_background_overlay():
@@ -358,6 +412,21 @@ def test_svg_uses_presentation_style_of_node():
     assert "#315FD4" in svg.upper(), "样式层配色未落到 SVG"
 
 
+@pytest.mark.parametrize("kind,prefix", [
+    ("quiz", "💡 "), ("interactive", "🎯 "), ("summary", "📌 "), ("content", ""),
+])
+def test_title_badge_matches_pre_svg_look(kind, prefix):
+    """标题前缀与切 SVG 前各页 <h2> 上的 emoji 一致（纯文字页则无前缀）。
+
+    参数里带 emoji 后面的那个空格 —— _TITLE_BADGES 的取值就是「emoji + 空格」，
+    断言照抄取值，别在这里另写一份前缀。
+    """
+    svg = render_page_spec_to_svg(
+        build_page_spec({"type": kind, "title": "页面标题"}, 1), get_theme("default")
+    )
+    assert f">{prefix}页面标题<" in svg
+
+
 # =============================================================================
 # 8. 版式 JSON
 # =============================================================================
@@ -368,3 +437,62 @@ def test_layouts_load(layout_id):
     assert layout["layout_id"] == layout_id
     assert layout["slide_size"] == [13.333, 7.5]
     assert layout["elements"]
+
+
+def test_content_layout_has_dedicated_figure_region():
+    """图示有专属区域，不与正文抢同一段空间。"""
+    elements = get_layout("content_left_right")["elements"]
+    assert elements["figure_region"]["type"] == "figure"
+    # 图示区在右栏上半，正文区在下半，二者不重叠
+    figure, content = elements["figure_region"], elements["right_panel_content"]
+    assert figure["y"] + figure["height"] <= content["y"]
+
+
+def test_svg_renders_figure_as_native_svg():
+    """图示走原生图元而非 foreignObject —— 它正是最需要「SVG→位图」也活下来的部分。"""
+    svg = render_page_spec_to_svg(build_page_spec(_content_node(), 1), get_theme("default"))
+
+    assert "<circle" in svg, "流程图的序号徽标没画出来"
+    assert "一轮比较" in svg
+    assert "比较" in svg
+
+
+def test_svg_merges_right_column_without_figure():
+    """没有图示时右栏上下合并成一整块，不留一块空白面板。"""
+    node = _content_node()
+    node.pop("figure")
+    svg = render_page_spec_to_svg(build_page_spec(node, 1), get_theme("default"))
+
+    # 图示面板（y=1.42in、高 2.45in）不该再画；正文面板从 1.42in 起、高 5.35in
+    assert 'y="136.3" width="775.7" height="235.2"' not in svg, "图示面板没被合并掉"
+    assert 'y="136.3" width="775.7" height="513.6"' in svg, "正文面板没有占满右栏"
+
+
+# =============================================================================
+# 9. 预览的讲稿折叠区（教师用，默认收起）
+# =============================================================================
+
+def _preview_html(node: dict) -> str:
+    from ai_engine.gen.preview import PreviewRenderer
+
+    return PreviewRenderer().render([node], course_name="测试")
+
+
+def test_preview_puts_script_and_segments_in_collapsible_panel():
+    html_out = _preview_html(_content_node())
+
+    panel_at = html_out.index('<details class="script-panel">')
+    assert panel_at > html_out.index('class="slide content-slide"'), "折叠区应在幻灯片之后"
+    assert '<section class="script-block"><h4>讲授文本</h4>' in html_out
+    assert '<section class="segments-block"><h4>讲授分段</h4>' in html_out
+    # 讲稿原文只出现在折叠区里，幻灯片区读不到
+    assert html_out.index("第一段讲稿。第二段讲稿。") > panel_at
+    assert html_out.index("我们先看一个例子。") > panel_at
+
+
+def test_preview_omits_panel_for_legacy_node():
+    """无讲稿无分段时整块不输出，不能多出一条空折叠条。"""
+    html_out = _preview_html({"type": "content", "title": "旧课件", "content": "只有正文。"})
+
+    assert '<details class="script-panel">' not in html_out
+    assert "只有正文。" in html_out

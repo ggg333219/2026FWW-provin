@@ -258,6 +258,12 @@ def run_partial_pipeline(
                     # generate_single 现在恒带该字段，这里只兜住自定义 generator。
                     if "segments" in new_script:
                         updated_node["segments"] = new_script.get("segments") or []
+                    # point_details 走与 segments 完全相同的口径：key 在就覆盖，缺席就
+                    # 保留。generate_single 现在恒带该字段，这里只兜住自定义 generator。
+                    # 不回写的话，教师改第 2 页时展开说明会停在旧内容上 —— 幻灯片上看
+                    # 起来就是"改了等于没改"。
+                    if "point_details" in new_script:
+                        updated_node["point_details"] = new_script.get("point_details") or []
                     # 引用关系：原有 refs 全部保留，追加本次实际检索到的证据
                     # （去重保序）。否则内容已经改自新证据、引用却还指向旧资料，
                     # 证据追溯会对不上。与 main.py 的 /gen/modify 回填方式一致。

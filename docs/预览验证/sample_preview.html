@@ -135,50 +135,142 @@
   .kc-tags span { font-size: 11px; background: #eef3fa; color: #445; padding: 1px 8px;
                    border-radius: 999px; }
 
+  /* ── 讲稿折叠区：幻灯片给学生看，讲稿与分段只给教师看，默认收起 ── */
+  .script-panel { margin: 10px 0 26px; border: 1px dashed #cbd5e4; border-radius: 14px;
+                   background: #fbfcfe; }
+  .script-panel > summary { cursor: pointer; padding: 12px 18px; font-size: 13px; font-weight: 600;
+                            color: #5f6c84; list-style: none; }
+  .script-panel > summary::-webkit-details-marker { display: none; }
+  .script-panel > summary::before { content: "▸"; display: inline-block; margin-right: 8px;
+                                     transition: transform .15s; }
+  .script-panel[open] > summary::before { transform: rotate(90deg); }
+  .script-panel-body { padding: 2px 18px 18px; }
+  .script-panel-body > .script-block:first-child { margin-top: 0; }
+
+  /* ── 要点展开：要点原文一行，下面是延伸出来的说明 ── */
+  .point-details { list-style: none; display: grid; gap: 8px; }
+  .point-details .kp-item { padding: 7px 12px; border-left: 3px solid #4361ee;
+                             background: rgba(67,97,238,.05); border-radius: 0 8px 8px 0; }
+  .point-details .kp-highlight { display: block; font-size: 14px; }
+  .kp-detail { margin-top: 3px; font-size: 12.5px; line-height: 1.65; color: #4a5468; }
+
+  /* ── 大字结论：规划器给的 key_conclusion，学生离开这一页时该记住的那句话 ── */
+  .conclusion-block { margin: 0; padding: 8px 0 8px 16px;
+                       border-left: 6px solid var(--preview-accent); }
+  .conclusion-text { margin: 0; font-size: 21px; font-weight: 700; line-height: 1.45;
+                      color: var(--preview-ink); letter-spacing: .2px; }
+
   /* ── 空态 ── */
   .empty-state { text-align: center; padding: 60px 20px; color: #94a3b8; font-size: 15px; }
+
+  /* ── 页内 SVG：内容由 svg_renderer 摆版，随 slide 宽度等比缩放 ── */
+  .slide > svg { display: block; width: 100%; height: auto; }
+  .svg-block { overflow: hidden; }
+  /* 次要区块（要点 / 讲稿原文）降一档字重与饱和度，让分段占据视觉主位 */
+  .svg-block-secondary { font-size: 93%; opacity: .92; }
+  .svg-block-secondary .key-points li { padding: 7px 12px 7px 34px; background: rgba(0,0,0,.02);
+                                         border: 1px dashed rgba(0,0,0,.09); }
+  .svg-block-secondary .key-points li::before { content: "·"; top: 6px; }
+  .svg-block-secondary .script-block { border-left-width: 3px; background: rgba(0,0,0,.015); }
+
+  /* ── S3 样式层：由节点 metadata.presentation 驱动，保证修改后预览实时可见 ── */
+  :root { --preview-accent: #168f82; --preview-page-bg: #eef3f1;
+           --preview-ink: #18322f; --preview-accent-soft: #d9ebe6;
+           --preview-deep: #0b4f49; --preview-slide-padding: 44px 52px 48px; }
+  body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: radial-gradient(circle at 8% 0%, #ffffff 0, var(--preview-page-bg) 42%, #e6ecea 100%); padding: 20px; color: var(--preview-ink); }
+  .presentation { max-width: 1180px; }
+  .slide { padding: var(--preview-slide-padding); border: 1px solid rgba(24,50,47,.10); border-radius: 22px;
+            box-shadow: 0 18px 42px rgba(24,50,47,.09); min-height: 380px; }
+  .slide h2 { color: var(--preview-ink); font-weight: 760; letter-spacing: -.025em; }
+  .slide-num { color: var(--preview-accent); background: var(--preview-accent-soft); font-weight: 700; }
+  .content-slide { border-top: 5px solid var(--preview-accent); background: rgba(255,255,255,.94); }
+  .content-slide .key-points li, .content-slide .body { color: var(--preview-ink); }
+  .content-slide .key-points li { background: linear-gradient(105deg, #fff, var(--preview-accent-soft)); border: 1px solid rgba(24,50,47,.07); }
+  .cover-slide, .title-slide { background: linear-gradient(135deg, var(--preview-deep) 0%, var(--preview-accent) 100%); min-height: 460px; }
+  .section-slide { background: linear-gradient(135deg, var(--preview-deep) 0%, var(--preview-accent) 100%); }
+  .quiz-slide { border-left: 5px solid var(--preview-accent); border-top: 0; background: linear-gradient(145deg, #fff, var(--preview-accent-soft)); }
+  .quiz-slide .questions .q-item { border-color: rgba(24,50,47,.10); box-shadow: 0 6px 16px rgba(24,50,47,.06); }
+  .quiz-slide .questions .q-item::before { background: var(--preview-accent); }
+  .script-block { border-left-color: var(--preview-accent); background: rgba(255,255,255,.72); }
+  .script-block h4 { color: var(--preview-accent); }
+  .presentation[data-layout="visual"] .slide { min-height: 430px; }
+  .presentation[data-layout="visual"] .content-slide .key-points { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .presentation[data-layout="text"] .slide { max-width: 920px; margin-left: auto; margin-right: auto; }
+  .presentation[data-density="minimal"] .slide h2 { font-size: 28px; }
+  .presentation[data-density="compact"] .slide { border-radius: 16px; }
 </style>
 </head>
 <body>
-<div class="presentation">
+<div class="presentation" data-palette="classic" data-layout="balanced" data-density="comfortable">
 <div class="slide cover-slide">
   <div class="slide-num">1</div>
-  <div class="cover-inner">
-    <h1>排序算法入门</h1>
-    <p class="subtitle">面向大一计算机专业</p>
-    
-  </div>
+  <svg width="100%" viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="排序算法入门" preserveAspectRatio="xMidYMid meet">
+<rect x="0.0" y="0.0" width="22.1" height="720.0" fill="#0B4F49"/>
+<rect x="22.1" y="664.3" width="1258.6" height="55.7" fill="#0B4F49"/>
+<text x="639.8" y="298.6" font-family="Microsoft YaHei, sans-serif" font-size="53.3" font-weight="bold" text-anchor="middle" fill="#FFFFFF">排序算法入门</text>
+<text x="639.8" y="438.5" font-family="Microsoft YaHei, sans-serif" font-size="26.7" font-weight="normal" text-anchor="middle" fill="#FFFFFF">面向大一计算机专业</text>
+<text x="103.7" y="613.5" font-family="Microsoft YaHei, sans-serif" font-size="14.7" font-weight="bold" text-anchor="start" fill="#FFFFFF">经典教学</text>
+</svg>
 </div>
 <div class="slide content-slide">
   <div class="slide-num">2</div>
-  <h2>冒泡排序的基本思想</h2>
-  <ul class="key-points"><li class="kp-item"><span class="kp-highlight">相邻元素两两比较</span></li><li class="kp-item"><span class="kp-highlight">每轮把最大值冒泡到末尾</span></li><li class="kp-item"><span class="kp-highlight">时间复杂度 O(n²)</span></li></ul>
-  <div class="body"><p>冒泡排序通过相邻元素两两比较，把较大元素逐步交换到序列尾部。</p></div>
-  <section class="script-block"><h4>讲授文本</h4><div class="script-body">同学们好，这一页我们先来看冒泡排序的核心思想。请大家注意每一轮比较结束后，最大的元素会像气泡一样浮到序列末尾。</div></section>
-  <section class="segments-block"><h4>讲授分段</h4><ol class="segments"><li class="seg-item"><span class="seg-badge seg-badge-opening">导入</span><span class="seg-dur">⏱ 30秒</span><span class="seg-diff diff-easy">🟢</span><p class="seg-text">我们先从一个生活中的例子说起。</p></li><li class="seg-item"><span class="seg-badge seg-badge-explanation">讲解</span><span class="seg-dur">⏱ 60秒</span><span class="seg-diff diff-medium">🟡</span><p class="seg-text">冒泡排序每一轮都会把当前未排序部分的最大值放到最后。</p></li><li class="seg-item"><span class="seg-badge seg-badge-example">示例</span><span class="seg-dur">⏱ 45秒</span><span class="seg-diff diff-easy">🟢</span><p class="seg-text">比如数组 [5, 3, 8]，第一轮比较后 8 会被放到最后。</p></li><li class="seg-item"><span class="seg-badge seg-badge-summary">小结</span><span class="seg-dur">⏱ 20秒</span><span class="seg-diff diff-easy">🟢</span><p class="seg-text">这一段就是本页的小结。</p></li></ol></section>
+  <svg width="100%" viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="冒泡排序的基本思想" preserveAspectRatio="xMidYMid meet">
+<rect x="0.0" y="0.0" width="1280.0" height="111.4" fill="#168F82"/>
+<text x="72.0" y="81.7" font-family="Microsoft YaHei, sans-serif" font-size="32.0" font-weight="bold" text-anchor="start" fill="#FFFFFF">冒泡排序的基本思想</text>
+<rect x="69.1" y="136.3" width="345.6" height="513.6" rx="8" fill="#D9EBE6" stroke="#788986" stroke-width="1"/>
+<rect x="433.9" y="136.3" width="775.7" height="513.6" rx="8" fill="#D9EBE6" stroke="#788986" stroke-width="1"/>
+<rect x="69.1" y="685.4" width="1140.5" height="1.2" fill="#788986"/>
+<text x="69.1" y="690.4" font-family="Microsoft YaHei, sans-serif" font-size="12.0" font-weight="normal" text-anchor="start" fill="#788986">多模态AI互动式教学智能体</text>
+<g transform="translate(476.8, 210.9)"><foreignObject x="0.0" y="0.0" width="688.0" height="429.4"><div xmlns="http://www.w3.org/1999/xhtml" class="svg-block svg-block-primary"><div class="body"><p>冒泡排序通过相邻元素两两比较，把较大元素逐步交换到序列尾部。</p></div></div></foreignObject></g>
+<g transform="translate(112.0, 217.6)"><text x="-16.0" y="-44.0" font-family="Microsoft YaHei, sans-serif" font-size="20.0" font-weight="bold" fill="#0B4F49">核心要点</text><foreignObject x="0.0" y="44.6" width="265.6" height="371.4"><div xmlns="http://www.w3.org/1999/xhtml" class="svg-block svg-block-secondary"><ul class="key-points"><li class="kp-item"><span class="kp-highlight">相邻元素两两比较</span></li><li class="kp-item"><span class="kp-highlight">每轮把最大值冒泡到末尾</span></li><li class="kp-item"><span class="kp-highlight">时间复杂度 O(n²)</span></li></ul></div></foreignObject></g>
+</svg>
 </div>
+<details class="script-panel">
+  <summary>🎤 讲授文本与分段（教师用，不投影给学生）</summary>
+  <div class="script-panel-body"><section class="segments-block"><h4>讲授分段</h4><ol class="segments"><li class="seg-item"><span class="seg-badge seg-badge-opening">导入</span><span class="seg-dur">⏱ 30秒</span><span class="seg-diff diff-easy">🟢</span><p class="seg-text">我们先从一个生活中的例子说起。</p></li><li class="seg-item"><span class="seg-badge seg-badge-explanation">讲解</span><span class="seg-dur">⏱ 60秒</span><span class="seg-diff diff-medium">🟡</span><p class="seg-text">冒泡排序每一轮都会把当前未排序部分的最大值放到最后。</p></li><li class="seg-item"><span class="seg-badge seg-badge-example">示例</span><span class="seg-dur">⏱ 45秒</span><span class="seg-diff diff-easy">🟢</span><p class="seg-text">比如数组 [5, 3, 8]，第一轮比较后 8 会被放到最后。</p></li><li class="seg-item"><span class="seg-badge seg-badge-summary">小结</span><span class="seg-dur">⏱ 20秒</span><span class="seg-diff diff-easy">🟢</span><p class="seg-text">这一段就是本页的小结。</p></li></ol></section><section class="script-block"><h4>讲授文本</h4><div class="script-body">同学们好，这一页我们先来看冒泡排序的核心思想。请大家注意每一轮比较结束后，最大的元素会像气泡一样浮到序列末尾。</div></section></div>
+</details>
 <div class="slide quiz-slide">
   <div class="slide-num">3</div>
-  <h2>💡 随堂小测</h2>
-  <ol class="questions"><li class="q-item"><p class="q-text">冒泡排序的时间复杂度是多少？</p><ul class="q-options"><li class="q-option"><span class="q-opt-letter">A</span>O(n)</li><li class="q-option"><span class="q-opt-letter">B</span>O(n log n)</li><li class="q-option q-option-answer"><span class="q-opt-letter">C</span>O(n²)</li><li class="q-option"><span class="q-opt-letter">D</span>O(1)</li></ul><p class="q-explanation">解析：冒泡排序最坏情况下需要进行 n(n-1)/2 次比较，属于平方级。</p></li><li class="q-item"><p class="q-text">请用自己的话复述冒泡排序的一轮比较过程。</p></li></ol>
-  <section class="script-block"><h4>讲授文本</h4><div class="script-body">给大家两分钟时间完成这道选择题，之后我会随机请一位同学复述冒泡排序的过程。</div></section>
-  
+  <svg width="100%" viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="随堂小测" preserveAspectRatio="xMidYMid meet">
+<rect x="0.0" y="0.0" width="1280.0" height="111.4" fill="#168F82"/>
+<text x="72.0" y="81.7" font-family="Microsoft YaHei, sans-serif" font-size="32.0" font-weight="bold" text-anchor="start" fill="#FFFFFF">💡 随堂小测</text>
+<rect x="69.1" y="136.3" width="1140.5" height="513.6" rx="8" fill="#D9EBE6" stroke="#788986" stroke-width="1"/>
+<rect x="69.1" y="685.4" width="1140.5" height="1.2" fill="#788986"/>
+<text x="69.1" y="690.4" font-family="Microsoft YaHei, sans-serif" font-size="12.0" font-weight="normal" text-anchor="start" fill="#788986">多模态AI互动式教学智能体</text>
+<g transform="translate(112.0, 169.6)"><foreignObject x="0.0" y="0.0" width="1052.8" height="464.0"><div xmlns="http://www.w3.org/1999/xhtml" class="svg-block svg-block-primary"><ol class="questions"><li class="q-item"><p class="q-text">冒泡排序的时间复杂度是多少？</p><ul class="q-options"><li class="q-option"><span class="q-opt-letter">A</span>O(n)</li><li class="q-option"><span class="q-opt-letter">B</span>O(n log n)</li><li class="q-option q-option-answer"><span class="q-opt-letter">C</span>O(n²)</li><li class="q-option"><span class="q-opt-letter">D</span>O(1)</li></ul><p class="q-explanation">解析：冒泡排序最坏情况下需要进行 n(n-1)/2 次比较，属于平方级。</p></li><li class="q-item"><p class="q-text">请用自己的话复述冒泡排序的一轮比较过程。</p></li></ol></div></foreignObject></g>
+</svg>
 </div>
+<details class="script-panel">
+  <summary>🎤 讲授文本与分段（教师用，不投影给学生）</summary>
+  <div class="script-panel-body"><section class="script-block"><h4>讲授文本</h4><div class="script-body">给大家两分钟时间完成这道选择题，之后我会随机请一位同学复述冒泡排序的过程。</div></section></div>
+</details>
 <div class="slide quiz-slide interactive-slide">
   <div class="slide-num">4</div>
-  <h2>🎯 课堂互动：你掌握了吗？</h2>
-  <ol class="questions"><li class="q-item"><p class="q-text">你对冒泡排序的掌握程度是？</p><ul class="q-options"><li class="q-option"><span class="q-opt-letter">A</span>完全掌握</li><li class="q-option"><span class="q-opt-letter">B</span>基本理解</li><li class="q-option"><span class="q-opt-letter">C</span>有些模糊</li><li class="q-option"><span class="q-opt-letter">D</span>需要重讲</li></ul></li></ol>
-  
-  
+  <svg width="100%" viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="课堂互动：你掌握了吗？" preserveAspectRatio="xMidYMid meet">
+<rect x="0.0" y="0.0" width="1280.0" height="111.4" fill="#0B4F49"/>
+<text x="72.0" y="81.7" font-family="Microsoft YaHei, sans-serif" font-size="32.0" font-weight="bold" text-anchor="start" fill="#FFFFFF">🎯 课堂互动：你掌握了吗？</text>
+<rect x="69.1" y="136.3" width="11.5" height="513.6" fill="#0B4F49"/>
+<rect x="69.1" y="136.3" width="1140.5" height="513.6" rx="8" fill="#D9EBE6" stroke="#788986" stroke-width="1"/>
+<rect x="69.1" y="685.4" width="1140.5" height="1.2" fill="#788986"/>
+<text x="69.1" y="690.4" font-family="Microsoft YaHei, sans-serif" font-size="12.0" font-weight="normal" text-anchor="start" fill="#788986">多模态AI互动式教学智能体</text>
+<g transform="translate(112.0, 169.6)"><foreignObject x="0.0" y="0.0" width="1052.8" height="464.0"><div xmlns="http://www.w3.org/1999/xhtml" class="svg-block svg-block-primary"><ol class="questions"><li class="q-item"><p class="q-text">你对冒泡排序的掌握程度是？</p><ul class="q-options"><li class="q-option"><span class="q-opt-letter">A</span>完全掌握</li><li class="q-option"><span class="q-opt-letter">B</span>基本理解</li><li class="q-option"><span class="q-opt-letter">C</span>有些模糊</li><li class="q-option"><span class="q-opt-letter">D</span>需要重讲</li></ul></li></ol></div></foreignObject></g>
+</svg>
 </div>
 <div class="slide content-slide">
   <div class="slide-num">5</div>
-  <h2>课后练习</h2>
-  <ul class="key-points"><li class="kp-item"><span class="kp-highlight">完成教材第 3 章习题 1-5</span></li></ul>
-  <div class="body"><p>完成教材第 3 章习题 1-5。</p></div>
-  
-  <section class="segments-block"><h4>讲授分段</h4><ol class="segments"><li class="seg-item"><span class="seg-badge seg-badge-default">段落</span><p class="seg-text">这是一个没有 segment_type 的旧分段。</p></li><li class="seg-item"><span class="seg-badge seg-badge-demo_type">其他</span><p class="seg-text">这是一个 segment_type 未知（demo）的分段。</p></li></ol></section>
+  <svg width="100%" viewBox="0 0 1280 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="课后练习" preserveAspectRatio="xMidYMid meet">
+<rect x="0.0" y="0.0" width="1280.0" height="111.4" fill="#168F82"/>
+<text x="72.0" y="81.7" font-family="Microsoft YaHei, sans-serif" font-size="32.0" font-weight="bold" text-anchor="start" fill="#FFFFFF">课后练习</text>
+<rect x="69.1" y="136.3" width="1140.5" height="513.6" rx="8" fill="#D9EBE6" stroke="#788986" stroke-width="1"/>
+<rect x="69.1" y="685.4" width="1140.5" height="1.2" fill="#788986"/>
+<text x="69.1" y="690.4" font-family="Microsoft YaHei, sans-serif" font-size="12.0" font-weight="normal" text-anchor="start" fill="#788986">多模态AI互动式教学智能体</text>
+<g transform="translate(112.0, 210.9)"><foreignObject x="0.0" y="0.0" width="1052.8" height="429.4"><div xmlns="http://www.w3.org/1999/xhtml" class="svg-block svg-block-primary"><div class="body"><p>完成教材第 3 章习题 1-5。</p></div></div></foreignObject></g>
+</svg>
 </div>
+<details class="script-panel">
+  <summary>🎤 讲授文本与分段（教师用，不投影给学生）</summary>
+  <div class="script-panel-body"><section class="segments-block"><h4>讲授分段</h4><ol class="segments"><li class="seg-item"><span class="seg-badge seg-badge-default">段落</span><p class="seg-text">这是一个没有 segment_type 的旧分段。</p></li><li class="seg-item"><span class="seg-badge seg-badge-demo_type">其他</span><p class="seg-text">这是一个 segment_type 未知（demo）的分段。</p></li></ol></section></div>
+</details>
 </div>
 </body>
 </html>

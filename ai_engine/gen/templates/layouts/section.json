@@ -9,7 +9,7 @@
       "y": 0,
       "width": 4.2,
       "height": 7.5,
-      "fill_theme": "primary"
+      "fill_theme": "secondary"
     },
     "accent_divider": {
       "type": "rect",
@@ -38,7 +38,7 @@
       "font_size": 32,
       "bold": true,
       "valign": "middle",
-      "color_theme": "text"
+      "color_theme": "inverse"
     },
     "section_summary": {
       "type": "text",
@@ -47,7 +47,7 @@
       "width": 6.9,
       "height": 1.0,
       "font_size": 18,
-      "color_theme": "muted"
+      "color_theme": "inverse"
     },
     "section_list_region": {
       "type": "text_list",
@@ -56,7 +56,7 @@
       "width": 7.45,
       "height": 1.6,
       "font_size": 16,
-      "color_theme": "text"
+      "color_theme": "inverse"
     }
   }
 }
