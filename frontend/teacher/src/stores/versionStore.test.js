@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useVersionStore } from './versionStore'
+import { teacherV1Api } from '../services/v1'
 
 function createStorage() {
   const values = new Map()
@@ -14,6 +15,7 @@ function createStorage() {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   const localStorage = createStorage()
   globalThis.window = { localStorage }
   // 后端不可达 → requestJson 回退 Mock（/api/v1/export + /api/v1/export/status）
@@ -54,11 +56,40 @@ describe('versionStore S4 导出闭环（Mock）', () => {
     store.exportStatus = 'done'
     store.exportDownloadUrl = '/download/exp_x.pptx'
     store.exportError = ''
+    store.exportQualityReport = { status: 'passed' }
 
     store.resetExport()
     expect(store.exportJobId).toBe('')
     expect(store.exportStatus).toBe('idle')
     expect(store.exportDownloadUrl).toBe('')
     expect(store.exportError).toBe('')
+    expect(store.exportQualityReport).toBeNull()
+  })
+
+  it('polling stores the PPTX quality report returned with export status', async () => {
+    const store = useVersionStore()
+    vi.spyOn(teacherV1Api.version, 'exportCreate').mockResolvedValue({
+      job_id: 'exp_quality', status: 'pending'
+    })
+    vi.spyOn(teacherV1Api.version, 'exportStatus').mockResolvedValue({
+      job_id: 'exp_quality',
+      status: 'done',
+      download_url: '/download/exp_quality.pptx',
+      quality_report: {
+        status: 'passed_with_warnings',
+        slide_count: 3,
+        findings: [{
+          code: 'text_may_overflow', severity: 'warning',
+          message: '文本可能超出文本框容量。', slide_number: 2
+        }]
+      }
+    })
+
+    await store.startExport('generation-quality', 'pptx')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(store.exportStatus).toBe('done')
+    expect(store.exportQualityReport.status).toBe('passed_with_warnings')
+    expect(store.exportQualityReport.findings[0].slide_number).toBe(2)
   })
 })

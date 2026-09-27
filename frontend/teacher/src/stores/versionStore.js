@@ -45,6 +45,8 @@ export const useVersionStore = defineStore("version", {
     exportDownloadUrl: "",
     /** 导出错误 */
     exportError: "",
+    /** PPTX 导出质量报告 */
+    exportQualityReport: null,
 
     loading: false,
     error: "",
@@ -232,6 +234,7 @@ export const useVersionStore = defineStore("version", {
       this.exportStatus = "pending";
       this.exportFormat = format;
       this.exportError = "";
+      this.exportQualityReport = null;
       try {
         // 统一兼容 {code,message,data} 信封（Mock）与裸响应（FastAPI 网关）
         const response = await teacherV1Api.version.exportCreate(genId, format);
@@ -239,6 +242,7 @@ export const useVersionStore = defineStore("version", {
         this.exportJobId = job.job_id || "";
         this.exportStatus = job.status === "done" ? "done" : "pending";
         this.exportDownloadUrl = normalizeDownloadUrl(job.download_url);
+        this.exportQualityReport = job.quality_report || null;
         // 如果不是立即完成，启动轮询
         if (this.exportStatus !== "done" && this.exportJobId) {
           this._pollExport();
@@ -269,6 +273,7 @@ export const useVersionStore = defineStore("version", {
           this.exportStatus = job.status || "pending";
           this.exportDownloadUrl = normalizeDownloadUrl(job.download_url);
           this.exportError = job.error || "";
+          this.exportQualityReport = job.quality_report || null;
           if (this.exportStatus === "done" || this.exportStatus === "failed") {
             return;
           }
@@ -292,6 +297,7 @@ export const useVersionStore = defineStore("version", {
       this.exportFormat = "pptx";
       this.exportDownloadUrl = "";
       this.exportError = "";
+      this.exportQualityReport = null;
     },
 
     // ================================================================

@@ -156,6 +156,7 @@
               :export-format="versionStore.exportFormat"
               :export-download-url="versionStore.exportDownloadUrl"
               :export-error="versionStore.exportError"
+              :export-quality-report="versionStore.exportQualityReport"
               :loading="versionStore.loading"
               :intent="intentStore.intentSummary || {}"
               :nodes="versionStore.currentVersionDetail?.nodes || []"

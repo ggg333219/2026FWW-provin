@@ -33,7 +33,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -501,6 +501,19 @@ class GenerationVersion(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExportQualityFinding(BaseModel):
+    code: str
+    severity: Literal["warning", "error"]
+    message: str
+    slide_number: Optional[int] = None
+
+
+class ExportQualityReport(BaseModel):
+    status: Literal["passed", "passed_with_warnings", "failed"]
+    slide_count: int
+    findings: list[ExportQualityFinding] = Field(default_factory=list)
+
+
 class ExportJob(BaseModel):
     """S4 导出任务。"""
     job_id: str = ""
@@ -512,6 +525,7 @@ class ExportJob(BaseModel):
     download_url: Optional[str] = None
     file_size: Optional[int] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    quality_report: Optional[ExportQualityReport] = None
     error: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
@@ -672,7 +686,7 @@ class RollbackRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     format: ExportFormat = ExportFormat.PPTX
-    version: int = 1
+    version: Optional[int] = None
 
 
 class ExportStatusResponse(BaseModel):
@@ -684,3 +698,5 @@ class ExportStatusResponse(BaseModel):
     upload_status: Optional[str] = None
     minio_path: Optional[str] = None
     file_size: Optional[int] = None
+    version: Optional[int] = None
+    quality_report: Optional[ExportQualityReport] = None

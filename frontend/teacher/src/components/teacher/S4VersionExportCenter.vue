@@ -73,6 +73,16 @@
           <button class="btn btn-sm" @click="$emit('reset-export')">重新导出</button>
         </div>
 
+        <div v-if="exportQualityReport" class="quality-report" :class="exportQualityReport.status">
+          <strong>{{ qualityStatusText }}</strong>
+          <span>已检查 {{ exportQualityReport.slide_count }} 页</span>
+          <ul v-if="exportQualityReport.findings?.length">
+            <li v-for="(finding, index) in exportQualityReport.findings" :key="`${finding.code}-${index}`">
+              {{ finding.slide_number ? `第 ${finding.slide_number} 页：` : '' }}{{ finding.message }}
+            </li>
+          </ul>
+        </div>
+
         <!-- 失败 -->
         <div v-if="exportStatus === 'failed'" class="error-section">
           <span class="error-icon">❌ 导出失败</span>
@@ -93,6 +103,7 @@ const props = defineProps({
   exportFormat: { type: String, default: 'pptx' },
   exportDownloadUrl: { type: String, default: '' },
   exportError: { type: String, default: '' },
+  exportQualityReport: { type: Object, default: null },
   loading: { type: Boolean, default: false },
   /** 教学意图对象（传给 deck-skill 生成 HTML 课件） */
   intent: { type: Object, default: () => ({}) },
@@ -140,6 +151,11 @@ async function handleSkillPreview() {
 }
 
 const exportIsActive = computed(() => ['pending', 'exporting'].includes(props.exportStatus))
+const qualityStatusText = computed(() => ({
+  passed: '质量检查通过',
+  passed_with_warnings: '质量检查通过，有提示',
+  failed: '质量检查未通过'
+}[props.exportQualityReport?.status] || '质量检查'))
 
 const statusText = computed(() => {
   const map = {
@@ -229,4 +245,10 @@ function handleDownload() {
 .error-section { margin-top: 4px; }
 .error-icon { font-size: 14px; color: #dc2626; font-weight: 500; }
 .error-msg { font-size: 12px; color: #991b1b; margin: 4px 0 8px; }
+.quality-report { margin-top: 10px; padding: 10px 12px; border-left: 3px solid #15803d; background: #f0fdf4; color: #166534; font-size: 13px; }
+.quality-report.passed_with_warnings { border-color: #d97706; background: #fffbeb; color: #92400e; }
+.quality-report.failed { border-color: #dc2626; background: #fef2f2; color: #991b1b; }
+.quality-report span { margin-left: 10px; }
+.quality-report ul { margin: 6px 0 0; padding-left: 18px; }
+.quality-report li + li { margin-top: 4px; }
 </style>

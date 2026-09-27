@@ -44,6 +44,7 @@ from ai_engine.core.schema import (
     GenerationTask, TeachingNode, IntentSummary,
     ExportRequest, ExportFormat,
     ExportStatusResponse, ExportStatus, ExportJob,
+    ExportQualityReport,
     RollbackRequest,
 )
 
@@ -1773,11 +1774,32 @@ async def get_preview(gen_id: str, version: Optional[int] = None):
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig, LessonPlanDOCExporter
 from ai_engine.gen.export_html5 import export_interactive_html
+from ai_engine.gen.export_quality import validate_pptx
 from ai_engine.gen.lesson_plan import LessonPlanGenerator
 
 # 进程内导出任务存储
 _export_tasks: dict[str, ExportJob] = {}
 _export_lock = asyncio.Lock()
+
+
+async def _persist_export_job(job: ExportJob) -> None:
+    await _task_store.save_export(job.job_id, job.model_dump(mode="json"))
+
+
+async def _load_export_job(job_id: str) -> ExportJob | None:
+    saved = await _task_store.load_export(job_id)
+    if saved:
+        try:
+            job = ExportJob.model_validate(saved)
+        except Exception:
+            job = None
+        if job:
+            async with _export_lock:
+                _export_tasks[job_id] = job
+            return job
+
+    async with _export_lock:
+        return _export_tasks.get(job_id)
 
 
 @app.post("/api/v1/export/{gen_id}", response_model=ExportStatusResponse)
@@ -1789,25 +1811,26 @@ async def export_create(gen_id: str, req: ExportRequest):
     """
     job_id = f"exp_{uuid.uuid4().hex[:12]}"
 
-    # 获取最新版本节点
+    # Export the explicitly selected snapshot; zero retains the latest-version default.
     vm = get_version_manager()
-    latest = vm.load_version(gen_id)
-    if not latest:
+    selected = vm.load_version(gen_id, req.version if req.version and req.version > 0 else None)
+    if not selected:
         raise HTTPException(status_code=404, detail="版本不存在")
-    nodes = latest.nodes_snapshot
+    nodes = selected.nodes_snapshot
 
     # 创建导出任务
     job = ExportJob(
         job_id=job_id,
         generation_id=gen_id,
         format=req.format,
-        version=req.version or latest.version_number,
+        version=selected.version_number,
         status=ExportStatus.PENDING,
         created_at=datetime.now(),
     )
 
     async with _export_lock:
         _export_tasks[job_id] = job
+    await _persist_export_job(job)
 
     # 教案导出（lesson_plan）需要意图摘要补充课时/授课对象等，从内存生成任务查找（找不到则 fallback 全靠节点）
     intent_dict = None
@@ -1842,6 +1865,7 @@ async def _run_export(
 
     try:
         job.status = ExportStatus.EXPORTING
+        await _persist_export_job(job)
 
         course_name = "课件"
         export_dir = Path("data/exports")
@@ -1869,6 +1893,26 @@ async def _run_export(
             job.metadata = job.metadata or {}
             job.metadata["ppt_path"] = str(ppt_path)
             job.file_size = ppt_path.stat().st_size
+            try:
+                quality_result = await asyncio.to_thread(validate_pptx, buf.getvalue())
+            except Exception:
+                quality_result = {
+                    "status": "failed",
+                    "slide_count": 0,
+                    "findings": [{
+                        "code": "validator_unavailable",
+                        "severity": "error",
+                        "message": "PPTX quality validation could not be completed.",
+                    }],
+                }
+            job.quality_report = ExportQualityReport.model_validate(quality_result)
+            if job.quality_report.status == "failed":
+                job.status = ExportStatus.FAILED
+                job.error = "PPTX quality validation failed; the artifact is unavailable."
+                async with _export_lock:
+                    _export_tasks[job_id] = job
+                await _persist_export_job(job)
+                return
 
         if fmt in (ExportFormat.BOTH, ExportFormat.DOCX):
             exporter = DOCExporter()
@@ -1935,12 +1979,14 @@ async def _run_export(
 
         async with _export_lock:
             _export_tasks[job_id] = job
+        await _persist_export_job(job)
 
     except Exception as e:
         job.status = ExportStatus.FAILED
         job.error = str(e)
         async with _export_lock:
             _export_tasks[job_id] = job
+        await _persist_export_job(job)
 
 
 @app.get("/api/v1/export/status/{job_id}", response_model=ExportStatusResponse)
@@ -1950,8 +1996,7 @@ async def export_status(job_id: str):
 
     对应 Go 端：ExportHandler.Status → AIEngine.ExportStatus
     """
-    async with _export_lock:
-        job = _export_tasks.get(job_id)
+    job = await _load_export_job(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="导出任务不存在")
@@ -1975,14 +2020,15 @@ async def export_status(job_id: str):
         upload_status=meta.get("upload_status"),
         minio_path=job.minio_path,
         file_size=job.file_size,
+        version=job.version,
+        quality_report=job.quality_report,
     )
 
 
 @app.get("/download/{job_id}.{extension}")
 async def export_download(job_id: str, extension: str):
     """下载已完成的 PPTX/DOCX/HTML5 导出文件。"""
-    async with _export_lock:
-        job = _export_tasks.get(job_id)
+    job = await _load_export_job(job_id)
 
     if not job or job.status != ExportStatus.DONE:
         raise HTTPException(status_code=404, detail="导出文件不存在或任务尚未完成")

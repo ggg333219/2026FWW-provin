@@ -693,12 +693,26 @@ type ExportStatusResponse struct {
 	DownloadURL string `json:"download_url,omitempty"`
 	Error       string `json:"error,omitempty"`
 	// 引擎侧导出产物上传状态等扩展字段（字段只增不删），透传给前端。
-	UploadStatus    string            `json:"upload_status,omitempty"`
-	MinioPath       string            `json:"minio_path,omitempty"`
-	FileSize        int64             `json:"file_size,omitempty"`
-	CoursewareTitle string            `json:"courseware_title,omitempty"`
-	Version         int               `json:"version,omitempty"`
-	Files           map[string]string `json:"files,omitempty"`
+	UploadStatus    string               `json:"upload_status,omitempty"`
+	MinioPath       string               `json:"minio_path,omitempty"`
+	FileSize        int64                `json:"file_size,omitempty"`
+	CoursewareTitle string               `json:"courseware_title,omitempty"`
+	Version         int                  `json:"version,omitempty"`
+	Files           map[string]string    `json:"files,omitempty"`
+	QualityReport   *ExportQualityReport `json:"quality_report,omitempty"`
+}
+
+type ExportQualityFinding struct {
+	Code        string `json:"code"`
+	Severity    string `json:"severity"`
+	Message     string `json:"message"`
+	SlideNumber *int   `json:"slide_number,omitempty"`
+}
+
+type ExportQualityReport struct {
+	Status     string                 `json:"status"`
+	SlideCount int                    `json:"slide_count"`
+	Findings   []ExportQualityFinding `json:"findings"`
 }
 
 // =============================================================================

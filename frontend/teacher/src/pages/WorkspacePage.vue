@@ -195,6 +195,7 @@
                       :export-status="versionStore.exportStatus"
                       :export-download-url="versionStore.exportDownloadUrl"
                       :export-error="versionStore.exportError"
+                      :export-quality-report="versionStore.exportQualityReport"
                       :loading="versionStore.loading"
                       @start-export="(fmt) => versionStore.startExport(versionStore.genId, fmt)"
                       @reset-export="versionStore.resetExport()"
