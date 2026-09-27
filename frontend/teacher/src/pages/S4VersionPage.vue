@@ -8,9 +8,9 @@
         </div>
         <div class="page-header-right">
           <div class="step-pills">
-            <router-link :to="{ name: 'S1Intent' }" class="pill">S1 意图</router-link>
-            <router-link :to="{ name: 'S2Material' }" class="pill">S2 资料</router-link>
-            <router-link :to="{ name: 'S3Studio' }" class="pill">S3 生成</router-link>
+            <router-link :to="{ name: 'S1Intent', query: { project_id: projectStore.projectId } }" class="pill">S1 意图</router-link>
+            <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="pill">S2 资料</router-link>
+            <router-link :to="{ name: 'S3Studio', query: { project_id: route.query.project_id, generation_id: genIdInput } }" class="pill">S3 生成</router-link>
             <span class="pill active">S4 版本</span>
             <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
           </div>
@@ -22,7 +22,7 @@
           <input
             v-model="genIdInput"
             type="text"
-            placeholder="输入 Generation ID"
+            placeholder="Generation ID（项目版本可自动加载）"
             class="gen-id-input"
             @keyup.enter="loadData"
           />
@@ -36,6 +36,7 @@
           {{ versionStore.error }}
           <button class="btn-text" @click="versionStore.error = ''">×</button>
         </div>
+        <div v-if="versionStore.isCurrentLocked" class="locked-banner"><span>🔒 当前版本已锁定，只能查看、对比和导出。</span><button class="btn btn-sm" @click="handleContinueFromLocked">基于此版本继续创建</button></div>
 
         <div class="s4-layout">
           <!-- 版本历史 -->
@@ -44,14 +45,15 @@
               <h3>版本历史 ({{ versionStore.versionCount }})</h3>
               <div v-if="versionStore.loading" class="empty-tip">加载中...</div>
               <div v-else-if="versionStore.versions.length === 0" class="empty-tip">
-                输入 Generation ID 并加载版本
+                当前项目还没有版本，请先在 S3 保存新版本
               </div>
               <div v-else class="version-list">
                 <div
                   v-for="v in versionStore.versions"
                   :key="v.id"
                   class="version-item"
-                  :class="{ locked: v.locked }"
+                  :class="{ locked: v.locked, selected: versionStore.currentVersionDetail?.version === v.version }"
+                  @click="loadSelectedVersion(v.version)"
                 >
                   <div class="version-main">
                     <strong>v{{ v.version }}</strong>
@@ -70,11 +72,11 @@
           <section class="s4-actions">
             <div class="section-card">
               <h3>版本操作</h3>
-              <div v-if="!versionStore.genId" class="empty-tip">请先加载版本</div>
+              <div v-if="!versionStore.genId && !versionStore.projectId" class="empty-tip">请先加载版本</div>
               <div v-else class="action-group">
                 <!-- 回滚 -->
                 <div class="action-row">
-                  <label>回滚到版本:</label>
+                  <label>选择分叉起点:</label>
                   <select v-model="rollbackTarget" class="action-select">
                     <option :value="null" disabled>选择目标版本</option>
                     <option v-for="v in versionStore.versions" :key="v.id" :value="v.version">
@@ -86,7 +88,7 @@
                     :disabled="!rollbackTarget || versionStore.loading"
                     @click="handleRollback"
                   >
-                    回滚
+                    基于此版本新建版本
                   </button>
                 </div>
 
@@ -94,7 +96,7 @@
                 <div class="action-row">
                   <button
                     class="btn btn-sm btn-warn"
-                    :disabled="versionStore.loading"
+                    :disabled="versionStore.loading || versionStore.isCurrentLocked"
                     @click="handleLock"
                   >
                     🔒 锁定最新版本
@@ -105,15 +107,15 @@
                 <div class="action-divider"></div>
                 <h4>修改指令</h4>
                 <div class="action-row">
-                  <select v-model="changeType" class="action-select">
+                  <select v-model="changeType" class="action-select" :disabled="versionStore.isCurrentLocked">
                     <option value="update_node">更新节点</option>
                     <option value="add_node">新增节点</option>
                     <option value="delete_node">删除节点</option>
                     <option value="swap_nodes">交换节点</option>
                     <option value="change_template">切换模板</option>
                   </select>
-                  <input v-model="changeTarget" type="text" placeholder="目标节点ID" class="action-input" />
-                  <button class="btn btn-sm" @click="handleAddChange">添加</button>
+                  <input v-model="changeTarget" type="text" placeholder="目标节点ID" class="action-input" :disabled="versionStore.isCurrentLocked" />
+                  <button class="btn btn-sm" :disabled="versionStore.isCurrentLocked" @click="handleAddChange">添加</button>
                 </div>
 
                 <!-- 待处理列表 -->
@@ -138,7 +140,7 @@
                   <button
                     v-if="versionStore.hasPendingChanges"
                     class="btn btn-sm btn-primary"
-                    :disabled="versionStore.loading"
+                    :disabled="versionStore.loading || versionStore.isCurrentLocked"
                     @click="handleSubmitModify"
                   >
                     提交修改到后端
@@ -161,11 +163,23 @@
               :loading="versionStore.loading"
               :intent="intentStore.intentSummary || {}"
               :nodes="versionStore.currentVersionDetail?.nodes || []"
+              :course-title="courseTitle"
+              :version-label="currentVersionLabel"
               @start-export="handleStartExport"
               @reset-export="versionStore.resetExport()"
             />
           </section>
         </div>
+
+        <section v-if="versionStore.versions.length >= 2" class="compare-card section-card">
+          <div class="compare-head"><div><h3>版本对比</h3><p>对比内容、顺序、样式与证据引用的变化。</p></div><div class="compare-controls"><select v-model="compareLeft"><option v-for="v in versionStore.versions" :key="`l${v.id}`" :value="v.version">v{{ v.version }}</option></select><span>→</span><select v-model="compareRight"><option v-for="v in versionStore.versions" :key="`r${v.id}`" :value="v.version">v{{ v.version }}</option></select><button class="btn btn-primary" :disabled="compareLeft === compareRight || versionStore.comparing" @click="runCompare">{{ versionStore.comparing ? '对比中…' : '开始对比' }}</button></div></div>
+          <div v-if="versionStore.comparison" class="diff-grid">
+            <div class="diff-stat added"><strong>+{{ versionStore.comparison.added.length }}</strong><span>新增节点</span></div>
+            <div class="diff-stat removed"><strong>-{{ versionStore.comparison.removed.length }}</strong><span>删除节点</span></div>
+            <div class="diff-stat changed"><strong>{{ versionStore.comparison.changed.length }}</strong><span>修改节点</span></div>
+            <div class="diff-list"><article v-for="item in versionStore.comparison.changed" :key="item.node_id"><b>{{ item.title }}</b><span>{{ changeLabels(item.changes).join('、') }}</span></article><p v-if="!versionStore.comparison.changed.length">两个版本没有节点内容差异。</p></div>
+          </div>
+        </section>
 
         <!-- 当前版本详情 -->
         <div v-if="versionStore.currentVersionDetail" class="version-detail">
@@ -183,18 +197,25 @@
             </div>
           </div>
         </div>
+
+        <section v-if="versionStore.currentVersionDetail" class="evidence-trace section-card">
+          <div class="trace-head"><div><h3>证据追溯</h3><p>当前版本共有 {{ evidenceTrace.length }} 个引用关系，按节点定位来源。</p></div><router-link :to="{ name: 'S3Studio', query: { project_id: route.query.project_id, generation_id: genIdInput } }">返回 S3 调整证据</router-link></div>
+          <div v-if="!evidenceTrace.length" class="empty-tip">当前版本未记录证据引用</div>
+          <div v-else class="trace-list"><article v-for="item in evidenceTrace" :key="`${item.nodeId}:${item.chunkId}`"><div><b>{{ item.nodeTitle }}</b><span>{{ item.chunkId }}</span></div><p>{{ item.source || '来源切片已绑定，可在资料与证据中心查看原文。' }}</p></article></div>
+        </section>
       </div>
     </div>
   </AppShell>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, watch, computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useVersionStore } from '../stores/versionStore'
 import { useGenerationStore } from '../stores/generationStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import { useIntentStore } from '../stores/intentStore'
+import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
 import AppShell from '../components/layout/AppShell.vue'
 import S4VersionExportCenter from '../components/teacher/S4VersionExportCenter.vue'
 
@@ -202,8 +223,10 @@ const versionStore = useVersionStore()
 const generationStore = useGenerationStore()
 const workspaceStore = useWorkspaceStore()
 const intentStore = useIntentStore()
+const projectStore = useCoursewareProjectStore()
 
 const route = useRoute()
+const router = useRouter()
 
 const genIdInput = ref(
   generationStore.lastGenId ||
@@ -213,30 +236,96 @@ const genIdInput = ref(
 )
 
 // 路由参数变化时自动加载版本（S3 一键生成后带 genId 跳转过来）
-watch(() => route.query.genId, (id) => {
+watch(() => route.query.generation_id || route.query.genId, (id) => {
   if (id && typeof id === 'string') {
     genIdInput.value = id
     loadData()
   }
 }, { immediate: true })
+watch(() => route.query.project_id, async (id) => {
+  if (!id || typeof id !== 'string') return
+  projectStore.setActive(id)
+  await projectStore.resume(id).catch(() => {})
+  projectStore.updateStep('s4_version').catch(() => {})
+  await loadData()
+}, { immediate: true })
+onMounted(() => {
+  if (!(route.query.generation_id || route.query.genId) && genIdInput.value) loadData()
+})
+const courseTitle = computed(() => projectStore.project?.title || intentStore.intentSummary?.topic || '未命名课件')
+const currentVersionLabel = computed(() => `v${versionStore.currentVersionDetail?.version || versionStore.versions?.[0]?.version || 1}`)
 const rollbackTarget = ref(null)
 const changeType = ref('update_node')
 const changeTarget = ref('')
+const compareLeft = ref(null)
+const compareRight = ref(null)
+const evidenceTrace = computed(() => {
+  const nodes = versionStore.currentVersionDetail?.nodes || []
+  const packet = projectStore.draft?.evidence_packet || null
+  const sourceMap = new Map([
+    ...(packet?.citations || []),
+    ...(packet?.relevant_chunks || []),
+  ].map((item) => [item.chunk_id, item.text_snippet || item.content || item.source_ref || '']))
+  return nodes.flatMap((node) => [...new Set([...(node.citation_refs || []), ...(node.source_chunk_ids || [])])].map((chunkId) => ({
+    nodeId: node.node_id,
+    nodeTitle: node.title || node.node_id,
+    chunkId,
+    source: sourceMap.get(chunkId) || '',
+  })))
+})
 
 async function loadData() {
   const id = genIdInput.value.trim()
-  if (!id) return
-  await versionStore.loadVersions(id)
+  const projectId = projectStore.projectId || String(route.query.project_id || '')
+  if (!id && !projectId) return
+  if (id) versionStore.genId = id
+  if (projectId) await versionStore.loadProjectVersions(projectId)
+  else await versionStore.loadVersions(id)
   if (versionStore.versions.length > 0) {
-    await versionStore.loadVersion(id)
+    if (projectId) await versionStore.loadProjectVersion(projectId)
+    else await versionStore.loadVersion(id)
+    compareRight.value = versionStore.versions[0]?.version || null
+    compareLeft.value = versionStore.versions[1]?.version || null
   }
 }
 
+async function loadSelectedVersion(version) {
+  if (projectStore.projectId) await versionStore.loadProjectVersion(projectStore.projectId, version)
+  else await versionStore.loadVersion(versionStore.genId, version)
+}
+async function runCompare() {
+  if (projectStore.projectId) await versionStore.compareProjectVersions(projectStore.projectId, compareLeft.value, compareRight.value)
+  else await versionStore.compareVersions(versionStore.genId, compareLeft.value, compareRight.value)
+}
+function changeLabels(changes = []) {
+  const labels = { title: '标题', summary: '摘要', content: '正文', script: '讲稿', node_type: '节点类型', citation_refs: '证据引用', source_chunk_ids: '来源切片', layout_hint: '版式', font_size_hint: '字号', slide_background: '配色', metadata: '样式/互动元数据', order: '顺序' }
+  return changes.map((item) => labels[item] || item)
+}
+
 async function handleRollback() {
-  if (!rollbackTarget.value || !versionStore.genId) return
+  if (!rollbackTarget.value || (!versionStore.genId && !projectStore.projectId)) return
   try {
-    await versionStore.rollbackTo(versionStore.genId, rollbackTarget.value)
+    const targetVersion = Number(rollbackTarget.value)
+    const targetDetail = projectStore.projectId
+      ? await versionStore.loadProjectVersion(projectStore.projectId, targetVersion)
+      : await versionStore.loadVersion(versionStore.genId, targetVersion)
+    const result = projectStore.projectId
+      ? await versionStore.rollbackProject(projectStore.projectId, targetVersion)
+      : await versionStore.rollbackTo(versionStore.genId, targetVersion)
+    const data = result?.data || result || {}
+    const newVersion = Number(data.new_draft_version_no || data.current_version || data.new_version_no || versionStore.currentVersionDetail?.version || targetVersion + 1)
+    generationStore.setLastGenId(versionStore.genId)
+    const nodes = data.nodes || targetDetail?.nodes || []
+    generationStore.setNodes(nodes)
+    await persistRollbackDraft({
+      nodes,
+      outline: targetDetail?.outline,
+      pageBindings: data.page_bindings || targetDetail?.pageBindings || [],
+      presentation: data.presentation || targetDetail?.presentation || {},
+    })
+    await projectStore.updateStep('s3_studio').catch(() => {})
     rollbackTarget.value = null
+    await router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: targetVersion, phase: 'outline' } })
   } catch {
     // 错误已在 store 中设置
   }
@@ -252,6 +341,7 @@ async function handleLock() {
 }
 
 function handleAddChange() {
+  if (versionStore.isCurrentLocked) return
   if (!changeTarget.value.trim()) return
   versionStore.addChange({
     type: changeType.value,
@@ -261,7 +351,7 @@ function handleAddChange() {
 }
 
 async function handleSubmitModify() {
-  if (!versionStore.genId) return
+  if (!versionStore.genId || versionStore.isCurrentLocked) return
   try {
     await versionStore.submitModify(versionStore.genId)
   } catch { /* 错误已在 store */ }
@@ -269,7 +359,61 @@ async function handleSubmitModify() {
 
 function handleStartExport(format) {
   if (!versionStore.genId) return
-  versionStore.startExport(versionStore.genId, format)
+  versionStore.startExport(
+    versionStore.genId,
+    format,
+    versionStore.currentVersionDetail?.version || null,
+    courseTitle.value,
+    versionStore.currentVersionDetail?.nodes || [],
+  )
+}
+
+async function handleContinueFromLocked() {
+  const version = versionStore.currentVersionDetail?.version
+  if (!version || (!versionStore.genId && !projectStore.projectId)) return
+  const nodes = versionStore.currentVersionDetail?.nodes || []
+  const result = projectStore.projectId
+    ? await versionStore.rollbackProject(projectStore.projectId, version)
+    : await versionStore.rollbackTo(versionStore.genId, version)
+  const data = result?.data || result || {}
+  const newVersion = Number(data.new_draft_version_no || data.current_version || data.new_version_no || version + 1)
+  generationStore.setLastGenId(versionStore.genId)
+  const restoredNodes = data.nodes || nodes
+  generationStore.setNodes(restoredNodes)
+  await persistRollbackDraft({
+    nodes: restoredNodes,
+    outline: versionStore.currentVersionDetail?.outline,
+    pageBindings: data.page_bindings || versionStore.currentVersionDetail?.pageBindings || [],
+    presentation: data.presentation || versionStore.currentVersionDetail?.presentation || {},
+  })
+  await projectStore.updateStep('s3_studio').catch(() => {})
+  router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: version, phase: 'outline' } })
+}
+
+async function persistRollbackDraft({ nodes, outline, pageBindings, presentation }) {
+  if (!projectStore.projectId) return
+  const current = projectStore.draft && typeof projectStore.draft === 'object' ? projectStore.draft : {}
+  const restored = {
+    ...current,
+    outline: outline && typeof outline === 'object' ? {
+      ...outline,
+      status: 'draft',
+      confirmed_at: null,
+      forked_from_version: Number(outline.outline_version || 0),
+      editable_after_rollback: true,
+    } : current.outline,
+    generation: {
+      ...(current.generation || {}),
+      generation_id: versionStore.genId,
+      nodes: nodes || [],
+    },
+    page_bindings: pageBindings || [],
+    presentation: { ...(current.presentation || {}), ...(presentation || {}) },
+  }
+  await projectStore.saveNow(restored).catch(() => {})
+  try {
+    window.localStorage.setItem('fuww_courseware_resume_draft', JSON.stringify(restored))
+  } catch {}
 }
 
 function formatTime(iso) {
@@ -312,6 +456,7 @@ function formatTime(iso) {
   padding: 10px 14px; border-radius: 10px; margin-bottom: 16px;
   display: flex; justify-content: space-between; align-items: center; font-size: 13px;
 }
+.locked-banner { display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;padding:11px 14px;border:1px solid #f0d58a;border-radius:10px;background:#fff9e7;color:#815b0d;font-size:13px; }
 
 /* 按钮 */
 .btn {
@@ -346,7 +491,8 @@ function formatTime(iso) {
 
 /* 版本列表 */
 .version-list { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
-.version-item { padding: 10px; background: #f6faf8; border-radius: 10px; }
+.version-item { padding: 10px; background: #f6faf8; border: 1px solid transparent; border-radius: 10px; cursor: pointer; }
+.version-item.selected { border-color: #5ca68f; box-shadow: 0 0 0 2px rgba(92,166,143,.12); }
 .version-item.locked { border-left: 3px solid #eab308; background: #fffdf0; }
 .version-main { display: flex; align-items: center; gap: 10px; }
 .version-main strong { color: #5ca68f; min-width: 36px; font-size: 14px; }
@@ -385,6 +531,7 @@ function formatTime(iso) {
 .node-preview-card strong { display: block; font-size: 13px; color: #1e293b; margin-bottom: 2px; }
 .node-preview-card small { font-size: 11px; color: #94a3b8; text-transform: uppercase; }
 .node-preview-card p { font-size: 12px; color: #64748b; margin: 6px 0 0; line-height: 1.4; }
+.compare-card,.evidence-trace{margin-top:20px}.compare-head,.trace-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.compare-head h3,.trace-head h3{margin:0;color:#2d5f58}.compare-head p,.trace-head p{margin:5px 0 0;color:#71847d;font-size:12px}.compare-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.compare-controls select{padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;background:#fff}.diff-grid{display:grid;grid-template-columns:repeat(3,140px) 1fr;gap:10px;margin-top:16px}.diff-stat{display:grid;place-content:center;min-height:90px;text-align:center;border-radius:12px;background:#f8fafc}.diff-stat strong{font-size:24px}.diff-stat span{font-size:12px;color:#64748b}.diff-stat.added strong{color:#059669}.diff-stat.removed strong{color:#dc2626}.diff-stat.changed strong{color:#b45309}.diff-list{max-height:180px;overflow:auto;border:1px solid #e5ebe8;border-radius:12px;padding:8px}.diff-list article{display:flex;justify-content:space-between;gap:12px;padding:7px;border-bottom:1px solid #eef2f0;font-size:12px}.diff-list span{color:#9a6514}.trace-head a{font-size:12px;color:#28735f;text-decoration:none}.trace-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-top:14px}.trace-list article{padding:11px;border:1px solid #e0ebe6;border-radius:10px;background:#fcfefd}.trace-list article div{display:flex;justify-content:space-between;gap:8px}.trace-list b{font-size:13px;color:#334155}.trace-list span{font-size:10px;color:#28735f}.trace-list p{margin:7px 0 0;font-size:12px;line-height:1.5;color:#64748b}@media(max-width:900px){.compare-head,.trace-head{flex-direction:column}.diff-grid{grid-template-columns:repeat(3,1fr)}.diff-list{grid-column:1/-1}}
   .pill.back-pill {
     background: #e8f0ed;
     border-color: #c6d9d0;

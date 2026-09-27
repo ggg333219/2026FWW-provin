@@ -21,9 +21,32 @@ function makeNodeId() {
   return `node_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 }
 
+/**
+ * 归一 node_type 到前端大纲编辑器的枚举（content/section/quiz/interactive/summary）。
+ * 引擎侧（Python normalize_stage2_nodes）产出 slide/cover/divider 等渲染枚举，
+ * 编辑器 <select> 无这些选项会显示空白，故在此收敛。
+ */
+function normalizeOutlineNodeType(raw) {
+  const v = String(raw || '').trim()
+  switch (v) {
+    case 'content':
+    case 'section':
+    case 'quiz':
+    case 'interactive':
+    case 'summary':
+      return v
+    case 'slide':
+    case 'cover':
+      return 'content'
+    case 'divider':
+      return 'section'
+    default:
+      return 'content'
+  }
+}
+
 /** 前端内部大纲节点（前端编辑用，不含完整讲稿） */
-function createOutlineNode(overrides = {}) {
-  return {
+function createOutlineNode(overrides = {}) {  return {
     node_id: makeNodeId(),
     order: 1,
     title: '',
@@ -48,6 +71,8 @@ export const useOutlineStore = defineStore('outline', {
     status: 'draft', // draft | confirming | confirmed | superseded
     title: '',
     confirmed_at: null,
+    /** 从历史课件版本恢复时记录来源大纲版本；首次保存会基于服务端最新版本创建新分支。 */
+    forked_from_version: 0,
 
     /** 节点树 */
     nodes: [],
@@ -72,6 +97,12 @@ export const useOutlineStore = defineStore('outline', {
   getters: {
     /** 是否可以编辑大纲（仅草稿状态可编辑） */
     canEdit: (state) => state.status === 'draft' || state.status === 'confirming',
+
+    /**
+     * 节点顺序在已确认后仍允许调整。
+     * S3 的“已确认”代表内容可以开始生成，不应把教师的排序操作一并锁死。
+     */
+    canReorder: (state) => ['draft', 'confirming', 'confirmed'].includes(state.status),
 
     /** 是否已确认（可进入内容生成） */
     isConfirmed: (state) => state.status === 'confirmed',
@@ -165,6 +196,7 @@ export const useOutlineStore = defineStore('outline', {
         this.status = cache.status || 'draft'
         this.title = cache.title || ''
         this.confirmed_at = cache.confirmed_at || null
+        this.forked_from_version = Number(cache.forked_from_version || 0)
         this.nodes = Array.isArray(cache.nodes) ? cache.nodes : []
         this.session_id = cache.session_id || ''
         this.intent_id = cache.intent_id || ''
@@ -218,15 +250,16 @@ export const useOutlineStore = defineStore('outline', {
       this._persist()
     },
 
-    /** 交换两个节点的顺序 */
+    /** 交换两个节点的顺序（真换数组位置，再重排 order） */
     swapNodes(nodeIdA, nodeIdB) {
-      if (!this.canEdit) return
+      if (!this.canReorder) return
       const idxA = this.nodes.findIndex((n) => n.node_id === nodeIdA)
       const idxB = this.nodes.findIndex((n) => n.node_id === nodeIdB)
-      if (idxA < 0 || idxB < 0) return
-      const tmp = this.nodes[idxA].order
-      this.nodes[idxA].order = this.nodes[idxB].order
-      this.nodes[idxB].order = tmp
+      if (idxA < 0 || idxB < 0 || idxA === idxB) return
+      // 交换数组元素位置（此前只换 order 字段值，随即被 _reorder() 抹掉，导致排序无效）
+      const tmp = this.nodes[idxA]
+      this.nodes[idxA] = this.nodes[idxB]
+      this.nodes[idxB] = tmp
       this._reorder()
       this._persist()
     },
@@ -238,6 +271,18 @@ export const useOutlineStore = defineStore('outline', {
       const newIdx = direction === 'up' ? idx - 1 : idx + 1
       if (newIdx < 0 || newIdx >= this.nodes.length) return
       this.swapNodes(this.nodes[idx].node_id, this.nodes[newIdx].node_id)
+    },
+
+    /** 拖拽到指定位置，保持数组顺序与 order 字段一致 */
+    moveNodeToIndex(nodeId, targetIndex) {
+      if (!this.canReorder) return
+      const sourceIndex = this.nodes.findIndex((n) => n.node_id === nodeId)
+      const boundedTarget = Math.max(0, Math.min(Number(targetIndex), this.nodes.length - 1))
+      if (sourceIndex < 0 || sourceIndex === boundedTarget) return
+      const [node] = this.nodes.splice(sourceIndex, 1)
+      this.nodes.splice(boundedTarget, 0, node)
+      this._reorder()
+      this._persist()
     },
 
     // ------------------------------------------------------------------
@@ -255,12 +300,20 @@ export const useOutlineStore = defineStore('outline', {
       this.loading = true
       this.error = ''
       try {
+        let baseVersion = this.outline_version
+        if (this.forked_from_version > 0) {
+          const latestResp = await teacherV1Api.outline.get(this.outline_id, {})
+          const latest = latestResp?.data || latestResp || {}
+          baseVersion = Number(latest.outline_version || baseVersion)
+        }
         const resp = await teacherV1Api.outline.save(this.outline_id, {
-          base_version: this.outline_version,
+          base_version: baseVersion,
           nodes: this.nodes
         })
         const data = resp?.data || resp || {}
         this.outline_version = data.outline_version || this.outline_version + 1
+        this.status = data.status || 'draft'
+        this.forked_from_version = 0
         this._persist()
         return data
       } catch (err) {
@@ -283,16 +336,32 @@ export const useOutlineStore = defineStore('outline', {
      * auto_apply=false（默认）：返回待确认修订结果
      */
     async reviseOutline(message) {
-      if (!this.outline_id) return
+      if (!this.outline_id) {
+        const error = new Error('当前大纲尚未保存，无法发起 AI 修订，请先保存大纲后重试')
+        this.reviseError = error.message
+        throw error
+      }
       this.reviseLoading = true
       this.reviseError = ''
       this.pendingRevision = null
       try {
-        const resp = await teacherV1Api.outline.revise(this.outline_id, {
-          message,
-          base_version: this.outline_version,
-          auto_apply: false
-        })
+        let resp
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            resp = await teacherV1Api.outline.revise(this.outline_id, {
+              message,
+              base_version: this.outline_version,
+              auto_apply: false
+            })
+            break
+          } catch (err) {
+            const isVersionConflict = err?.httpStatus === 409 || err?.status === 409 || err?.code === 409
+            if (!isVersionConflict || attempt > 0) throw err
+            // 其他页面/标签页可能已经产生了新版本。同步服务端最新版本，
+            // 再用同一条教师指令重试一次，避免用户看到可恢复的 409。
+            await this.loadOutline(this.outline_id)
+          }
+        }
         const data = resp?.data || resp || {}
         this.pendingRevision = {
           outline_version: data.outline_version || this.outline_version + 1,
@@ -314,7 +383,12 @@ export const useOutlineStore = defineStore('outline', {
       const previousNodes = this.nodes
       const revisedNodes = this.pendingRevision.nodes.map((n) => ({
         ...n,
-        node_id: n.node_id || makeNodeId()
+        node_id: n.node_id || makeNodeId(),
+        node_type: normalizeOutlineNodeType(n.node_type),
+        key_points: Array.isArray(n.key_points) ? n.key_points : [],
+        estimated_duration_minutes: Number(n.estimated_duration_minutes) || 5,
+        source_chunk_ids: Array.isArray(n.source_chunk_ids) ? n.source_chunk_ids : [],
+        interactive_plan: n.interactive_plan || null
       }))
       this.nodes = revisedNodes
       this._reorder()
@@ -334,6 +408,7 @@ export const useOutlineStore = defineStore('outline', {
     /** 放弃 AI 修订结果 */
     discardRevision() {
       this.pendingRevision = null
+      this.reviseError = ''
     },
 
     // ------------------------------------------------------------------
@@ -376,6 +451,7 @@ export const useOutlineStore = defineStore('outline', {
       this.loading = true
       this.confirmError = ''
       try {
+        if (this.forked_from_version > 0) await this.saveVersion()
         const resp = await teacherV1Api.outline.confirm(this.outline_id, {
           outline_version: this.outline_version
         })
@@ -403,12 +479,14 @@ export const useOutlineStore = defineStore('outline', {
       this.status = data.status || 'draft'
       this.title = data.title || ''
       this.confirmed_at = data.confirmed_at || null
+      this.forked_from_version = Number(data.forked_from_version || 0)
       this.nodes = (data.nodes || []).map((n) => ({
         node_id: n.node_id || makeNodeId(),
         order: Number(n.order) || 1,
         title: n.title || '',
         summary: n.summary || '',
-        node_type: n.node_type || 'content',
+        // 兼容引擎枚举（slide/cover/divider）→ 大纲编辑器的前端枚举
+        node_type: normalizeOutlineNodeType(n.node_type),
         key_points: Array.isArray(n.key_points) ? n.key_points : [],
         estimated_duration_minutes: Number(n.estimated_duration_minutes) || 5,
         source_chunk_ids: Array.isArray(n.source_chunk_ids) ? n.source_chunk_ids : [],
@@ -416,6 +494,27 @@ export const useOutlineStore = defineStore('outline', {
       }))
       this.session_id = data.session_id || ''
       this.intent_id = data.intent_id || ''
+    },
+
+    /** 将历史版本中的大纲恢复为新的可编辑分支，不修改历史大纲版本。 */
+    restoreEditableSnapshot(data = {}) {
+      const sourceVersion = Number(data.outline_version || 0)
+      this._applyOutlineData({
+        ...data,
+        status: 'draft',
+        confirmed_at: null,
+        forked_from_version: sourceVersion,
+      })
+      this.status = 'draft'
+      this.confirmed_at = null
+      this.forked_from_version = sourceVersion
+      this._persist()
+    },
+
+    bindEvidenceRefs(ids = []) {
+      const refs = [...new Set((Array.isArray(ids) ? ids : []).filter(Boolean))]
+      this.nodes = this.nodes.map((node) => ({ ...node, source_chunk_ids: refs }))
+      this._persist()
     },
 
     /** 重新编号 order（1 开始连续） */
@@ -443,6 +542,7 @@ export const useOutlineStore = defineStore('outline', {
             status: this.status,
             title: this.title,
             confirmed_at: this.confirmed_at,
+            forked_from_version: this.forked_from_version,
             nodes: this.nodes,
             session_id: this.session_id,
             intent_id: this.intent_id
@@ -460,6 +560,7 @@ export const useOutlineStore = defineStore('outline', {
       this.status = 'draft'
       this.title = ''
       this.confirmed_at = null
+      this.forked_from_version = 0
       this.nodes = []
       this.session_id = ''
       this.intent_id = ''

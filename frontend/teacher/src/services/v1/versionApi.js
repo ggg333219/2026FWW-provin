@@ -49,24 +49,26 @@ export const teacherVersionApi = {
 
   /**
    * 创建导出任务
-   * POST /api/v1/export/{genId}
+   * POST /api/v1/exp/{genId}（/export 保留为后端兼容别名）
    */
-  exportCreate: (genId, format = 'pptx', version = null) =>
-    requestJson(`/api/v1/export/${encodeURIComponent(genId)}`, {
+  exportCreate: (genId, format = 'pptx', version = null, coursewareTitle = '', nodes = []) =>
+    requestJson(`/api/v1/exp/${encodeURIComponent(genId)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         format,
-        version: version || null
+        version: version || null,
+        courseware_title: coursewareTitle || '',
+        nodes: Array.isArray(nodes) ? nodes : []
       })
     }),
 
   /**
    * 查询导出任务状态
-   * GET /api/v1/export/status/{jobId}
+   * GET /api/v1/exp/status/{jobId}
    */
   exportStatus: (jobId) =>
-    requestJson(`/api/v1/export/status/${encodeURIComponent(jobId)}`),
+    requestJson(`/api/v1/exp/status/${encodeURIComponent(jobId)}`),
 
   /**
    * 提交修改命令

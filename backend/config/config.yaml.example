@@ -14,7 +14,7 @@ server:
 database:
   driver: postgres
   host: localhost
-  port: 5432
+  port: 15432
   user: postgres
   password: 123456
   dbname: teaching
@@ -24,14 +24,14 @@ database:
 
 redis:
   host: localhost
-  port: 6379
+  port: 16379
   password: ""
   db: 0
   pool_size: 10
 
 oss:
   provider: minio
-  endpoint: localhost:9000
+  endpoint: localhost:19000
   access_key: minioadmin
   secret_key: minioadmin
   bucket: teaching

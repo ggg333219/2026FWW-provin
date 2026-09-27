@@ -53,8 +53,8 @@
     </div>
 
     <!-- 错误提示 -->
-    <div v-if="outlineStore.error || outlineStore.confirmError" class="error-bar" role="alert">
-      {{ outlineStore.confirmError || outlineStore.error }}
+    <div v-if="outlineStore.error || outlineStore.confirmError || outlineStore.reviseError" class="error-bar" role="alert">
+      {{ outlineStore.confirmError || outlineStore.reviseError || outlineStore.error }}
     </div>
 
     <!-- 节点编辑器 -->
@@ -64,12 +64,23 @@
           v-for="(node, idx) in outlineStore.nodes"
           :key="node.node_id"
           class="outline-node-card"
-          :class="`node-type-${node.node_type}`"
+          :class="[`node-type-${node.node_type}`, { dragging: draggedNodeId === node.node_id, 'drag-over': dragOverIndex === idx }]"
+          @dragover.prevent="handleDragOver($event, idx)"
+          @dragenter.prevent="handleDragOver($event, idx)"
+          @drop.prevent="handleDrop($event, idx)"
+          @dragend="handleDragEnd"
         >
           <!-- 节点序号 & 移动按钮 -->
-          <div class="node-drag-handle">
+          <div
+            class="node-drag-handle"
+            :draggable="outlineStore.canReorder"
+            :title="outlineStore.canReorder ? '按住拖动排序' : ''"
+            :aria-label="outlineStore.canReorder ? `拖动第 ${idx + 1} 个节点排序` : undefined"
+            @dragstart="handleDragStart($event, node.node_id)"
+          >
+            <span v-if="outlineStore.canReorder" class="drag-grip" aria-hidden="true">⠿</span>
             <span class="node-order">{{ idx + 1 }}</span>
-            <div class="node-move-btns" v-if="outlineStore.canEdit">
+            <div class="node-move-btns" v-if="outlineStore.canReorder">
               <button
                 class="move-btn"
                 :disabled="idx === 0"
@@ -153,9 +164,11 @@
               </template>
             </div>
 
-            <!-- 互动规划（仅 interactive / quiz 类型显示） -->
+            <!-- 互动规划（仅 interactive / quiz 类型且有 plan 时显示）
+                 注意：必须判 interactive_plan 非空——后端/LLM 产出的交互节点该字段常为 null，
+                 直接访问 interactive_plan.x 会抛错并中断整个节点列表渲染。 -->
             <div
-              v-if="(node.node_type === 'interactive' || node.node_type === 'quiz') && outlineStore.canEdit"
+              v-if="(node.node_type === 'interactive' || node.node_type === 'quiz') && node.interactive_plan && outlineStore.canEdit"
               class="node-interactive-plan"
             >
               <details>
@@ -255,6 +268,7 @@
       :loading="revisingDialogLoading"
       :change-summary="outlineStore.changeSummary"
       :pending-nodes="outlineStore.pendingRevision?.nodes || []"
+      :error-message="outlineStore.reviseError"
       @apply="handleApplyRevision"
       @cancel="handleCancelRevision"
     />
@@ -292,7 +306,11 @@ const props = defineProps({
   /** 教学意图摘要（用于创建大纲） */
   intentSummary: { type: Object, default: null },
   /** 是否自动尝试从 localStorage 恢复大纲 */
-  autoRestore: { type: Boolean, default: true }
+  autoRestore: { type: Boolean, default: true },
+  /** S1 意图自动检索形成的整份课件证据包 */
+  evidencePacket: { type: Object, default: null },
+  /** 等待父级完成自动检索后再创建大纲，避免先生成后补证据 */
+  ready: { type: Boolean, default: true }
 })
 
 const emit = defineEmits(['confirm-complete', 'outline-created', 'error'])
@@ -304,6 +322,8 @@ const showReviseInput = ref(false)
 const reviseMessage = ref('')
 const revisingDialogLoading = ref(false) // 对话框内 AI 正在生成修订
 const newKeyPoints = ref({}) // { [node_id]: input value }
+const draggedNodeId = ref('')
+const dragOverIndex = ref(-1)
 
 const statusLabel = computed(() => ({
   draft: '草稿',
@@ -332,9 +352,9 @@ onMounted(async () => {
 
 // 若无大纲且有 intent，自动创建
 watch(
-  () => [outlineStore.outline_id, outlineStore.nodes.length],
-  ([oid, nc]) => {
-    if (!oid && nc === 0 && props.intentSummary) {
+  () => [outlineStore.outline_id, outlineStore.nodes.length, props.ready],
+  ([oid, nc, ready]) => {
+    if (ready && !oid && nc === 0 && props.intentSummary) {
       handleGenerateOutline()
     }
   },
@@ -349,17 +369,28 @@ async function handleGenerateOutline() {
     return
   }
   try {
-    // 尝试从 localStorage 读取证据包
-    let evidence = null
+    // 优先使用父级按 S1 意图自动检索的证据包，兼容旧版 S2 localStorage 交接。
+    let evidence = props.evidencePacket || null
     try {
-      const raw = window.localStorage.getItem('fuww_s2_evidence_packet')
-      if (raw) evidence = JSON.parse(raw)
+      if (!evidence) {
+        const raw = window.localStorage.getItem(`fuww_s2_evidence_packet:${props.sessionId}`)
+        if (raw) evidence = JSON.parse(raw)
+      }
     } catch {}
-    // 尝试从 localStorage 读取 markdown 内容
+    // S1→S3 新主流程必须以结构化意图为主。旧版全局 Markdown 缓存可能属于
+    // 另一份课件，或只有“未提供正文”的占位文本；仅在完全没有 S1 意图时兼容读取。
     let markdown = ''
     try {
-      const m = window.localStorage.getItem('fuww_s2_markdown')
-      if (m) markdown = m
+      const intent = props.intentSummary || {}
+      const hasIntent = Boolean(
+        String(intent.topic || intent.title || '').trim()
+        || (Array.isArray(intent.knowledge_points) && intent.knowledge_points.length)
+        || (Array.isArray(intent.key_points) && intent.key_points.length)
+      )
+      if (!hasIntent) {
+        const m = window.localStorage.getItem('fuww_s2_markdown')
+        if (m) markdown = m
+      }
     } catch {}
 
     await outlineStore.createOutline({
@@ -391,6 +422,33 @@ function handleDeleteNode(nodeId) {
     return
   }
   outlineStore.removeNode(nodeId)
+}
+
+function handleDragStart(event, nodeId) {
+  if (!outlineStore.canReorder) {
+    event.preventDefault()
+    return
+  }
+  draggedNodeId.value = nodeId
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', nodeId)
+}
+
+function handleDragOver(event, index) {
+  if (!draggedNodeId.value) return
+  event.dataTransfer.dropEffect = 'move'
+  dragOverIndex.value = index
+}
+
+function handleDrop(event, index) {
+  const nodeId = draggedNodeId.value || event.dataTransfer.getData('text/plain')
+  if (nodeId) outlineStore.moveNodeToIndex(nodeId, index)
+  handleDragEnd()
+}
+
+function handleDragEnd() {
+  draggedNodeId.value = ''
+  dragOverIndex.value = -1
 }
 
 function addKeyPoint(node) {
@@ -433,7 +491,6 @@ async function handleSendRevise() {
     await outlineStore.reviseOutline(msg)
   } catch (err) {
     emit('error', err?.message || 'AI 修订失败')
-    showReviseDialog.value = false
   } finally {
     revisingDialogLoading.value = false
   }
@@ -538,6 +595,8 @@ function handleCancelRevision() {
 .outline-node-card:hover {
   border-color: #5ca68f;
 }
+.outline-node-card.dragging { opacity: .45; cursor: grabbing; }
+.outline-node-card.drag-over { border-color: #28735f; box-shadow: 0 0 0 3px rgba(40,115,95,.14); transform: translateY(2px); }
 .outline-node-card.node-type-section {
   border-left: 4px solid #2f605a;
   background: #f8fbf9;
@@ -559,7 +618,11 @@ function handleCancelRevision() {
   align-items: center;
   gap: 4px;
   min-width: 28px;
+  cursor: grab;
+  user-select: none;
 }
+.node-drag-handle:active { cursor: grabbing; }
+.drag-grip { color:#7da596; font-size:18px; line-height:1; pointer-events:none; }
 .node-order {
   font-size: 16px;
   font-weight: 700;

@@ -146,22 +146,41 @@ def resolve_llm_base_url(model: str) -> tuple[str, str]:
     return DEFAULT_COMPAT_BASE_URL, reason
 
 
-def extract_json(text: str) -> dict[str, Any]:
+def extract_json(text: str) -> Any:
     """
     从 LLM 返回文本中提取并解析 JSON。
 
     处理 ```json ... ``` 包裹、前后空白、多段文本含多个 JSON 等情况。
     与旧版 QAResponder._extract_json 兼容，增强为独立函数。
+
+    同时容忍根节点为数组：chat_with_schema 降级链的②③级（json_object /
+    纯 prompt 约束）不强制根为 object，模型可能直接返回裸数组
+    （如 nodes / scripts 列表）。旧实现只找 {} 区间，裸数组会直接抛
+    ValueError，导致三级降级链全部失败——即使每级其实都拿到了可用内容。
+    根形状按最先出现的括号判定，解析失败再退回另一种，保持原有
+    “优先取 {}” 的行为不变。
     """
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.strip("`")
         cleaned = cleaned.replace("json\n", "", 1).replace("json", "", 1).strip()
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"模型返回内容中未找到有效 JSON: {text[:200]}")
-    return json.loads(cleaned[start : end + 1])
+
+    first_obj, first_arr = cleaned.find("{"), cleaned.find("[")
+    if first_arr != -1 and (first_obj == -1 or first_arr < first_obj):
+        candidates = (("[", "]"), ("{", "}"))
+    else:
+        candidates = (("{", "}"), ("[", "]"))
+
+    for open_ch, close_ch in candidates:
+        start, end = cleaned.find(open_ch), cleaned.rfind(close_ch)
+        if start == -1 or end <= start:
+            continue
+        try:
+            return json.loads(cleaned[start : end + 1])
+        except json.JSONDecodeError:
+            continue
+
+    raise ValueError(f"模型返回内容中未找到有效 JSON: {text[:200]}")
 
 
 # ---- LLM 客户端 ----
@@ -379,7 +398,7 @@ class LLMClient:
         *,
         temperature: Optional[float] = None,
         model: Optional[str] = None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """
         带 JSON Schema 的结构化输出调用（显式版本，带三级降级链）。
 
@@ -520,11 +539,12 @@ class LLMClient:
             等长的 list[list[float]]。
         """
         import os
-
-        embedding_model = model or (os.getenv("AI_EMBEDDING_MODEL") or "text-embedding-v3").strip()
-        default_dim = 1024
+        import logging
+        logger = logging.getLogger(__name__)
+        embedding_model = model or (os.getenv("AI_EMBEDDING_MODEL") or "local-bge-small-zh").strip()
+        default_dim = 512
         try:
-            default_dim = int(os.getenv("AI_EMBEDDING_DIM", "1024"))
+            default_dim = int(os.getenv("AI_EMBEDDING_DIM", "512"))
         except (TypeError, ValueError):
             pass
         embedding_dim = dim or default_dim
@@ -532,28 +552,20 @@ class LLMClient:
         if not texts:
             return []
 
-        # Mock 模式 / 无 API key → 零向量回退
-        if settings.is_mock or not self.api_key:
+        if settings.is_mock:
             return [[0.0] * embedding_dim for _ in range(len(texts))]
 
+        global _local_embedder
         try:
-            from openai import OpenAI
-
-            client = OpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                timeout=self.timeout,
-            )
-
-            response = client.embeddings.create(
-                model=embedding_model,
-                input=texts,
-            )
-
-            sorted_data = sorted(response.data, key=lambda d: d.index)
-            return [list(d.embedding) for d in sorted_data]
-
-        except Exception:
+            if '_local_embedder' not in globals():
+                from sentence_transformers import SentenceTransformer
+                logger.info("加载本地嵌入模型 BGE-small-zh...")
+                _local_embedder = SentenceTransformer("BAAI/bge-small-zh-v1.5", device="cpu")
+                logger.info("本地嵌入模型加载完成")
+            vecs = _local_embedder.encode(texts, normalize_embeddings=True)
+            return [list(v) for v in vecs]
+        except Exception as e:
+            logger.error(f"本地嵌入失败: {e}")
             return [[0.0] * embedding_dim for _ in range(len(texts))]
 
     # ---- 内部实现 ----

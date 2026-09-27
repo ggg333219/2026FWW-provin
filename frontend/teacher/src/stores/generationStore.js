@@ -10,8 +10,9 @@ import { teacherV1Api } from '../services/v1'
 function toPreviewNodes(nodes) {
   return (Array.isArray(nodes) ? nodes : []).map((node) => {
     const n = { ...node }
-    if (!n.script && n.scriptText) n.script = n.scriptText
-    if (!n.content && n.scriptText) n.content = n.scriptText
+    // 显式空值表示教师已移除讲授文本，不能再被旧的 scriptText 回填。
+    if (!Object.prototype.hasOwnProperty.call(n, 'script') && n.scriptText) n.script = n.scriptText
+    if (!Object.prototype.hasOwnProperty.call(n, 'content') && n.scriptText) n.content = n.scriptText
     if (n.nodeId && !n.node_id) n.node_id = n.nodeId
     if (!n.node_type && !n.type) n.node_type = ''
     if (!n.title) n.title = n.node_title || ''
@@ -51,7 +52,7 @@ export const useGenerationStore = defineStore('generation', {
     /** 最近一次 S3 全流程生成的 generation_id，供 S4 版本管理读取。 */
     lastGenId: '',
 
-    /** 最近一次 S3 全流程生成的 task_id，供 gen/status 状态轮询使用。 */
+    /** 最近一次 S3 生成任务的 task_id，供 /gen/status 查询。 */
     lastTaskId: '',
 
     /** 当前页音频（S2 兼容） */
@@ -352,6 +353,35 @@ export const useGenerationStore = defineStore('generation', {
 
     setIterationSyncNotice(notice) {
       this.iterationSyncNotice = notice
+    },
+
+    /** 清理当前 S3 工作区及其跨刷新缓存，开始新的课件流程。 */
+    reset() {
+      this.currentScript = ''
+      this.currentScriptNodes = []
+      this.lastGenId = ''
+      this.lastTaskId = ''
+      this.currentPageAudio = null
+      this.audioGenerating = false
+      this.isGenerating = false
+      this.scriptSaving = false
+      this.generateProgress = 0
+      this.generateStageText = ''
+      this.previewHtml = ''
+      this.previewLoading = false
+      this.previewGenId = ''
+      this.previewVersion = 0
+      this.iterationSyncNotice = ''
+
+      try {
+        window.localStorage.removeItem('fuww_last_gen_id')
+        window.localStorage.removeItem('fuww_last_task_id')
+        Object.keys(window.localStorage)
+          .filter((key) => key.startsWith('fuww_preview_cache:'))
+          .forEach((key) => window.localStorage.removeItem(key))
+      } catch (error) {
+        console.warn('[generationStore] S3 状态清理失败', error)
+      }
     }
   }
 })

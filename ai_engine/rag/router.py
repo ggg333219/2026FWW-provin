@@ -20,6 +20,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import re
 import uuid
 from typing import Any, Optional
@@ -37,8 +38,10 @@ from ai_engine.core.schema import (
 )
 
 from .chunker import DocumentChunker
+from .noise_filter import drop_noise_chunks, strip_noise_lines
 from .embed import EmbeddingService
 from .store import InMemoryVectorStore
+from .store_pgvector import PGVectorStore
 from .retrieve import HybridRetriever
 from .rerank import ReRanker
 from .evidence import EvidenceSynthesizer
@@ -52,7 +55,15 @@ router = APIRouter(prefix="/api/v1", tags=["KB-RAG"])
 
 _chunker = DocumentChunker()
 _embed_service = EmbeddingService()
-_store = InMemoryVectorStore()
+def _build_store():
+    """生产环境显式启用 pgvector；测试和无数据库场景保持零依赖内存实现。"""
+    backend = (os.getenv("RAG_STORE_BACKEND") or "memory").strip().lower()
+    if backend in {"pg", "pgvector", "postgres", "postgresql"}:
+        return PGVectorStore()
+    return InMemoryVectorStore()
+
+
+_store = _build_store()
 _retriever = HybridRetriever(store=_store, embed_service=_embed_service)
 _reranker = ReRanker()
 _synthesizer = EvidenceSynthesizer(llm_client=LLMClient(temperature=0.1))
@@ -60,7 +71,7 @@ _synthesizer = EvidenceSynthesizer(llm_client=LLMClient(temperature=0.1))
 
 # ---- 辅助函数 ----
 
-def _get_store() -> InMemoryVectorStore:
+def _get_store():
     """获取全局 store 实例。"""
     return _store
 
@@ -110,7 +121,7 @@ async def rag_search(req: SearchRequest):
         results = retriever.search(
             query=req.query.strip(),
             top_k=req.top_k or 5,
-            min_score=req.min_score or 0.6,
+            min_score=req.min_score or 0.2,
             knowledge_base_ids=req.knowledge_base_ids or None,
             scope=scope,
             node_id=req.node_id,
@@ -264,6 +275,13 @@ async def knowledge_upload(req: KnowledgeUploadRequest):
 
         # ---- 嵌入 → 存储 ----
         doc_id = f"doc_{uuid.uuid4().hex[:12]}"
+        # 将资料归属写入 chunk 元数据；检索端据此执行 knowledge_base_ids 隔离。
+        if req.knowledge_base_id:
+            for chunk in all_chunks:
+                chunk.metadata = {
+                    **(chunk.metadata or {}),
+                    "knowledge_base_id": req.knowledge_base_id,
+                }
         embedded = _embed_service.embed_chunks(all_chunks)
         _store.insert_batch(embedded, doc_id=doc_id)
 
@@ -345,6 +363,15 @@ def _process_file(file_url: str) -> list[Chunk]:
     if not text:
         return []
 
+    # 噪声行剥离放在切分之前：试卷页眉（班级__ 姓名__ 学号__）、答题横线、
+    # 独立页码这类内容若留到切分后处理，会既自成垃圾切片，又挂在正常切片开头
+    # 污染嵌入向量。剥离后再切，噪声不再占用窗口预算，切片反而更少更干净。
+    text, stats = strip_noise_lines(text)
+    if not text.strip():
+        print(f"[KB-Upload] {path.name} — 剥离 {stats.lines_removed}/{stats.lines_total} "
+              "行后无有效内容，跳过")
+        return []
+
     source_type_map = {
         ".pdf": SourceType.PDF,
         ".pptx": SourceType.PPTX,
@@ -355,11 +382,14 @@ def _process_file(file_url: str) -> list[Chunk]:
     }
     source_type = source_type_map.get(suffix, SourceType.TEXT)
 
-    return _chunker.chunk_text(
+    chunks = _chunker.chunk_text(
         text=text,
         source_ref=path.name,
         source_type=source_type,
     )
+    chunks, stats.chunks_dropped = drop_noise_chunks(chunks)
+    print(f"[KB-Upload] {path.name} — 入库 {len(chunks)} 块；{stats}")
+    return chunks
 
 
 def _read_file_content(path, suffix: str) -> str:

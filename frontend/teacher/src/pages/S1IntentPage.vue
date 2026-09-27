@@ -9,18 +9,18 @@
         <div class="page-header-right">
           <div class="step-pills">
             <span class="pill active">S1 意图</span>
-            <router-link :to="{ name: 'S2Material' }" class="pill">S2 资料</router-link>
-            <router-link :to="{ name: 'S3Studio' }" class="pill">S3 生成</router-link>
-            <router-link :to="{ name: 'S4Version' }" class="pill">S4 版本</router-link>
+            <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="pill">资料上传（可选）</router-link>
+            <router-link :to="{ name: 'S3Studio', query: { project_id: projectStore.projectId } }" class="pill">S3 生成</router-link>
+            <router-link :to="{ name: 'S4Version', query: { project_id: projectStore.projectId } }" class="pill">S4 版本</router-link>
             <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
           </div>
         </div>
       </div>
       <TeacherIntentPanel />
-      <!-- 下一步：S1 → S2 -->
+      <!-- 主流程：S1 → S3；资料上传保留为可选入口 -->
       <div class="next-step-bar">
-        <router-link :to="{ name: 'S2Material' }" class="next-step-btn">
-          下一步：补充教学资料 →
+        <router-link :to="{ name: 'S3Studio', query: { project_id: projectStore.projectId, auto_evidence: '1' } }" class="next-step-btn">
+          下一步：自动检索并生成课件 →
         </router-link>
       </div>
     </div>
@@ -28,16 +28,39 @@
 </template>
 
 <script setup>
-import { watch } from 'vue'
+import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import AppShell from '../components/layout/AppShell.vue'
 import TeacherIntentPanel from '../components/teacher/TeacherIntentPanel.vue'
 import { useIntentStore } from '../stores/intentStore'
+import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
 
 const INTENT_HANDOFF_KEY = 'fuww_intent_parsed'
 const intentStore = useIntentStore()
+const projectStore = useCoursewareProjectStore()
+const route = useRoute()
+const intentDraft = () => ({
+  ...(projectStore.draft || {}),
+  intent: intentStore.intentSummary,
+  intent_session: {
+    session_id: intentStore.sessionId,
+    intent_id: intentStore.intentId,
+    status: intentStore.sessionStatus,
+    messages: intentStore.messages,
+  },
+})
+
+onMounted(async () => {
+  const projectId = String(route.query.project_id || projectStore.restoreActiveId() || '')
+  projectStore.setActive(projectId)
+  if (projectId && !projectStore.draft) await projectStore.resume(projectId).catch(() => {})
+  await projectStore.updateStep('s1_intent').catch(() => {})
+})
+onBeforeUnmount(() => projectStore.saveNow(intentDraft()).catch(() => {}))
+onBeforeRouteLeave(async () => { await projectStore.saveNow(intentDraft()).catch(() => {}) })
 
 /**
- * S1 → S2 的冻结交接契约。
+ * S1 → S3 的冻结交接契约（S2 资料上传为可选补充入口）。
  *
  * 只发布已经确认的意图，避免 S2 在教师仍然澄清需求时使用半成品数据。
  * 保留当前 IntentSummary 的 snake_case 字段，同时兼容旧任务文档中的
@@ -86,6 +109,12 @@ watch(
   () => [intentStore.intentSummary, intentStore.sessionStatus, intentStore.intentId],
   ([summary, status, intentId]) => persistConfirmedIntent(summary, status, intentId),
   { deep: true, immediate: true }
+)
+
+watch(
+  () => [intentStore.intentSummary, intentStore.messages, intentStore.sessionStatus, intentStore.intentId],
+  () => projectStore.scheduleSave(intentDraft()),
+  { deep: true }
 )
 </script>
 

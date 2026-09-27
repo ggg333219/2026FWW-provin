@@ -309,6 +309,8 @@ function writeHandoff(key, value) {
   }
 }
 
+const evidenceHandoffKey = () => `fuww_s2_evidence_packet:${intentStore.sessionId || workspaceStore.currentCourseId || 'workspace'}`
+
 function persistWorkspaceIntent(summary, status, intentId) {
   if (!['confirmed', 'locked'].includes(status)) return
   const topic = String(summary?.topic || '').trim()
@@ -350,7 +352,7 @@ function restoreIntentToMaterial() {
 
 function restoreEvidenceToScript() {
   try {
-    const raw = readHandoff('fuww_s2_evidence_packet')
+    const raw = readHandoff(evidenceHandoffKey())
     if (!raw) return
     const packet = JSON.parse(raw)
     if (scriptPanelRef.value?.setEvidencePacket) {
@@ -370,7 +372,7 @@ watch(
 watch(
   () => materialStore.latestEvidencePacket,
   (entry) => {
-    if (entry?.packet) writeHandoff('fuww_s2_evidence_packet', JSON.stringify(entry.packet))
+    if (entry?.packet) writeHandoff(evidenceHandoffKey(), JSON.stringify(entry.packet))
   },
   { deep: true }
 )
@@ -483,7 +485,7 @@ const handleGenerateAIScript = async () => {
     // 尝试从 localStorage 读取证据包（S2 证据透传，成员B）
     let evidence = null
     try {
-      const raw = window.localStorage.getItem('fuww_s2_evidence_packet')
+      const raw = window.localStorage.getItem(evidenceHandoffKey())
       if (raw) {
         evidence = JSON.parse(raw)
         console.log('[WorkspacePage] 从 localStorage 读取证据包:', evidence)

@@ -37,7 +37,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
     platformConnectionText: (state) => {
       const counts = state.platformOverviewData?.counts || { users: 0, courses: 0, classes: 0 }
-      return `泛雅开放平台已接通 · ${counts.users} 用户 / ${counts.courses} 课程 / ${counts.classes} 班级`
+      return `协作数据已同步 · ${counts.users} 用户 / ${counts.courses} 课程 / ${counts.classes} 班级`
     }
   },
 

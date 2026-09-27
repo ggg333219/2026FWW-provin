@@ -10,6 +10,12 @@
   - IMAGE (OCR):   图片块按版面区域，无 overlap
   - VIDEO (ASR):   按时间窗口，30s 段落 / 5s overlap
 
+chunk_id 决定论：
+  chunk_id 必须是稳定的 (source_ref, seq_index) 函数，使得同一份语料重复灌库
+  时落到同一 chunk_id 上，配合 store 层的 ON CONFLICT DO UPDATE 语义保证
+  向量库可幂等重建（启动引导等固定语料场景），不会产生重复切片。
+  ID 字符限定 [A-Za-z0-9._-] + `::s{seq:04d}`，最长 64 字符以适配 PG VARCHAR(64)。
+
 使用方式：
     from ai_engine.rag.chunker import DocumentChunker, ChunkingStrategy
 
@@ -19,8 +25,8 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
-import uuid
 from enum import Enum
 from typing import Optional
 
@@ -122,6 +128,39 @@ def _split_slides(text: str) -> list[str]:
     """按幻灯片分隔符拆分（--- 或 slide 标记）。"""
     parts = re.split(r"\n---+\n|\[\[slide\]\]|\*\*\*", text, flags=re.IGNORECASE)
     return [p.strip() for p in parts if p.strip()]
+
+
+# ---- chunk_id 决定论工具 ----
+
+_CHUNK_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
+"""chunk_id 允许的字符集。"""
+
+_CHUNK_ID_MAX_LEN = 64
+"""适配 PostgreSQL VARCHAR(64)。"""
+
+
+def _sanitize_source_ref(source_ref: str, max_keep: int = 48) -> str:
+    """清洗 source_ref，使其仅含 [A-Za-z0-9._-] 并截断到 max_keep 字符。
+
+    长 source_ref 用 md5 前缀保证唯一性，避免仅靠截断导致碰撞。
+    """
+    if not source_ref:
+        return "anon"
+    safe = _CHUNK_ID_SAFE_RE.sub("_", source_ref)
+    if len(safe) <= max_keep:
+        return safe
+    digest = hashlib.md5(source_ref.encode("utf-8")).hexdigest()[:12]
+    return f"h{digest}_{safe[:max_keep - 13]}"
+
+
+def _make_deterministic_chunk_id(source_ref: str, seq_index: int) -> str:
+    """生成稳定的 chunk_id：`{safe_source_ref}::s{seq_index:04d}`。
+
+    幂等性保证：同一 (source_ref, seq_index) 永远得到同一 chunk_id，
+    从而支持上游 store 的 ON CONFLICT DO UPDATE 语义。
+    """
+    safe = _sanitize_source_ref(source_ref)
+    return f"{safe}::s{seq_index:04d}"
 
 
 def _sliding_window(
@@ -322,7 +361,7 @@ class DocumentChunker:
         chunks: list[Chunk] = []
         for idx, content in enumerate(windows):
             chunks.append(Chunk(
-                chunk_id=f"chunk_{uuid.uuid4().hex[:12]}",
+                chunk_id=_make_deterministic_chunk_id(source_ref, idx),
                 source_type=source_type,
                 source_ref=source_ref,
                 content=content,

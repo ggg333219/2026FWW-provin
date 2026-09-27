@@ -1,5 +1,6 @@
 param(
-    [switch]$SkipDocker
+    [switch]$SkipDocker,
+    [switch]$SkipStudent
 )
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -265,10 +266,13 @@ Start-Background -Name "ai_engine" -FilePath "conda" -ArgumentList @('run','-n',
 # 教师端后端（cmd/teacher，端口 8082）。前端 API_BASE 默认指向 localhost:8082，
 # 因此这里启动的是教师端专属后端，而非通用 api/main.go（18080）。
 Start-Background -Name "backend" -FilePath "go" -ArgumentList @('run','./cmd/teacher') -WorkingDirectory (Join-Path $root "backend") -StdOut "$logsDir\backend.log" -StdErr "$logsDir\backend.err.log"
-Ensure-NodeDependencies -ProjectName "student_frontend" -WorkingDirectory (Join-Path $root "frontend\student")
-Start-Background -Name "student_frontend" -FilePath "npm" -ArgumentList @('run','serve') -WorkingDirectory (Join-Path $root "frontend\student") -StdOut "$logsDir\student_frontend.log" -StdErr "$logsDir\student_frontend.err.log"
 Ensure-NodeDependencies -ProjectName "teacher_frontend" -WorkingDirectory (Join-Path $root "frontend\teacher")
 Start-Background -Name "teacher_frontend" -FilePath "npm" -ArgumentList @('run','dev','--','--host','0.0.0.0','--port','5173') -WorkingDirectory (Join-Path $root "frontend\teacher") -StdOut "$logsDir\teacher_frontend.log" -StdErr "$logsDir\teacher_frontend.err.log"
+
+if (-not $SkipStudent) {
+    Ensure-NodeDependencies -ProjectName "student_frontend" -WorkingDirectory (Join-Path $root "frontend\student")
+    Start-Background -Name "student_frontend" -FilePath "npm" -ArgumentList @('run','serve') -WorkingDirectory (Join-Path $root "frontend\student") -StdOut "$logsDir\student_frontend.log" -StdErr "$logsDir\student_frontend.err.log"
+}
 
 $pidFile = Join-Path $scriptsDir "pids.json"
 $pids | ConvertTo-Json | Out-File -Encoding utf8 $pidFile
@@ -282,13 +286,15 @@ if (Test-EndpointReady -Url 'http://localhost:8082/api/health' -RetryCount 25 -D
     Write-Warning "Backend health check failed. Please inspect logs/backend.log and logs/backend.err.log"
 }
 
-$studentLog = Join-Path $logsDir 'student_frontend.log'
-$studentUrl = Get-StudentFrontendUrlFromLog -LogPath $studentLog
-if (-not $studentUrl) { $studentUrl = 'http://localhost:8080' }
-if (Test-EndpointReady -Url $studentUrl -RetryCount 25 -DelayMilliseconds 1000) {
-    Write-Host "Student frontend ready: $studentUrl"
-} else {
-    Write-Warning "Student frontend readiness check failed. Please inspect logs/student_frontend.log"
+if (-not $SkipStudent) {
+    $studentLog = Join-Path $logsDir 'student_frontend.log'
+    $studentUrl = Get-StudentFrontendUrlFromLog -LogPath $studentLog
+    if (-not $studentUrl) { $studentUrl = 'http://localhost:8080' }
+    if (Test-EndpointReady -Url $studentUrl -RetryCount 25 -DelayMilliseconds 1000) {
+        Write-Host "Student frontend ready: $studentUrl"
+    } else {
+        Write-Warning "Student frontend readiness check failed. Please inspect logs/student_frontend.log"
+    }
 }
 
 if (Test-EndpointReady -Url 'http://localhost:5173' -RetryCount 25 -DelayMilliseconds 1000) {
@@ -300,7 +306,9 @@ if (Test-EndpointReady -Url 'http://localhost:5173' -RetryCount 25 -DelayMillise
 Write-Host "Done."
 Write-Host ""
 Write-Host "Access URLs (local):"
-Write-Host "- 学生端前端: http://localhost:8080 (vue-cli serve 默认端口)"
+if (-not $SkipStudent) {
+    Write-Host "- 学生端前端: http://localhost:8080 (vue-cli serve 默认端口)"
+}
 Write-Host "- 教师端前端: http://localhost:5173 (vite 默认端口)"
 Write-Host "- 教师端后端: http://localhost:8082 (健康检查: /health, API 根路径: /api)"
 Write-Host "- AI 引擎: http://localhost:8000"

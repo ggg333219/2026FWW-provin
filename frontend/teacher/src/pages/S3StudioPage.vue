@@ -1,6 +1,14 @@
 <template>
   <AppShell>
     <div class="s3-page">
+      <div v-if="initializing" class="studio-loading" role="status" aria-live="polite">
+        <span class="studio-spinner"></span><strong>正在恢复课件工作区</strong><p>正在加载 AI 对话、资料证据与生成记录，请稍候…</p>
+      </div>
+      <div v-else-if="asyncActivity" class="async-activity" role="status" aria-live="polite">
+        <span class="async-spinner"></span>
+        <div><strong>{{ asyncActivity.title }}</strong><small>{{ asyncActivity.detail }}</small></div>
+        <span v-if="asyncActivity.progress != null" class="async-progress">{{ asyncActivity.progress }}%</span>
+      </div>
       <!-- 页面头部 -->
       <div class="page-header">
         <div>
@@ -8,15 +16,17 @@
           <p>大纲编辑 → 内容生成 → 页面预览</p>
         </div>
         <div class="page-header-right">
+          <button v-if="projectStore.projectId" class="save-state" :class="projectStore.saveState" aria-live="polite" @click="projectStore.saveNow(draftSnapshot())">{{ projectStore.saveLabel || '保存草稿' }}</button>
+          <button v-if="generationStore.currentScriptNodes.length" class="save-version" :disabled="saveVersionState === 'saving'" @click="handleSaveNewVersion">{{ saveVersionState === 'saving' ? '正在保存版本…' : (lastSavedVersion ? `已保存 v${lastSavedVersion}` : '保存新版本') }}</button>
           <div class="step-pills">
-            <router-link :to="{ name: 'S1Intent' }" class="pill"
+            <router-link :to="{ name: 'S1Intent', query: { project_id: projectStore.projectId } }" class="pill"
               >S1 意图</router-link
             >
-            <router-link :to="{ name: 'S2Material' }" class="pill"
+            <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="pill"
               >S2 资料</router-link
             >
             <span class="pill active">S3 生成</span>
-            <router-link :to="{ name: 'S4Version' }" class="pill"
+            <router-link :to="{ name: 'S4Version', query: { project_id: projectStore.projectId, generation_id: generationStore.lastGenId } }" class="pill"
               >S4 版本</router-link
             >
             <router-link :to="{ name: 'Middle' }" class="pill back-pill"
@@ -36,22 +46,43 @@
           <strong>当前为无参考资料生成模式</strong>
           <span>本次内容仅依据 S1 教学意图生成，不会伪造资料引用。</span>
         </div>
-        <router-link :to="{ name: 'S2Material' }">返回补充资料</router-link>
+        <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }">返回补充资料</router-link>
+      </div>
+
+      <div v-if="evidenceBootstrapState === 'error' && requiresAutomaticEvidence" class="evidence-gate" role="alert">
+        <div>
+          <strong>自动检索尚未完成，已暂停生成大纲</strong>
+          <span>{{ evidenceBootstrapError || '暂未检索到可绑定的证据，请重试或补充资料。' }}</span>
+        </div>
+        <div class="evidence-gate-actions">
+          <button :disabled="materialStore.searching" @click="retryAutomaticEvidence">
+            {{ materialStore.searching ? '正在检索…' : '重新自动检索' }}
+          </button>
+          <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }">上传补充资料</router-link>
+          <button class="plain" @click="continueWithIntentOnly">仅按 S1 意图生成</button>
+        </div>
+      </div>
+
+      <div v-if="baseVersion > 0" class="version-branch-banner" role="status">
+        <strong>当前基于 v{{ baseVersion }} 编辑</strong>
+        <span>保存后将生成 v{{ baseVersion + 1 }}，原版本不会被覆盖。</span>
       </div>
 
       <!-- S3 阶段指示器 -->
-      <div class="phase-tabs">
+      <div class="phase-tabs" role="tablist" aria-label="课件生成步骤">
         <button
           class="phase-tab"
           :class="{ active: currentPhase === 'outline' }"
+          role="tab" :aria-selected="currentPhase === 'outline'"
           @click="currentPhase = 'outline'"
         >
           📋 大纲编辑
         </button>
         <button
           class="phase-tab"
-          :class="{ active: currentPhase === 'content' }"
-          @click="currentPhase = 'content'"
+          :class="{ active: currentPhase === 'generating' }"
+          role="tab" :aria-selected="currentPhase === 'generating'"
+          @click="currentPhase = 'generating'"
           :disabled="!outlineStore.isConfirmed"
         >
           📝 内容生成
@@ -67,19 +98,37 @@
         <button
           class="phase-tab"
           :class="{ active: currentPhase === 'pages' }"
+          role="tab" :aria-selected="currentPhase === 'pages'"
           @click="currentPhase = 'pages'"
           :disabled="!generationStore.lastGenId"
         >
           📄 页面管理
         </button>
+        <button class="phase-tab" :class="{ active: currentPhase === 'style' }" role="tab" :aria-selected="currentPhase === 'style'" :disabled="!generationStore.lastGenId" @click="currentPhase = 'style'">🎨 PPT 样式</button>
       </div>
 
       <!-- ==================== 大纲阶段 ==================== -->
+      <!-- ==================== 大纲阶段 ==================== -->
+      <EvidenceSidebar
+        :packet="evidencePacket"
+        :nodes="generationStore.currentScriptNodes.length ? generationStore.currentScriptNodes : outlineStore.nodes"
+        :searching="materialStore.searching"
+        :default-query="intentStore.intentSummary?.topic || ''"
+        :selected-evidence-ids="selectedEvidenceIds"
+        :selection-initialized="evidenceSelectionInitialized"
+        @search="handleEvidenceSearch"
+        @apply="handleEvidenceApply"
+        @selection-change="handleEvidenceSelection"
+      />
+      <!-- C6: AI 修改对话面板（右侧浮动；projectId 绑定后显示） -->
+      <ModifyPanel class="s3-ai-panel" @style-request="handleStyleRequest" @applied="handleModifyApplied" />
       <div v-if="currentPhase === 'outline'" class="phase-panel">
         <OutlineEditor
           :session-id="intentStore.sessionId"
           :intent-id="intentStore.intentId"
           :intent-summary="intentStore.intentSummary"
+          :evidence-packet="selectedEvidencePacket"
+          :ready="outlineReady"
           :auto-restore="true"
           @confirm-complete="handleOutlineConfirmed"
           @outline-created="handleOutlineCreated"
@@ -287,7 +336,7 @@
           v-if="
             generationStore.isGenerating || generationStore.generateProgress > 0
           "
-          class="gen-progress-panel"
+          class="gen-progress-panel" role="progressbar" aria-label="课件生成进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="generationStore.generateProgress"
         >
           <div class="progress-bar-wrap">
             <div
@@ -364,6 +413,18 @@
         </div>
       </div>
 
+      <div v-else-if="currentPhase === 'style'" class="phase-panel style-panel">
+        <h3>只调整呈现，不改教学事实</h3>
+        <p>样式设置不会触发 RAG 检索，也不会修改大纲、引用或生成内容。</p>
+        <label>全局模板 <select v-model="templateId"><option value="default">默认教学模板</option><option value="deck-swiss-edu">瑞士教育风</option></select></label>
+        <label>配色 <select v-model="palette"><option value="classic">经典青绿</option><option value="klein-blue">克莱因蓝</option></select></label>
+        <label>版式 <select v-model="layoutMode"><option value="balanced">图文均衡</option><option value="visual">视觉优先</option><option value="text">内容优先</option></select></label>
+        <label>字体 <select v-model="fontFamily"><option value="system">系统默认</option><option value="source-han">思源黑体</option><option value="serif">中文宋体</option></select></label>
+        <label>信息密度 <select v-model="density"><option value="comfortable">舒展</option><option value="compact">紧凑</option><option value="minimal">极简</option></select></label>
+        <div class="style-ai-hint">也可以在右侧直接告诉 AI：“整体换成简洁商务风”或“这一页改成左图右文”。样式调整只改呈现字段，不重新检索资料。</div>
+        <div class="style-actions"><button class="btn btn-outline" @click="projectStore.saveNow(draftSnapshot())">保存样式草稿</button><button class="btn btn-primary" :disabled="generationStore.previewLoading" @click="applyPresentationStyle">{{ generationStore.previewLoading ? '正在刷新…' : '应用并刷新预览' }}</button></div>
+      </div>
+
       <!-- ==================== 页面管理阶段 ==================== -->
       <div v-else-if="currentPhase === 'pages'" class="phase-panel">
         <div class="pages-control-bar">
@@ -383,11 +444,12 @@
             v-for="page in generationPages"
             :key="page.page_id"
             class="page-item"
-            :class="`page-status-${page.status}`"
+            :class="[`page-status-${page.status}`, { 'page-modified': modifyStore.recentlyModifiedIds.includes(page.node_id) }]"
           >
             <div class="page-item-left">
               <span class="page-order">第 {{ page.page_order }} 页</span>
-              <span class="page-node">关联节点：{{ page.node_id }}</span>
+              <span class="page-node">{{ page.title || page.node_title || `关联节点：${page.node_id}` }}</span>
+              <span v-if="modifyStore.recentlyModifiedIds.includes(page.node_id)" class="changed-badge">已修改</span>
             </div>
             <div class="page-item-right">
               <span class="page-status-badge">{{
@@ -419,10 +481,16 @@
         <div v-else class="pages-empty">暂无页面数据，请先生成内容</div>
 
         <!-- 互动资源入口 -->
-        <div v-if="generationStore.lastGenId" class="interactive-section">
+        <div v-if="generationStore.lastGenId || interactiveNodes.length" class="interactive-section">
           <h4>🎮 互动资源管理</h4>
           <p class="interactive-hint">
             从大纲中标记为互动的节点可在此生成 HTML5 互动资源
+          </p>
+          <p v-if="!generationStore.lastGenId" class="interactive-error" role="alert">
+            当前页面没有课件生成记录，请先完成“内容生成”后再生成互动。
+          </p>
+          <p v-if="interactiveStore.error" class="interactive-error" role="alert">
+            {{ interactiveStore.error }}
           </p>
           <div class="interactive-node-list">
             <div
@@ -437,11 +505,15 @@
               <div class="int-node-actions">
                 <template v-if="interactiveStore.hasAsset(node.node_id)">
                   <span class="asset-done">✅ 已生成</span>
+                  <span v-if="interactiveStore.getAsset(node.node_id)?.items?.length" class="asset-count">
+                    {{ interactiveStore.getAsset(node.node_id).items.length }} 项内容
+                  </span>
                   <button
+                    v-if="interactiveStore.getAsset(node.node_id)?.entry_url"
                     class="btn btn-sm"
                     @click="openInteractiveAsset(node)"
                   >
-                    打开
+                    页面内预览
                   </button>
                 </template>
                 <template
@@ -455,10 +527,10 @@
                 <template v-else>
                   <button
                     class="btn btn-sm btn-primary"
-                    :disabled="interactiveStore.loading"
+                    :disabled="interactiveStore.loading || !generationStore.lastGenId"
                     @click="handleGenerateInteractive(node)"
                   >
-                    生成互动
+                    {{ interactiveStore.loading ? "生成中..." : "生成互动" }}
                   </button>
                 </template>
               </div>
@@ -467,6 +539,13 @@
               大纲中无互动节点，可在编辑大纲时将节点类型改为"互动环节"
             </p>
           </div>
+          <div v-if="interactivePreviewUrl" class="interactive-preview-card">
+            <div class="interactive-preview-head">
+              <div><strong>HTML5 互动预览</strong><span>{{ interactivePreviewTitle }}</span></div>
+              <div><button class="btn btn-sm" @click="openInteractiveWindow">新窗口打开</button><button class="btn btn-sm" @click="closeInteractivePreview">关闭</button></div>
+            </div>
+            <iframe :src="interactivePreviewUrl" class="interactive-preview-frame" sandbox="allow-scripts allow-same-origin allow-forms" title="HTML5 互动资源预览"></iframe>
+          </div>
         </div>
       </div>
     </div>
@@ -474,22 +553,33 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
+import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import AppShell from "../components/layout/AppShell.vue";
 import OutlineEditor from "../components/teacher/OutlineEditor.vue";
+import ModifyPanel from "../components/teacher/ModifyPanel.vue";
+import EvidenceSidebar from "../components/teacher/EvidenceSidebar.vue";
 import { useGenerationStore } from "../stores/generationStore";
 import { useOutlineStore } from "../stores/outlineStore";
 import { useInteractiveStore } from "../stores/interactiveStore";
 import { useIntentStore } from "../stores/intentStore";
-import { useContentStore } from "../stores/contentStore";
+import { useMaterialStore, isEvidencePacketUsable } from "../stores/materialStore";
+import { useModifyStore } from "../stores/modifyStore";
+import { useCoursewareProjectStore } from "../stores/coursewareProjectStore";
 import { teacherV1Api } from "../services/v1";
+import { projectModifyApi } from "../services/v1/projectModifyApi";
 import { API_BASE, AI_API_BASE } from "../config/api";
+import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline } from "../utils/intentEvidence";
 
 const generationStore = useGenerationStore();
 const outlineStore = useOutlineStore();
 const interactiveStore = useInteractiveStore();
 const intentStore = useIntentStore();
-const contentStore = useContentStore();
+const materialStore = useMaterialStore();
+const modifyStore = useModifyStore();
+const projectStore = useCoursewareProjectStore();
+const route = useRoute();
+const router = useRouter();
 
 // 阶段：outline | generating | pages
 const currentPhase = ref("outline");
@@ -499,48 +589,189 @@ const genError = ref("");
 const generationPages = ref([]);
 const regeneratingPageId = ref("");
 const previewFrameSrc = ref("");
-const modifyNodeId = ref("");
-const modifyMessage = ref("");
+const templateId = ref("default");
+const palette = ref("classic");
+const layoutMode = ref("balanced");
+const fontFamily = ref("system");
+const density = ref("comfortable");
+const evidencePacket = ref(null);
+const selectedEvidenceIds = ref([]);
+const evidenceSelectionInitialized = ref(false);
+const evidenceScope = ref({ scope: "draft", nodeId: "" });
+const saveVersionState = ref("idle");
+const lastSavedVersion = ref(0);
+const baseVersion = ref(Number(route.query.base_version || 0));
+const interactivePreviewUrl = ref("");
+const interactivePreviewTitle = ref("");
+const initializing = ref(true);
+const outlineReady = ref(false);
+const evidenceBootstrapState = ref("idle");
+const evidenceBootstrapError = ref("");
+const requiresAutomaticEvidence = computed(() => String(route.query.auto_evidence || "") === "1");
 
-const modifyNodeOrder = computed(() => {
-  const node = outlineStore.nodes.find((item) => item.node_id === modifyNodeId.value);
-  return node?.order || "";
+const asyncActivity = computed(() => {
+  if (modifyStore.modifying) return { title: "AI 正在修改课件", detail: "正在理解指令并局部更新相关页面，完成后会自动刷新预览。" };
+  if (materialStore.searching) return { title: "正在检索资料与证据", detail: "正在从知识库筛选并融合可追溯引用。" };
+  if (generationStore.isGenerating) return { title: "正在生成课件内容", detail: generationStore.generateStageText || "AI 正在逐页生成，请保持当前页面打开。", progress: generationStore.generateProgress || 0 };
+  if (interactiveStore.loading) return { title: "正在生成互动内容", detail: "正在构建可预览的 HTML5 互动资源。" };
+  if (regeneratingPageId.value) return { title: "正在重新生成当前页面", detail: "其他页面不会受到影响。" };
+  return null;
 });
+
+const evidenceId = (item, index) => String(item?.chunk_id || item?.id || `evidence-${index}`);
+const selectedEvidencePacket = computed(() => {
+  if (!evidencePacket.value) return null;
+  if (!evidenceSelectionInitialized.value) return evidencePacket.value;
+  const selected = new Set(selectedEvidenceIds.value);
+  const filter = (items = []) => items.filter((item, index) => selected.has(evidenceId(item, index)));
+  return {
+    ...evidencePacket.value,
+    citations: filter(evidencePacket.value.citations || []),
+    relevant_chunks: filter(evidencePacket.value.relevant_chunks || []),
+  };
+});
+
+function draftSnapshot() {
+  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value } };
+}
+
+function versionPageBindings() {
+  return generationPages.value.map((page) => ({
+    page_id: page.page_id,
+    node_id: page.node_id,
+    page_order: page.page_order,
+    evidence_refs: [...new Set([...(page.citation_refs || []), ...(page.source_chunk_ids || [])])],
+    auto_bound: Boolean(page.metadata?.evidence_auto_bound),
+    bound_by: page.metadata?.evidence_bound_by || "",
+    interactive_asset_id: page.metadata?.interactive_asset?.interactive_asset_id || "",
+  }));
+}
 
 // 是否有参考资料
 const hasEvidence = computed(() => {
-  try {
-    const raw = window.localStorage.getItem("fuww_s2_evidence_packet");
-    return !!raw;
-  } catch {
-    return false;
-  }
+  return !!evidencePacket.value;
 });
 
 // 需要互动资源的节点（大纲中标记为 interactive / quiz 的节点）
 const interactiveNodes = computed(() =>
-  (outlineStore.nodes || []).filter(
-    (n) => n.node_type === "interactive" || n.node_type === "quiz",
-  ),
+  (outlineStore.nodes?.length ? outlineStore.nodes : generationStore.currentScriptNodes || []).filter((n) => {
+    const nodeType = n.node_type || n.type || "";
+    return nodeType === "interactive" || nodeType === "quiz" || n.metadata?.interactive || n.interactive_plan;
+  }),
 );
 
 onMounted(async () => {
+	try {
+	let restoredGenerationNodes = false;
+	let restoredProjectOutline = false;
+  // 恢复 S1 会话/意图（刷新或直接进入 S3 时 store 内存为空，
+  // 不恢复会导致 sessionId 缺失 → AI 生成大纲被 "缺少 session_id" 拦截）
+  intentStore.initialize();
+  materialStore.activeSessionId = intentStore.sessionId || projectStore.projectId || "";
   if (typeof window !== "undefined") {
     generationMode.value =
       window.localStorage.getItem(
         `fuww_s2_generation_mode:${intentStore.sessionId}`,
       ) || "";
+    try {
+      const rawEvidence = window.localStorage.getItem(`fuww_s2_evidence_packet:${intentStore.sessionId}`);
+      evidencePacket.value = rawEvidence ? JSON.parse(rawEvidence) : null;
+    } catch { evidencePacket.value = null; }
+  }
+
+  // project_id 才是 AI 对话、草稿与版本的边界；generation_id 只是该项目的生成结果。
+  projectStore.setActive(String(route.query.project_id || projectStore.restoreActiveId() || ""));
+  if (projectStore.projectId) {
+    modifyStore.bindProject(projectStore.projectId);
+    await modifyStore.loadVersionHistory();
+    // 刷新或直接打开 S3 时以后端草稿为准，不能只依赖页面跳转留下的本地缓存。
+    await projectStore.resume(projectStore.projectId).catch(() => {});
+    await projectStore.updateStep("s3_studio").catch(() => {});
+    // 后端草稿优先；只有后端没有可用草稿时才回退到统一恢复入口留下的本地缓存。
+    try {
+      const backendDraft = projectStore.draft;
+      let savedDraft = backendDraft;
+      if (typeof savedDraft === "string") {
+        try { savedDraft = JSON.parse(savedDraft) || null; } catch { savedDraft = null; }
+      }
+      // 兼容旧版后端曾直接保存的节点数组，避免历史课件刷新后变成空白。
+      if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
+      if (!savedDraft || typeof savedDraft !== "object" || (!savedDraft.outline && !savedDraft.generation)) {
+        const rawDraft = window.localStorage.getItem("fuww_courseware_resume_draft");
+        savedDraft = rawDraft ? JSON.parse(rawDraft) : null;
+        if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
+      }
+      if (savedDraft?.outline?.outline_id) {
+        if (savedDraft.outline.editable_after_rollback || route.query.from_rollback_version) {
+          outlineStore.restoreEditableSnapshot(savedDraft.outline);
+        } else {
+          outlineStore._applyOutlineData(savedDraft.outline);
+        }
+        outlineStore._persist();
+        restoredProjectOutline = true;
+      }
+      if (savedDraft?.generation) {
+        if (savedDraft.generation.generation_id) generationStore.setLastGenId(savedDraft.generation.generation_id);
+        if (savedDraft.generation.task_id) generationStore.setLastTaskId(savedDraft.generation.task_id);
+        if (Array.isArray(savedDraft.generation.nodes) && savedDraft.generation.nodes.length) {
+          const restoredNodes = savedDraft.generation.nodes;
+          generationStore.setNodes(restoredNodes);
+          generationPages.value = restoredNodes.map((node, index) => ({
+            ...node,
+            page_id: node.page_id || node.node_id || `page_${index + 1}`,
+            page_order: Number(node.page_order || node.order || index + 1),
+            status: node.status || "completed",
+          }));
+          restoredGenerationNodes = true;
+          currentPhase.value = "pages";
+        }
+      }
+      if (savedDraft?.evidence_packet) evidencePacket.value = savedDraft.evidence_packet;
+      if (Array.isArray(savedDraft?.evidence_selection)) {
+        selectedEvidenceIds.value = savedDraft.evidence_selection;
+        evidenceSelectionInitialized.value = true;
+      }
+      if (savedDraft?.evidence_scope) evidenceScope.value = savedDraft.evidence_scope;
+      if (Array.isArray(savedDraft?.page_bindings) && savedDraft.page_bindings.length) {
+        const bindings = new Map(savedDraft.page_bindings.map((item) => [String(item.page_id || item.node_id || ''), item]));
+        generationStore.setNodes(generationStore.currentScriptNodes.map((node) => {
+          const binding = bindings.get(String(node.page_id || node.node_id || ''));
+          return binding ? { ...node, citation_refs: binding.evidence_refs || [], source_chunk_ids: binding.evidence_refs || [] } : node;
+        }));
+      }
+      if (savedDraft?.presentation) { templateId.value = savedDraft.presentation.template_id || "default"; palette.value = savedDraft.presentation.palette || "classic"; layoutMode.value = savedDraft.presentation.layout || "balanced"; fontFamily.value = savedDraft.presentation.font_family || "system"; density.value = savedDraft.presentation.density || "comfortable"; }
+    } catch {}
   }
   // 尝试从 localStorage 恢复大纲
-  const restored = outlineStore.restore();
-  if (restored && outlineStore.isConfirmed) {
+  const restored = restoredProjectOutline ? true : outlineStore.restore();
+  if (!restoredProjectOutline && restored && outlineStore.session_id && intentStore.sessionId
+      && outlineStore.session_id !== intentStore.sessionId) {
+    outlineStore.reset();
+  }
+  if (!restoredGenerationNodes && restored && outlineStore.isConfirmed) {
     currentPhase.value = "generating";
   }
   // 恢复最近生成记录
   generationStore.restoreLastGenId();
   if (generationStore.lastGenId) {
     interactiveStore.setGenerationId(generationStore.lastGenId);
-    await loadGenerationStatus();
+    // 项目草稿已经包含完整节点时直接使用，避免全局缓存中的旧 task_id
+    // 覆盖当前课件的恢复结果。
+    if (!restoredGenerationNodes) await loadGenerationStatus();
+  }
+  if (restoredGenerationNodes) {
+    // 草稿中的节点是 AI 修订后的权威内容，刷新时用 inline 节点重建预览，
+    // 避免旧 generation/version 快照覆盖最新修改。
+    await generationStore.renderCoursewarePreview(
+      outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
+      { genId: "" },
+    ).catch(() => {});
+  }
+  if (route.query.phase === "outline") currentPhase.value = "outline";
+  const evidenceReady = await ensureAutomaticEvidence();
+  outlineReady.value = evidenceReady || !requiresAutomaticEvidence.value;
+  } finally {
+    initializing.value = false;
   }
   // 恢复内容生成状态
   const contentRestored = contentStore.restore();
@@ -548,6 +779,26 @@ onMounted(async () => {
     currentPhase.value = "content";
   }
 });
+
+watch(() => [outlineStore.nodes, generationStore.currentScriptNodes, templateId.value, palette.value, layoutMode.value, fontFamily.value, density.value], () => projectStore.scheduleSave(draftSnapshot()), { deep: true });
+watch(() => generationStore.currentScriptNodes, (nodes) => {
+  if (!Array.isArray(nodes) || !nodes.length) return;
+  generationPages.value = nodes.map((node, index) => {
+    const existing = generationPages.value.find((page) => page.node_id === node.node_id) || {};
+    return {
+      ...existing,
+      ...node,
+      page_id: existing.page_id || node.page_id || node.node_id || `page_${index + 1}`,
+      page_order: Number(node.page_order || node.order || index + 1),
+      status: node.status || existing.status || 'done',
+    };
+  });
+}, { deep: true });
+watch(() => generationStore.previewHtml, (html) => {
+  previewFrameSrc.value = html ? `data:text/html;charset=utf-8,${encodeURIComponent(html)}` : "";
+});
+onBeforeUnmount(() => { projectStore.saveNow(draftSnapshot()).catch(() => {}); });
+onBeforeRouteLeave(async () => { await projectStore.saveNow(draftSnapshot()).catch(() => {}); });
 
 function statusLabel(status) {
   return (
@@ -562,6 +813,10 @@ function statusLabel(status) {
 
 // 大纲创建完成
 function handleOutlineCreated({ outline_id, outline_version }) {
+  // OutlineBuilder 已使用整份证据包生成结构；创建完成后再把引用 ID
+  // 落到每个大纲节点，保证后续内容生成和版本快照都保留绑定关系。
+  bindEvidenceToWholeDraft();
+  projectStore.scheduleSave(draftSnapshot(), 0);
   console.log(
     "[S3StudioPage] 大纲创建完成:",
     outline_id,
@@ -641,6 +896,21 @@ function goToGeneratingPhase() {
   currentPhase.value = "generating";
 }
 
+// AI 修订成功后立即刷新右侧 PPT 预览，并把最新节点写入项目草稿。
+async function handleModifyApplied({ allNodes = [] } = {}) {
+  // 即使当前内存中没有 generation 节点，也以修改接口返回的完整节点树恢复预览。
+  if (!generationStore.currentScriptNodes?.length && Array.isArray(allNodes) && allNodes.length) {
+    generationStore.setNodes(allNodes)
+  }
+  if (generationStore.currentScriptNodes?.length) {
+    await generationStore.renderCoursewarePreview(
+      outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
+      { genId: "" },
+    );
+  }
+  await projectStore.saveNow(draftSnapshot());
+}
+
 // 开始生成内容
 async function handleStartGeneration() {
   if (!outlineStore.outline_id || !outlineStore.isConfirmed) {
@@ -652,11 +922,7 @@ async function handleStartGeneration() {
   generationStore.setGenerateProgress(5, "准备生成环境");
 
   try {
-    let evidence = null;
-    try {
-      const raw = window.localStorage.getItem("fuww_s2_evidence_packet");
-      if (raw) evidence = JSON.parse(raw);
-    } catch {}
+    const evidence = selectedEvidencePacket.value;
 
     generationStore.setGenerateProgress(15, "创建生成任务");
     const resp = await teacherV1Api.generation.createGeneration({
@@ -664,7 +930,8 @@ async function handleStartGeneration() {
       outline_id: outlineStore.outline_id,
       outline_version: outlineStore.outline_version,
       outline_confirmed: true,
-      template_id: "default",
+      template_id: templateId.value,
+      project_id: projectStore.projectId,
       generate_mode: generateMode.value,
       intent: intentStore.intentSummary || undefined,
       evidence_packet: evidence,
@@ -673,11 +940,13 @@ async function handleStartGeneration() {
     const task = resp?.data || resp || {};
   const taskId = task.task_id || task.generation_id;
     if (!taskId) throw new Error("未返回生成任务 ID");
+    generationStore.setLastTaskId(taskId);
 
     // 记录 generation_id
     const genId = task.generation_id || taskId;
     generationStore.setLastTaskId(task.task_id || taskId);
     generationStore.setLastGenId(genId);
+    projectStore.scheduleSave(draftSnapshot(), 0);
     interactiveStore.setGenerationId(genId);
 
     generationStore.setGenerateProgress(25, "正在生成内容");
@@ -688,6 +957,7 @@ async function handleStartGeneration() {
 
     // 加载生成状态（页面列表）
     await loadGenerationStatus();
+    bindEvidenceToWholeDraft();
 
     // 渲染预览
     generationStore.setGenerateProgress(92, "正在加载预览");
@@ -710,14 +980,17 @@ async function handleStartGeneration() {
 
 // 加载生成状态
 async function loadGenerationStatus() {
-  generationStore.restoreLastTaskId();
-  if (!generationStore.lastTaskId) return;
+  const taskId = generationStore.lastTaskId || generationStore.restoreLastTaskId();
+  if (!taskId) return;
   try {
-    const resp = await teacherV1Api.generation.getGenerationStatus(
-      generationStore.lastTaskId,
-    );
+    const resp = await teacherV1Api.generation.getGenerationStatus(taskId);
     const data = resp?.data || resp || {};
-    generationPages.value = data.pages || data.nodes || [];
+    generationPages.value = (Array.isArray(data.nodes) ? data.nodes : []).map((node, index) => ({
+      ...node,
+      page_id: node.page_id || node.node_id || `page_${index + 1}`,
+      page_order: Number(node.page_order || node.order || index + 1),
+      status: node.status || 'completed'
+    }));
   } catch (err) {
     console.warn("[S3StudioPage] 加载生成状态失败", err);
   }
@@ -758,11 +1031,15 @@ async function handlePreviewPage(page) {
 
 // 生成互动资源
 async function handleGenerateInteractive(node) {
-  if (!generationStore.lastGenId) return;
+  if (!generationStore.lastGenId) {
+    handleError("当前课件还没有生成结果，请先完成内容生成");
+    return;
+  }
   try {
     await interactiveStore.generateInteractive({
       generation_id: generationStore.lastGenId,
       node_id: node.node_id,
+      node,
       interactive_plan: node.interactive_plan || {
         enabled: true,
         kind: "quiz",
@@ -772,7 +1049,24 @@ async function handleGenerateInteractive(node) {
         delivery: "html5_link",
       },
     });
-    await interactiveStore.pollAssetStatus(node.node_id);
+    const asset = await interactiveStore.pollAssetStatus(node.node_id);
+    if (asset?.status === "done") {
+      const nodes = (generationStore.currentScriptNodes || []).map((item) => item.node_id === node.node_id
+        ? { ...item, metadata: { ...(item.metadata || {}), interactive_asset: asset, interactive_entry_url: asset.entry_url || asset.file_url || "" } }
+        : item);
+      generationStore.setNodes(nodes);
+      const page = generationPages.value.find((item) => item.node_id === node.node_id);
+      if (page?.page_id && asset.interactive_asset_id) {
+        const link = await interactiveStore.linkToPage({
+          generation_id: generationStore.lastGenId,
+          page_id: page.page_id,
+          interactive_asset_id: asset.interactive_asset_id,
+          label: node.title || "互动练习",
+        });
+        asset.entry_url = link.entry_url || asset.entry_url;
+      }
+      projectStore.scheduleSave(draftSnapshot(), 0);
+    }
   } catch (err) {
     handleError("生成互动资源失败: " + (err?.message || ""));
   }
@@ -782,8 +1076,18 @@ async function handleGenerateInteractive(node) {
 function openInteractiveAsset(node) {
   const asset = interactiveStore.getAsset(node.node_id);
   if (asset?.entry_url) {
-    window.open(asset.entry_url, "_blank");
+    interactivePreviewUrl.value = asset.entry_url;
+    interactivePreviewTitle.value = node.title || "互动资源";
   }
+}
+
+function openInteractiveWindow() {
+  if (interactivePreviewUrl.value) window.open(interactivePreviewUrl.value, "_blank", "noopener");
+}
+
+function closeInteractivePreview() {
+  interactivePreviewUrl.value = "";
+  interactivePreviewTitle.value = "";
 }
 
 // 新窗口打开 HTML5 预览
@@ -793,6 +1097,259 @@ function openPreviewWindow() {
   const url = URL.createObjectURL(blob);
   window.open(url, "_blank");
   setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+async function applyPresentationStyle() {
+  const presentation = {
+    template_id: templateId.value,
+    palette: palette.value,
+    layout: layoutMode.value,
+    font_family: fontFamily.value,
+    density: density.value,
+  };
+  generationStore.setNodes((generationStore.currentScriptNodes || []).map((node) => ({
+    ...node,
+    layout_hint: layoutMode.value === "visual" ? "text_with_media" : (layoutMode.value === "text" ? "text_only" : (node.layout_hint || "two_column")),
+    font_size_hint: density.value === "minimal" ? "large" : (density.value === "compact" ? "small" : "medium"),
+    slide_background: palette.value === "klein-blue" ? "preset_blue" : "preset_green",
+    metadata: { ...(node.metadata || {}), presentation },
+  })));
+  await generationStore.renderCoursewarePreview(
+    outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
+    { genId: "" },
+  );
+  projectStore.scheduleSave(draftSnapshot(), 0);
+  currentPhase.value = "style";
+}
+
+async function handleStyleRequest({ instruction = '', presentation = {} } = {}) {
+  const text = String(instruction).toLowerCase();
+  const style = presentation && typeof presentation === 'object' ? presentation : {};
+  if (style.template_id) templateId.value = style.template_id;
+  if (style.palette) palette.value = style.palette;
+  if (style.layout) layoutMode.value = style.layout;
+  if (style.font_family) fontFamily.value = style.font_family;
+  if (style.density) density.value = style.density;
+  // 兼容旧 AI 响应：仅当结构化字段为空时才使用本地兜底映射。
+  if (!Object.values(style).some(Boolean)) {
+    if (/商务|business|简洁/.test(text)) { templateId.value = 'deck-swiss-edu'; density.value = 'minimal'; }
+    if (/蓝|blue/.test(text)) palette.value = 'klein-blue';
+    if (/图|视觉|visual/.test(text)) layoutMode.value = 'visual';
+    if (/文字|内容优先/.test(text)) layoutMode.value = 'text';
+  }
+  currentPhase.value = 'style';
+  await applyPresentationStyle();
+}
+
+async function handleEvidenceSearch(query) {
+  const packet = await materialStore.generateEvidence({
+    query,
+    context: { intent: intentStore.intentSummary || {}, project_id: projectStore.projectId },
+  });
+  if (packet) {
+    adoptEvidencePacket(packet);
+    projectStore.scheduleSave(draftSnapshot(), 0);
+  }
+}
+
+function adoptEvidencePacket(packet) {
+  evidencePacket.value = packet;
+  selectedEvidenceIds.value = evidenceIds(packet);
+  evidenceSelectionInitialized.value = true;
+  evidenceScope.value = { scope: "draft", nodeId: "" };
+  generationMode.value = isEvidencePacketUsable(packet) ? "with_evidence" : "without_evidence";
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(`fuww_s2_generation_mode:${intentStore.sessionId}`, generationMode.value);
+  }
+  bindEvidenceToWholeDraft();
+}
+
+function bindEvidenceToWholeDraft() {
+  const refs = evidenceIds(selectedEvidencePacket.value);
+  if (!refs.length) return;
+  outlineStore.bindEvidenceRefs(refs);
+  if (generationStore.currentScriptNodes?.length) {
+    generationStore.setNodes(generationStore.currentScriptNodes.map((node) => ({
+      ...node,
+      citation_refs: refs,
+      source_chunk_ids: refs,
+      metadata: {
+        ...(node.metadata || {}),
+        evidence_scope: "draft",
+        evidence_auto_bound: true,
+        evidence_bound_by: "s1_intent_auto_search",
+      },
+    })));
+  }
+}
+
+function discardPlaceholderOutline() {
+  if (isPlaceholderOutline(outlineStore.nodes)) outlineStore.reset();
+}
+
+async function ensureAutomaticEvidence() {
+  if (isEvidencePacketUsable(evidencePacket.value)) {
+    adoptEvidencePacket(evidencePacket.value);
+    discardPlaceholderOutline();
+    projectStore.scheduleSave(draftSnapshot(), 0);
+    evidenceBootstrapState.value = "ready";
+    evidenceBootstrapError.value = "";
+    return true;
+  }
+  const query = buildIntentEvidenceQuery(intentStore.intentSummary || {});
+  if (!query) {
+    evidenceBootstrapState.value = "error";
+    evidenceBootstrapError.value = "S1 教学意图不完整，无法构造自动检索条件。";
+    return false;
+  }
+  evidenceBootstrapState.value = "loading";
+  evidenceBootstrapError.value = "";
+  try {
+    const packet = await materialStore.generateEvidence({
+      query,
+      context: {
+        intent: intentStore.intentSummary || {},
+        project_id: projectStore.projectId,
+        binding_scope: "draft",
+        auto_bind: true,
+      },
+    });
+    if (isEvidencePacketUsable(packet)) {
+      adoptEvidencePacket(packet);
+      discardPlaceholderOutline();
+      evidenceBootstrapState.value = "ready";
+      await projectStore.saveNow(draftSnapshot()).catch(() => {});
+      return true;
+    }
+    evidenceBootstrapState.value = "error";
+    evidenceBootstrapError.value = materialStore.error || "知识库暂未返回可用证据。";
+    return false;
+  } catch (error) {
+    evidenceBootstrapState.value = "error";
+    evidenceBootstrapError.value = error?.message || "自动检索失败，请重试。";
+    return false;
+  }
+}
+
+async function retryAutomaticEvidence() {
+  const ready = await ensureAutomaticEvidence();
+  if (ready) outlineReady.value = true;
+}
+
+function continueWithIntentOnly() {
+  generationMode.value = "without_evidence";
+  evidenceBootstrapState.value = "skipped";
+  evidenceBootstrapError.value = "";
+  // 明确由教师选择无资料生成时，仍只使用结构化 S1 意图，不能读取旧版 S2 Markdown。
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem("fuww_s2_markdown");
+    window.localStorage.setItem(`fuww_s2_generation_mode:${intentStore.sessionId}`, generationMode.value);
+  }
+  discardPlaceholderOutline();
+  outlineReady.value = true;
+}
+
+function handleEvidenceSelection(ids) {
+  selectedEvidenceIds.value = Array.isArray(ids) ? ids : [];
+  evidenceSelectionInitialized.value = true;
+  projectStore.scheduleSave(draftSnapshot());
+}
+
+async function handleEvidenceApply({ scope, nodeId, selectedIds = [] }) {
+  selectedEvidenceIds.value = selectedIds;
+  evidenceSelectionInitialized.value = true;
+  evidenceScope.value = { scope, nodeId: nodeId || "" };
+  if (scope === "none") {
+    if (generationStore.currentScriptNodes?.length) {
+      generationStore.setNodes(generationStore.currentScriptNodes.map((node) => ({
+        ...node,
+        citation_refs: [],
+        source_chunk_ids: [],
+        metadata: { ...(node.metadata || {}), evidence_scope: "none" },
+      })));
+    }
+    projectStore.scheduleSave(draftSnapshot(), 0);
+    return;
+  }
+  if (!evidencePacket.value) {
+    projectStore.scheduleSave(draftSnapshot(), 0);
+    return;
+  }
+  const activePacket = selectedEvidencePacket.value || {};
+  const refs = [
+    ...(activePacket.citations || []).map((item) => item.chunk_id),
+    ...(activePacket.relevant_chunks || []).map((item) => item.chunk_id),
+  ].filter(Boolean);
+  const uniqueRefs = [...new Set(refs)];
+  if (generationStore.currentScriptNodes?.length) {
+    generationStore.setNodes(generationStore.currentScriptNodes.map((node) => {
+      const selected = scope === "draft" || node.node_id === nodeId;
+      return selected ? {
+        ...node,
+        // 采用替换语义，确保取消勾选后旧证据不会继续残留在页面绑定中。
+        citation_refs: uniqueRefs,
+        source_chunk_ids: uniqueRefs,
+        metadata: { ...(node.metadata || {}), evidence_scope: scope },
+      } : node;
+    }));
+    await generationStore.renderCoursewarePreview(outlineStore.title || intentStore.intentSummary?.topic || "课件预览", { genId: "" });
+  }
+  projectStore.scheduleSave(draftSnapshot(), 0);
+}
+
+async function handleSaveNewVersion() {
+  if (!generationStore.currentScriptNodes.length || saveVersionState.value === "saving") return;
+  saveVersionState.value = "saving";
+  genError.value = "";
+  try {
+    await projectStore.saveNow(draftSnapshot());
+    const summary = `教师保存：${new Date().toLocaleString()}`;
+    const response = await teacherV1Api.generation.finalize({
+      generation_id: generationStore.lastGenId,
+      nodes: generationStore.currentScriptNodes,
+      course_name: outlineStore.title || intentStore.intentSummary?.topic || "未命名课件",
+      summary,
+      outline_id: outlineStore.outline_id,
+      outline_version: outlineStore.outline_version,
+      page_bindings: versionPageBindings(),
+      presentation: draftSnapshot().presentation,
+    });
+    const data = response?.data || response || {};
+    if (data.generation_id) generationStore.setLastGenId(data.generation_id);
+    const generationVersion = Number(data.version_number || 0);
+    let savedVersion = generationVersion;
+    if (projectStore.projectId) {
+      const snapshot = {
+        outline: {
+          outline_id: outlineStore.outline_id,
+          outline_version: outlineStore.outline_version,
+          title: outlineStore.title,
+          nodes: outlineStore.nodes,
+        },
+        content: generationStore.currentScriptNodes,
+        page_bindings: versionPageBindings(),
+        style: draftSnapshot().presentation,
+      };
+      const projectResponse = await projectModifyApi.createVersion(projectStore.projectId, {
+        nodes: generationStore.currentScriptNodes,
+        presentation: draftSnapshot().presentation,
+        page_bindings: versionPageBindings(),
+        version_summary: summary,
+        version_no: Math.max(baseVersion.value + 1, generationVersion || 1),
+        snapshot,
+        change_note: summary,
+      });
+      const projectVersion = projectResponse?.data || projectResponse || {};
+      if (!savedVersion) savedVersion = Number(projectVersion.version_no || 0);
+    }
+    lastSavedVersion.value = savedVersion;
+    if (savedVersion > 0) baseVersion.value = savedVersion;
+    saveVersionState.value = "saved";
+    await modifyStore.loadVersionHistory().catch(() => {});
+  } catch (error) {
+    saveVersionState.value = "error";
+    genError.value = error?.message || "保存新版本失败";
+  }
 }
 
 function goToS4() {
@@ -807,10 +1364,8 @@ function goToS4() {
       }),
     );
   } catch {}
-  import("vue-router").then(({ useRouter }) => {
-    const router = useRouter();
-    router.push({ name: "S4Version" });
-  });
+  projectStore.updateStep("s4_version").catch(() => {});
+  router.push({ name: "S4Version", query: { project_id: projectStore.projectId, generation_id: generationStore.lastGenId } });
 }
 
 function handleError(msg) {
@@ -823,7 +1378,7 @@ function handleError(msg) {
 .s3-page {
   display: flex;
   flex-direction: column;
-  padding: 20px;
+  padding: 20px 380px 20px 340px;
   min-height: calc(100vh - 140px);
   overflow: hidden;
   background:
@@ -834,6 +1389,8 @@ function handleError(msg) {
     ),
     linear-gradient(180deg, #fcfefd 0%, #f7faf8 100%);
 }
+.studio-loading{position:fixed;inset:82px 20px 20px;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;border-radius:22px;background:rgba(248,252,250,.96);backdrop-filter:blur(8px);color:#27594e}.studio-loading strong{margin-top:14px;font-size:18px}.studio-loading p{margin:7px 0;color:#70857d;font-size:13px}.studio-spinner{width:42px;height:42px;border:4px solid #d8ebe4;border-top-color:#28735f;border-radius:50%;animation:studio-spin .8s linear infinite}@keyframes studio-spin{to{transform:rotate(360deg)}}
+.async-activity{position:fixed;top:92px;left:50%;z-index:40;display:flex;align-items:center;gap:11px;min-width:min(440px,calc(100vw - 40px));box-sizing:border-box;padding:12px 16px;border:1px solid #bcdcd0;border-radius:14px;background:rgba(249,253,251,.97);box-shadow:0 14px 38px rgba(26,75,60,.18);color:#28594c;transform:translateX(-50%);backdrop-filter:blur(10px)}.async-activity>div{display:grid;gap:2px;flex:1}.async-activity strong{font-size:13px}.async-activity small{color:#718880;font-size:11px}.async-spinner{width:22px;height:22px;flex:0 0 auto;border:3px solid #d6e9e1;border-top-color:#28735f;border-radius:50%;animation:studio-spin .75s linear infinite}.async-progress{font-size:12px;font-weight:700;color:#28735f}
 .page-header {
   display: flex;
   align-items: flex-start;
@@ -896,6 +1453,28 @@ function handleError(msg) {
   text-decoration: none;
 }
 
+.evidence-gate { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:0 0 16px; padding:16px 18px; border:1px solid #e5b66d; border-radius:14px; background:#fff8ea; color:#714d18; }
+.evidence-gate>div:first-child { display:flex; flex-direction:column; gap:5px; }
+.evidence-gate strong { font-size:14px; }
+.evidence-gate span { font-size:12px; color:#8b6b3d; }
+.evidence-gate-actions { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+.evidence-gate-actions button,.evidence-gate-actions a { padding:8px 12px; border:1px solid #ba8437; border-radius:9px; background:#8f5f20; color:#fff; font:600 12px/1.2 inherit; text-decoration:none; cursor:pointer; }
+.evidence-gate-actions button:disabled { opacity:.55; cursor:not-allowed; }
+.evidence-gate-actions .plain { background:#fff; color:#77501c; }
+.version-branch-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 11px 15px;
+  border: 1px solid #b9d9cd;
+  border-radius: 12px;
+  background: #eff8f4;
+  color: #24594d;
+  font-size: 13px;
+}
+.version-branch-banner span { color: #617c73; }
+
 /* 阶段选项卡 */
 .phase-tabs {
   display: flex;
@@ -933,6 +1512,36 @@ function handleError(msg) {
   flex-direction: column;
   gap: 14px;
 }
+
+.s3-ai-panel { position: fixed; top: 118px; right: 20px; bottom: 20px; width: 340px; z-index: 12; box-shadow: 0 12px 34px rgba(30, 72, 60, .12); border: 1px solid #dce9e3; border-radius: 14px; overflow: hidden; }
+.style-ai-hint { padding: 12px; border-radius: 10px; background: #f1f8f5; color: #45685e; font-size: 13px; line-height: 1.6; }
+@media (max-width: 1400px) { .s3-page { padding-left: 20px; } }
+@media (max-width: 1100px) { .s3-page { padding-right: 20px; } .s3-ai-panel { position: static; width: auto; min-height: 420px; margin-bottom: 14px; } }
+@media (max-width: 700px) {
+  .s3-page { padding: 14px 12px; overflow: visible; }
+  .page-header { flex-direction: column; }
+  .page-header-right { width: 100%; justify-content: flex-start; }
+  .step-pills { width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+  .pill { flex: 0 0 auto; }
+  .phase-tabs { overflow-x: auto; }
+  .phase-tab { flex: 0 0 auto; padding: 8px 12px; }
+  .evidence-warning { align-items: flex-start; flex-direction: column; }
+  .evidence-warning div { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .s3-ai-panel { min-height: 520px; }
+  .style-panel { padding: 16px; }
+  .style-actions,.gen-complete-actions { flex-direction: column; }
+  .style-actions button,.gen-complete-actions button { width: 100%; }
+  .preview-frame { height: 360px; }
+  .page-item { align-items: flex-start; flex-direction: column; }
+  .page-item-right { width: 100%; justify-content: flex-end; }
+}
+.save-state { border: 1px solid #bdd8cb; border-radius: 999px; padding: 6px 10px; background: #fff; color: #42675d; font-size: 12px; cursor: pointer; }
+.save-state.saving { color: #996a14; }.save-state.error { color: #b42318; }
+.save-version { border: 1px solid #2f605a; border-radius: 999px; padding: 6px 11px; background: #2f605a; color: #fff; font-size: 12px; cursor: pointer; }.save-version:disabled{opacity:.55;cursor:not-allowed}
+.style-panel { max-width: 680px; padding: 22px; border: 1px solid #dce9e3; border-radius: 14px; background: #fff; }
+.style-panel h3 { margin: 0; color: #24483e; }.style-panel p { color: #667b73; font-size: 13px; }
+.style-panel label { display: grid; gap: 6px; margin-top: 14px; color: #365e52; font-size: 13px; font-weight: 600; }
+.style-panel select { padding: 9px; border: 1px solid #c7ddd4; border-radius: 8px; background: #fff; }.style-actions { display: flex; gap: 10px; margin-top: 20px; }
 
 /* 生成控制栏 */
 .gen-control-bar {
@@ -1281,6 +1890,24 @@ function handleError(msg) {
   border: 1.5px solid #e2ece6;
   border-radius: 10px;
 }
+.page-item.page-modified {
+  border-color: #24a36f;
+  background: #effdf7;
+  box-shadow: 0 0 0 3px rgba(36, 163, 111, .12);
+  animation: pageModified 2s ease-out;
+}
+.changed-badge {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #24a36f;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+@keyframes pageModified {
+  from { transform: translateY(-2px); }
+  to { transform: translateY(0); box-shadow: none; }
+}
 .page-status-done {
   border-color: #6ee7b7;
 }
@@ -1405,6 +2032,12 @@ function handleError(msg) {
   text-align: center;
   padding: 10px 0;
 }
+.interactive-preview-card { margin-top: 14px; overflow: hidden; border: 1px solid #c8ddd5; border-radius: 12px; background: #fff; }
+.interactive-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid #e3ece8; background: #f5faf8; }
+.interactive-preview-head > div { display: flex; align-items: center; gap: 8px; }
+.interactive-preview-head strong { color: #23584c; font-size: 13px; }
+.interactive-preview-head span { color: #70837c; font-size: 12px; }
+.interactive-preview-frame { display: block; width: 100%; min-height: 520px; border: 0; background: #fff; }
 
 /* 通用按钮 */
 .btn {

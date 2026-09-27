@@ -16,19 +16,27 @@ type GenerationHandler struct {
 	aiClient       service.AIEngine
 	outlineService *service.OutlineService
 	projectService *service.CoursewareProjectService
+	coursewareSvc  *service.CoursewareService // 可选；用于落 modify 结果（契约 v1.0 §1.1）
 }
 
-func NewGenerationHandler(aiClient service.AIEngine, outlineService *service.OutlineService, projectServices ...*service.CoursewareProjectService) *GenerationHandler {
-	var projectService *service.CoursewareProjectService
-	if len(projectServices) > 0 {
-		for _, candidate := range projectServices {
-			if candidate != nil {
-				projectService = candidate
-				break
+// NewGenerationHandler 构造 S3 处理器。
+// 后两个参数（CoursewareProjectService / CoursewareService）是可选的，
+// 用于落库；旧调用方不传也能编译通过，只是失去落库能力。
+func NewGenerationHandler(aiClient service.AIEngine, outlineService *service.OutlineService, projectServices ...interface{}) *GenerationHandler {
+	h := &GenerationHandler{aiClient: aiClient, outlineService: outlineService}
+	for _, c := range projectServices {
+		switch v := c.(type) {
+		case *service.CoursewareProjectService:
+			if v != nil {
+				h.projectService = v
+			}
+		case *service.CoursewareService:
+			if v != nil {
+				h.coursewareSvc = v
 			}
 		}
 	}
-	return &GenerationHandler{aiClient: aiClient, outlineService: outlineService, projectService: projectService}
+	return h
 }
 
 // Create  POST /api/v1/gen/create — 创建生成任务
@@ -47,7 +55,7 @@ func (h *GenerationHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "必须使用后端已确认的大纲版本生成课件"})
 			return
 		}
-		outline, err := h.outlineService.GetConfirmed(req.OutlineID, req.OutlineVersion)
+		outline, err := h.outlineService.GetConfirmed(c.Request.Context(), req.OutlineID, req.OutlineVersion)
 		if err != nil {
 			status := http.StatusConflict
 			if errors.Is(err, service.ErrOutlineNotFound) {
@@ -126,6 +134,15 @@ func (h *GenerationHandler) PreviewHTML(c *gin.Context) {
 }
 
 // Modify  POST /api/v1/gen/modify — 应用编辑命令，生成新版本快照
+//
+// 契约 v1.0 模块1 接口3：请求体可带 page_id + evidence_refs，把局部修改的证据
+// 限定在该页绑定的 chunk 内；不传时保持现有行为（全库检索），向后兼容。
+//
+// 落库策略：调用 AI Engine 后，如果能根据 generation_id 反查到 project，
+// 会通过 coursewareSvc.RecordModifyResult 把（请求 + 响应）作为 CoursewareVersion
+// 快照写入 PostgreSQL，同时把用户提交的 evidence_refs 回写到 page_bindings。
+// 这让"切 PPT 不重置 AI 对话"和"左侧绑定不可见"两类前端问题有一个权威读源。
+// 落库失败不回滚 AI 响应（fire-and-record），保证前端流程不被后端 DB 抖动打断。
 func (h *GenerationHandler) Modify(c *gin.Context) {
 	var req service.GenerationModifyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -134,9 +151,25 @@ func (h *GenerationHandler) Modify(c *gin.Context) {
 	}
 	resp, err := h.aiClient.GenerationModify(c.Request.Context(), req)
 	if err != nil {
+		if httpErr, isHTTP := err.(*service.AIEngineHTTPError); isHTTP {
+			status := http.StatusBadGateway // 契约错误码：502 = AI引擎调用失败
+			if httpErr.StatusCode == http.StatusNotFound {
+				status = http.StatusNotFound // 契约错误码：404 = 版本/资源不存在
+			}
+			c.JSON(status, gin.H{"code": status, "message": "修改命令执行失败: " + httpErr.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "修改命令执行失败: " + err.Error()})
 		return
 	}
+
+	// 落库（仅在能反查到 project 时进行；找不到则保持纯代理语义，向后兼容）。
+	if h.coursewareSvc != nil && req.GenerationID != "" {
+		if proj, lookupErr := h.coursewareSvc.LookupProjectByGenID(c.Request.Context(), req.GenerationID); lookupErr == nil && proj != nil {
+			h.coursewareSvc.RecordModifyResult(c.Request.Context(), proj.ProjectID, req, *resp)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
 

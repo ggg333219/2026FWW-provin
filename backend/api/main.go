@@ -25,6 +25,7 @@ import (
 	"smart-teaching-backend/pkg/config"
 	applogger "smart-teaching-backend/pkg/logger"
 	"smart-teaching-backend/pkg/oss"
+	"smart-teaching-backend/pkg/serveraddr"
 )
 
 func main() {
@@ -64,7 +65,6 @@ func main() {
 	err = db.AutoMigrate(
 		&model.Course{},
 		&model.CoursewareProject{},
-		&service.CoursewareVersion{},
 		&model.CoursePage{},
 		&model.TeachingNode{},
 		&model.TeachingNodeRelation{},
@@ -158,7 +158,6 @@ func main() {
 	compatHandler := handler.NewCompatibilityHandler(db, aiClient, courseService)
 	authHandler := handler.NewAuthHandler(db)
 	coursewareProjectHandler := handler.NewCoursewareProjectHandler(service.NewCoursewareProjectService(db))
-	coursewareModifyHandler := handler.NewCoursewareModifyHandler(service.NewCoursewareProjectService(db), service.NewCoursewareVersionService(db), aiClient)
 	exportHandler := handler.NewExportHandler(aiClient, service.NewCoursewareProjectService(db))
 
 	// 初始化新的处理器
@@ -299,14 +298,11 @@ func main() {
 			{
 				projects.POST("", coursewareProjectHandler.Create)
 				projects.GET("", coursewareProjectHandler.List)
+				projects.DELETE("/:project_id", coursewareProjectHandler.Delete)
 				projects.GET("/:project_id/context", coursewareProjectHandler.Context)
 				projects.GET("/:project_id/draft", coursewareProjectHandler.DraftGet)
 				projects.PUT("/:project_id/draft", coursewareProjectHandler.DraftPut)
 				projects.PUT("/:project_id/step", coursewareProjectHandler.StepPut)
-				projects.POST("/:project_id/modify", coursewareModifyHandler.Modify)
-				projects.GET("/:project_id/modify-history", coursewareModifyHandler.History)
-				projects.POST("/:project_id/rollback", coursewareModifyHandler.Rollback)
-				projects.GET("/:project_id/versions", coursewareModifyHandler.History)
 			}
 			canonicalExports := v1.Group("/generations")
 			canonicalExports.POST("/:generation_id/exports", exportHandler.CreateV2)
@@ -446,14 +442,10 @@ func main() {
 		}
 	}
 
-	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	for _, route := range r.Routes() {
 		applogger.Infof("Route: %s %s", route.Method, route.Path)
 	}
-	applogger.Sugar.Infof("服务器启动成功，访问地址: http://localhost%s", addr)
-	applogger.Sugar.Infof("健康检查: http://localhost%s/health", addr)
-
-	if err := r.Run(addr); err != nil {
+	if err := serveraddr.Serve(r, cfg.Server.Port, "api", projectRoot, applogger.Sugar.Warnf); err != nil {
 		applogger.Sugar.Fatalf("服务器启动失败: %v", err)
 	}
 }

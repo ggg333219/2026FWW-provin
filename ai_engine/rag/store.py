@@ -142,6 +142,15 @@ class VectorStore(ABC):
         """列出所有文档。"""
         ...
 
+    @abstractmethod
+    def list_chunk_ids(self, doc_id: str) -> list[str]:
+        """按文档 ID 列出该文档下的所有 chunk_id。
+
+        用于 BM25 重建等需要枚举文档分块的下游场景。
+        不存在的 doc_id 应返回空列表而非抛异常。
+        """
+        ...
+
 
 # =============================================================================
 # 内存实现
@@ -237,6 +246,14 @@ class InMemoryVectorStore(VectorStore):
 
     def list_documents(self) -> list[DocumentRecord]:
         return list(self._documents.values())
+
+    def list_chunk_ids(self, doc_id: str) -> list[str]:
+        """列出某文档下的所有 chunk_id（抽象方法实现）。
+
+        直接从主索引 _chunks 派生，不依赖 _doc_chunks 次级索引，
+        即使 _doc_chunks 缺失或不一致也能返回正确结果。
+        """
+        return [cid for cid, ch in self._chunks.items() if ch.doc_id == doc_id]
 
     # ---- 额外方法 ----
 

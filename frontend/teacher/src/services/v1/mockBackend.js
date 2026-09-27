@@ -523,7 +523,7 @@ function buildDefaultStore() {
 }
 
 function ok(data) {
-  return { code: 200, message: 'ok (mock)', data }
+  return { ok: true, data, error: '', code: 200, message: 'ok (mock)' }
 }
 
 // ================================================================
@@ -751,18 +751,23 @@ function mockBuildDocxBytes(nodes) {
 const _mockExportBlobCache = new Map()
 
 /** 导出任务 → 可下载地址：浏览器环境返回 Blob URL（真实可打开文件），否则回退后端下载路径 */
-function mockBuildExportDownloadUrl(store, job) {
-  const fmt = job.format || 'pptx'
+function mockBuildExportDownloadUrl(store, job, requestedFormat = '') {
+  const fmt = requestedFormat || job.format || 'pptx'
   const fallback = `/download/${job.job_id}.${fmt}`
   const canBlob = typeof URL !== 'undefined' && typeof Blob !== 'undefined' && typeof URL.createObjectURL === 'function'
   if (!canBlob) return fallback
-  if (_mockExportBlobCache.has(job.job_id)) return _mockExportBlobCache.get(job.job_id)
+  const cacheKey = `${job.job_id}:${fmt}`
+  if (_mockExportBlobCache.has(cacheKey)) return _mockExportBlobCache.get(cacheKey)
   try {
     const nodes = mockExportNodesFrom(store, job.generation_id)
-    const isDocx = fmt === 'docx'
-    const bytes = isDocx ? mockBuildDocxBytes(nodes) : mockBuildPptxBytes(nodes)
-    const blobUrl = URL.createObjectURL(new Blob([bytes], { type: isDocx ? DOCX_MIME : PPTX_MIME }))
-    _mockExportBlobCache.set(job.job_id, blobUrl)
+    const isDocx = fmt === 'docx' || fmt === 'lesson_plan'
+    const isHtml = fmt === 'html' || fmt === 'html5' || fmt === 'interactive'
+    const bytes = isHtml
+      ? new TextEncoder().encode('<!doctype html><meta charset="utf-8"><title>互动课件</title><h1>HTML5 互动课件</h1>')
+      : (isDocx ? mockBuildDocxBytes(nodes) : mockBuildPptxBytes(nodes))
+    const mime = isHtml ? 'text/html;charset=utf-8' : (isDocx ? DOCX_MIME : PPTX_MIME)
+    const blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }))
+    _mockExportBlobCache.set(cacheKey, blobUrl)
     return blobUrl
   } catch (error) {
     return fallback
@@ -2609,6 +2614,101 @@ export function handleMockRequest(path, options = {}, originalError = null) {
   const store = ensureMockStore()
 
   try {
+    // C1-C7 课件项目工作流：为离线演示提供与 Go 接口一致的最小持久化实现。
+    if (pathname === '/api/v1/coursewares' || pathname.startsWith('/api/v1/coursewares/')) {
+      store.coursewareProjects = store.coursewareProjects || []
+      const segments = pathname.split('/').filter(Boolean)
+      const projectId = segments[3] || ''
+      const action = segments[4] || ''
+      const project = store.coursewareProjects.find((item) => item.id === projectId)
+      const body = parseJsonBody(options)
+
+      if (!projectId && method === 'GET') {
+        return ok({ items: deepClone(store.coursewareProjects).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))), total: store.coursewareProjects.length })
+      }
+      if (!projectId && method === 'POST') {
+        const created = { id: uid('proj'), title: cleanText(body.title) || '未命名课件', current_step: 's1_intent', status: 'draft', draft_json: {}, gen_id: '', version_no: 1, versions: [], created_at: nowIso(), updated_at: nowIso() }
+        store.coursewareProjects.unshift(created); persistMockStore(); return ok(deepClone(created))
+      }
+      if (project && !action && method === 'DELETE') {
+        store.coursewareProjects = store.coursewareProjects.filter((item) => item.id !== projectId); persistMockStore(); return ok({ deleted: true })
+      }
+      if (project && action === 'context' && method === 'GET') {
+        return ok({ project: deepClone(project), draft: deepClone(project.draft_json || {}), current_step: project.current_step, generation_id: project.gen_id || null })
+      }
+      if (project && action === 'draft' && method === 'GET') {
+        return ok({ project: deepClone(project), draft: deepClone(project.draft_json || {}), current_step: project.current_step, generation_id: project.gen_id || null })
+      }
+      if (project && action === 'draft' && method === 'PUT') {
+        project.draft_json = typeof body.draft_json === 'string' ? JSON.parse(body.draft_json || '{}') : (body.draft_json || {})
+        project.status = 'active'; project.updated_at = nowIso(); persistMockStore(); return ok({ project: deepClone(project), draft: deepClone(project.draft_json), saved_at: project.updated_at })
+      }
+      if (project && action === 'step' && method === 'PUT') {
+        project.current_step = body.current_step || body.step || project.current_step; project.status = 'active'; project.updated_at = nowIso(); persistMockStore(); return ok({ current_step: project.current_step, updated_at: project.updated_at })
+      }
+      if (project && action === 'versions' && segments[5] && method === 'GET') {
+        const target = (project.versions || []).find((item) => item.version_id === segments[5])
+        if (!target) return null
+        return ok(deepClone(target))
+      }
+      if (project && ['versions', 'modify-history'].includes(action) && method === 'GET') {
+        return ok({ items: deepClone(project.versions || []) })
+      }
+      if (project && action === 'versions' && method === 'POST') {
+        project.versions = project.versions || []
+        const versionNo = project.versions.length + 1
+        const created = {
+          version_id: uid('ver'),
+          project_id: project.id,
+          version_no: versionNo,
+          parent_version_id: body.parent_version_id || '',
+          version_summary: cleanText(body.version_summary) || `保存版本 v${versionNo}`,
+          modify_instruction: cleanText(body.version_summary) || `保存版本 v${versionNo}`,
+          created_at: nowIso(),
+          nodes: deepClone(Array.isArray(body.nodes) ? body.nodes : []),
+          presentation: deepClone(body.presentation || {}),
+          page_bindings: deepClone(body.page_bindings || []),
+        }
+        project.versions.push(created)
+        project.version_no = versionNo
+        project.updated_at = created.created_at
+        persistMockStore()
+        return ok(deepClone(created))
+      }
+      if (project && action === 'modify' && method === 'POST') {
+        const instruction = cleanText(body.instruction)
+        const nodes = deepClone(Array.isArray(body.nodes) ? body.nodes : [])
+        const pageMatch = instruction.match(/第\s*(\d+)\s*页/)
+        const targetIndex = pageMatch ? Math.max(0, Number(pageMatch[1]) - 1) : 0
+        const target = nodes[targetIndex]
+        const restyle = /风格|样式|模板|配色|字体|版式/.test(instruction)
+        if (!restyle && !target) return ok({ clarification: '请说明要修改哪一页或哪个节点。', intent: { action: 'rewrite', target_ids: [], confidence: 0.4 } })
+        const actionName = restyle ? 'restyle' : (/精简|减少/.test(instruction) ? 'simplify' : (/增加|扩充/.test(instruction) ? 'expand' : 'rewrite'))
+        const targetIds = restyle ? [] : [target.node_id]
+        const modifiedNodes = []
+        if (target) {
+          const original = target.script || target.content || target.summary || ''
+          const nextText = actionName === 'simplify' ? String(original).slice(0, Math.max(20, Math.ceil(String(original).length * .65))) : `${original}${original ? '\n' : ''}（已根据教师指令完成 AI 局部调整）`
+          Object.assign(target, { script: nextText, content: nextText, summary: target.summary || nextText.slice(0, 80) })
+          modifiedNodes.push(deepClone(target))
+        }
+        project.versions = project.versions || []
+        const versionNo = project.versions.length + 1
+        project.versions.push({ version_no: versionNo, modify_instruction: instruction, created_at: nowIso(), nodes: deepClone(nodes) })
+        project.version_no = versionNo; project.updated_at = nowIso(); project.draft_json = { ...(project.draft_json || {}), generation: { ...(project.draft_json?.generation || {}), nodes } }
+        persistMockStore()
+        return ok({ modified_nodes: modifiedNodes, all_nodes: nodes, intent: { target_type: restyle ? 'style' : 'node', target_ids: targetIds, action: actionName, confidence: .95 }, previous_version_no: Math.max(0, versionNo - 1), new_version_no: versionNo })
+      }
+      if (project && action === 'rollback' && method === 'POST') {
+        const target = (project.versions || []).find((item) => item.version_no === Number(body.version_no))
+        if (!target) return null
+        const nodes = deepClone(target.nodes || [])
+        const versionNo = project.versions.length + 1
+        project.versions.push({ version_no: versionNo, modify_instruction: `回滚到 v${body.version_no}`, created_at: nowIso(), nodes })
+        project.version_no = versionNo; persistMockStore(); return ok({ restored_version_no: Number(body.version_no), new_version_no: versionNo, nodes })
+      }
+    }
+
     if (pathname.startsWith('/api/v1/teacher/coursewares')) {
       const response = handleTeacherCoursewareRequest(store, pathname, searchParams, method, options)
       if (response) return response
@@ -2883,6 +2983,8 @@ ${slides}
         version_number: 1,
         id: uid('ver'),
         nodes_snapshot: [],
+        page_bindings: [],
+        presentation: {},
         summary: '初始版本',
         locked: false,
         created_at: nowIso()
@@ -2937,6 +3039,27 @@ ${slides}
         evidence_packet: task.evidence_packet || null,
         error: task.error || null
       })
+    }
+
+    if (pathname === '/api/v1/gen/finalize' && method === 'POST') {
+      const body = parseJsonBody(options)
+      const genId = cleanText(body.generation_id) || uid('gen')
+      store.versionSnapshots = store.versionSnapshots || {}
+      const snapshots = store.versionSnapshots[genId] || []
+      const versionNumber = snapshots.reduce((max, item) => Math.max(max, Number(item.version_number || 0)), 0) + 1
+      snapshots.push({
+        version_number: versionNumber,
+        id: uid('ver'),
+        nodes_snapshot: deepClone(Array.isArray(body.nodes) ? body.nodes : []),
+        page_bindings: deepClone(Array.isArray(body.page_bindings) ? body.page_bindings : []),
+        presentation: deepClone(body.presentation || {}),
+        summary: cleanText(body.summary) || `版本 ${versionNumber}`,
+        locked: false,
+        created_at: nowIso()
+      })
+      store.versionSnapshots[genId] = snapshots
+      persistMockStore()
+      return ok({ generation_id: genId, version_number: versionNumber, status: 'done' })
     }
 
     if (pathname === '/api/v1/gen/preview' && method === 'POST') {
@@ -3062,6 +3185,8 @@ ${slides}
           version_number: snap.version_number,
           id: snap.id,
           nodes_snapshot: snap.nodes_snapshot || [],
+          page_bindings: snap.page_bindings || [],
+          presentation: snap.presentation || {},
           summary: snap.summary,
           locked: snap.locked || false,
           created_at: snap.created_at
@@ -3087,13 +3212,21 @@ ${slides}
           version_number: snapshots.length + 1,
           id: uid('ver'),
           nodes_snapshot: deepClone(target.nodes_snapshot || []),
+          page_bindings: deepClone(target.page_bindings || []),
+          presentation: deepClone(target.presentation || {}),
           summary: `回滚到版本 ${targetVersion}`,
           locked: false,
           created_at: nowIso()
         }
         snapshots.push(newVer)
         persistMockStore()
-        return ok({ current_version: newVer.version_number, status: 'done' })
+        return ok({
+          current_version: newVer.version_number,
+          status: 'done',
+          nodes: deepClone(newVer.nodes_snapshot),
+          page_bindings: deepClone(newVer.page_bindings),
+          presentation: deepClone(newVer.presentation)
+        })
       }
 
       if (action === 'lock') {
@@ -3112,17 +3245,27 @@ ${slides}
     // export API（S4 异步导出）
     // ================================================================
 
-    if (pathname.startsWith('/api/v1/export/') && method === 'POST') {
+    if ((pathname.startsWith('/api/v1/exp/') || pathname.startsWith('/api/v1/export/')) && method === 'POST') {
       const segments = pathname.split('/').filter(Boolean)
       const genId = segments[3] || ''
       const body = parseJsonBody(options)
       const jobId = uid('exp')
+      const format = body.format || 'pptx'
+      const versionNo = Number(body.version || store.versionSnapshots?.[genId]?.at(-1)?.version_number || 1)
+      const coursewareTitle = cleanText(body.courseware_title) || '课件'
+      const extension = format === 'docx' || format === 'lesson_plan' ? 'docx' : (format === 'interactive' ? 'html' : 'pptx')
+      const safeTitle = coursewareTitle.replace(/[\\/:*?"<>|]/g, '_').replace(/[. ]+$/g, '') || '课件'
+      const filename = `${safeTitle}_v${versionNo}.${extension}`
 
       store.exportJobs = store.exportJobs || {}
       store.exportJobs[jobId] = {
         job_id: jobId,
         generation_id: genId,
-        format: body.format || 'pptx',
+        format,
+        filename,
+        courseware_title: coursewareTitle,
+        version: versionNo,
+        version_no: versionNo,
         status: 'pending',
         download_url: '',
         error: null,
@@ -3142,13 +3285,17 @@ ${slides}
       persistMockStore()
       return ok({
         job_id: jobId,
+        filename,
+        courseware_title: coursewareTitle,
+        version: versionNo,
+        version_no: versionNo,
         status: 'pending',
         download_url: null,
         error: null
       })
     }
 
-    if (pathname.startsWith('/api/v1/export/status/') && method === 'GET') {
+    if ((pathname.startsWith('/api/v1/exp/status/') || pathname.startsWith('/api/v1/export/status/')) && method === 'GET') {
       const jobId = decodeURIComponent(pathname.split('/').pop() || '')
       const job = store.exportJobs?.[jobId]
       if (!job) {
@@ -3161,10 +3308,21 @@ ${slides}
       }
       // 完成时按需生成真实可下载文件（浏览器返回 Blob URL；无 Blob 环境回退后端下载路径）
       const downloadUrl = job.status === 'done' ? mockBuildExportDownloadUrl(store, job) : ''
+      const formats = job.format === 'both'
+        ? ['pptx', 'docx', 'html']
+        : [job.format === 'lesson_plan' ? 'docx' : (job.format === 'interactive' ? 'html' : job.format)]
+      const files = job.status === 'done'
+        ? Object.fromEntries(formats.map((format) => [format, mockBuildExportDownloadUrl(store, job, format)]))
+        : {}
       return ok({
         job_id: job.job_id,
+        filename: job.filename,
+        courseware_title: job.courseware_title,
+        version: job.version,
+        version_no: job.version_no,
         status: job.status,
         download_url: downloadUrl,
+        files,
         error: job.error || null
       })
     }

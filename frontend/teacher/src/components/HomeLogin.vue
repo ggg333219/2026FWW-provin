@@ -50,12 +50,12 @@
           </span>
         </h1>
         <p class="hero-desc">
-          教师高效管理课件讲稿，学生实时互动提问，
-          AI 智能解析学情，让每一节课更有意义。
+          从教学意图到课件生成，用多轮对话融合资料与知识，
+          让每一次备课都更高效、更有创造力。
         </p>
         <div class="connection-pill">
           <span class="pill-dot"></span>
-          泛雅开放平台已接通 · 教师端平台总览已联通
+          AI 生成、资料检索与版本管理服务已就绪
         </div>
         <div class="features">
           <div class="feature-chip">
@@ -72,7 +72,7 @@
           </div>
           <div class="feature-chip feature-chip-accent">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h6l3 7 4-14 2 7h3"/></svg>
-            泛雅开放平台接通
+            多模态资料融合
           </div>
         </div>
       </div>
@@ -318,7 +318,12 @@ const handleLogin = async () => {
       throw new Error(payload.message || `登录失败 (${res.status})`)
     }
     const data = payload.data || {}
-    emit('login-success', { username: data.username || username.value, role: data.role || 'teacher' })
+    emit('login-success', {
+      username: data.username || username.value,
+      role: data.role || 'teacher',
+      userId: String(data.id || ''),
+      token: data.authToken || ''
+    })
   } catch (err) {
     if (String(err?.message || '').includes('Failed to fetch')) {
       try {

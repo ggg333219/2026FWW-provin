@@ -1,4 +1,4 @@
-"""
+﻿"""
 预览渲染模块 — S4 个性化满足
 
 职责：
@@ -7,22 +7,51 @@
 流程：
   nodes → preview_renderer → HTML（可嵌入前端 iframe / 独立页面）
 
+渲染分工（改动后）
+-----------------
+每页保留 `<div class="slide xxx-slide">` 外壳（页码、页型 class），**页内内容由
+gen/svg_renderer.py 渲染的 SVG 承载**。内容该画哪些字段不再由本模块决定 ——
+那是 gen/page_spec.py 的职责；本模块只负责「外壳 class 与整页 CSS」。
+
+幻灯片是给学生看的，讲稿与分段不上屏：page_spec 把它们标成 ROLE_TEACHER，
+由本模块渲染进**幻灯片下方的折叠区** `<details class="script-panel">`（默认收起）。
+这样教师审阅时讲稿仍随手可读，投影出去的页面却不含讲授文本。
+
+这样做的原因：此前预览、PPTX 导出、SVG 三个渲染器各自去 node 里挑字段，
+同一个页面三处内容对不上，局部修改只在预览里可见。字段挑选收敛到 page_spec
+之后，渲染器之间只剩下摆版差异。
+
 兼容规则：
   - 页面类型双字段识别：优先读 type，兜底读 node_type，均缺失时默认 content
-  - 要点字段双向兼容：key_points 优先，core_points / key_difficulties 兜底，
-    最后按正文（content / script / summary）拆分兜底
-  - 分段字段：segments 讲授分段（segment_type / estimated_seconds /
-    difficulty / interaction_hint / knowledge_card），segment_type 未知/缺失时
-    使用兜底标签（未知→"其他"，缺失→"段落"）
-  - script 字段：渲染为独立"讲授文本"标签区块，与正文视觉区分；缺失时不产生空区块
-  - quiz / interactive：专属渲染分支，支持题目对象（question/options/answer/explanation）
-    与纯字符串题目两种形态
+    （实现已移到 page_spec.resolve_kind，这里保留同名方法转发）
+  - 要点字段双向兼容、分段兜底标签、script 缺失不产生空区块等规则
+    同样收敛到 page_spec，见该模块文档
 """
 
 import html
-import re
 from dataclasses import dataclass
 from typing import Any
+
+from .page_spec import (
+    Block,
+    ROLE_TEACHER,
+    block_to_html,
+    build_page_spec,
+    resolve_kind,
+)
+from .polish import polish_nodes
+from .presentation import (
+    DENSITY_PADDING,
+    FALLBACK_DENSITY_PADDING,
+    FALLBACK_FONT_STACK,
+    FALLBACK_PALETTE,
+    FONT_STACKS,
+    PALETTES,
+    presentation_from_nodes,
+    theme_from_palette,
+)
+from .svg_renderer import render_page_spec_to_svg
+from .templates import PPTTheme
 
 
 @dataclass
@@ -31,60 +60,47 @@ class PreviewConfig:
     template_dir: str = ""
 
 
-# 页面类型别名：union 老版 type 模板值（title/content/quiz/summary）与
-# 标准化 node_type 枚举（cover/section/quiz/interactive/divider）的并集。
-# 命中后统一收敛为 5 套布局：cover / section / quiz / summary / content。
-_TYPE_ALIASES = {
-    # 封面
-    "cover": "cover",
-    "title": "cover",
-    # 目录 / 章节
-    "section": "section",
-    "divider": "section",
-    "toc": "section",
-    "chapter": "section",
-    # 问答 / 互动（quiz 与 interactive 分开渲染，布局不同）
-    "quiz": "quiz",
-    "qa": "quiz",
-    "question": "quiz",
-    "interactive": "interactive",
-    "activity": "interactive",
-    # 总结
-    "summary": "summary",
-    "recap": "summary",
-    # 通用
-    "content": "content",
-    "slide": "content",
+#: 页面类型 → slide 外壳的 class（顺序即 HTML 上的 class 顺序，勿改）
+_SLIDE_CLASSES = {
+    "cover": "cover-slide",
+    "section": "section-slide",
+    "quiz": "quiz-slide",
+    "interactive": "quiz-slide interactive-slide",
+    "summary": "summary-slide",
+    "content": "content-slide",
 }
 
-# 讲授分段类型 → 中文语义标签（预览展示用）
-_SEGMENT_TYPE_LABELS = {
-    "opening": "导入",
-    "explanation": "讲解",
-    "example": "示例",
-    "interaction": "互动",
-    "transition": "过渡",
-    "summary": "小结",
-}
 
-# 讲授分段难度 → 可视化图标
-_SEGMENT_DIFF_ICONS = {
-    "easy": "🟢",
-    "medium": "🟡",
-    "hard": "🔴",
-}
+def _script_panel_html(blocks: list[Block]) -> str:
+    """幻灯片下方的讲稿折叠区（教师用）。
 
-# 讲授分段兜底标签：未知类型 / 缺失类型，保证任何分段都有中文语义标签
-_SEG_LABEL_UNKNOWN = "其他"
-_SEG_LABEL_MISSING = "段落"
+    幻灯片是给学生看的，讲稿与分段不上屏；但教师审阅时仍要读得到，所以留在同一份
+    HTML 里、默认折叠。内容仍由 page_spec 的 ROLE_TEACHER 区块经 block_to_html
+    渲染 —— markup 一字未改，只是换了位置。
 
-# 正文兜底时要截取的最大句数
-_MAX_FALLBACK_POINTS = 8
-_MAX_DISPLAY_POINTS = 10
+    没有 teacher 区块时整块不输出：旧节点（无 script 无 segments）不该多出一条
+    空的折叠条，`verify_preview_render.py` 的「不产生空区块」正是断言这一点。
+    """
+    body = "".join(block_to_html(b) for b in blocks if b.role == ROLE_TEACHER)
+    if not body.strip():
+        return ""
+    return f"""
+<details class="script-panel">
+  <summary>🎤 讲授文本与分段（教师用，不投影给学生）</summary>
+  <div class="script-panel-body">{body}</div>
+</details>"""
 
 
 class PreviewRenderer:
-    """结构化节点 → HTML 预览渲染器"""
+    """结构化节点 → HTML 预览渲染器
+
+    每次 render / render_node 都会按该批节点的样式层重算主题，
+    因此「改完样式 → 重新渲染」时 SVG 的配色与整页 CSS 同步变化。
+    """
+
+    def __init__(self) -> None:
+        #: 当前批次的主题；未经过 render 直接调 _render_slide 时用默认调色板兜底
+        self._theme = theme_from_palette(FALLBACK_PALETTE)
 
     def render(self, nodes: list[dict[str, Any]], course_name: str = "课件预览") -> str:
         """生成完整 HTML 预览页面
@@ -96,11 +112,40 @@ class PreviewRenderer:
         Returns:
             HTML 字符串（可直接嵌入 iframe 或保存为 .html）
         """
-        slides_html = self._build_slides(nodes)
-        return self._wrap_html(course_name, slides_html)
+        polished_nodes = polish_nodes(nodes)
+        presentation = self._presentation_from_nodes(polished_nodes)
+        self._theme = self._theme_from_presentation(presentation)
+        slides_html = self._build_slides(polished_nodes)
+        return self._wrap_html(course_name, slides_html, presentation)
+
+    @staticmethod
+    def _presentation_from_nodes(nodes: list[dict[str, Any]]) -> dict[str, str]:
+        """读取前端样式层写入节点 metadata 的全局呈现配置。
+
+        映射表与 PPTX 导出共用 gen/presentation.py，保证两端取值不会漂移。
+        """
+        return presentation_from_nodes(nodes)[0]
+
+    @staticmethod
+    def _theme_from_presentation(presentation: dict[str, str]) -> PPTTheme:
+        """样式层 → SVG 用的主题令牌。
+
+        预览的默认调色板历来是 classic（`_wrap_html` 的 `PALETTES[FALLBACK_PALETTE]`），
+        所以这里直接用 `theme_from_palette` 而不是 `presentation_to_theme` ——
+        后者还会看模板自带的调色板（catalog 主题）。两个函数都在 presentation.py 里，
+        调色板取值仍是同一张表；导出侧在没有 palette 时同样落到 classic，
+        两端从同一套令牌出发。
+        """
+        palette = presentation.get("palette", FALLBACK_PALETTE)
+        font_family = presentation.get("font_family", "system")
+        return theme_from_palette(
+            palette if palette in PALETTES else FALLBACK_PALETTE,
+            font_family if font_family in FONT_STACKS else "system",
+        )
 
     def render_node(self, node: dict[str, Any], index: int = 1) -> str:
         """生成单个节点的预览 HTML"""
+        self._theme = self._theme_from_presentation(self._presentation_from_nodes([node]))
         return self._render_slide(node, index)
 
     # ── 幻灯片构建 ──
@@ -114,327 +159,37 @@ class PreviewRenderer:
         return "\n".join(slides)
 
     def _resolve_type(self, node: dict[str, Any]) -> str:
-        """双字段识别页面类型：type 优先，node_type 兜底，缺省 content。
+        """双字段识别页面类型（实现见 page_spec.resolve_kind）。
 
         兼容 Pydantic 枚举（NodeType.SECTION）与纯字符串两种形态。
         """
-        raw = node.get("type")
-        if raw is None or str(raw).strip() == "":
-            raw = node.get("node_type")
-        if raw is None or str(raw).strip() == "":
-            return "content"
-        if hasattr(raw, "value"):  # Pydantic 枚举
-            raw = raw.value
-        key = str(raw).strip().lower()
-        return _TYPE_ALIASES.get(key, "content")
+        return resolve_kind(node)
 
     def _render_slide(self, node: dict[str, Any], index: int) -> str:
         node_type = self._resolve_type(node)
-        title = html.escape(str(node.get("title") or f"第{index}页"))
-        renderers = {
-            "cover": self._slide_cover,
-            "section": self._slide_section,
-            "quiz": self._slide_quiz,
-            "interactive": self._slide_interactive,
-            "summary": self._slide_summary,
-            "content": self._slide_content,
-        }
-        renderer = renderers.get(node_type, self._slide_content)
-        return renderer(node, index, title)
-
-    # ── 封面 ──
-
-    def _slide_cover(self, node: dict, index: int, title: str) -> str:
-        subtitle = html.escape(str(node.get("subtitle") or node.get("content") or node.get("summary") or "").strip())
-        points = self._extract_key_points(node)
-        points_html = self._render_key_points(points, cls="cover-points") if points else ""
-        return f"""<div class="slide cover-slide">
+        slide_class = _SLIDE_CLASSES.get(node_type, _SLIDE_CLASSES["content"])
+        # 页型同步传给 build_page_spec，避免在这里与 _resolve_type 各判一次
+        spec = build_page_spec(node, index, node_type)
+        svg = render_page_spec_to_svg(spec, self._theme)
+        slide = f"""<div class="slide {slide_class}">
   <div class="slide-num">{index}</div>
-  <div class="cover-inner">
-    <h1>{title}</h1>
-    {f'<p class="subtitle">{subtitle}</p>' if subtitle else ''}
-    {points_html}
-  </div>
+  {svg}
 </div>"""
-
-    # ── 目录 / 章节 ──
-
-    def _slide_section(self, node: dict, index: int, title: str) -> str:
-        subtitle = html.escape(str(node.get("content") or node.get("summary") or "").strip())
-        # 目录项优先取 children（子节点标题），其次取要点
-        children = self._as_list(node.get("children"))
-        items = children or self._extract_key_points(node)
-        list_html = self._render_key_points(items, cls="section-list", with_index=True) if items else ""
-        return f"""<div class="slide section-slide">
-  <div class="slide-num">{index}</div>
-  <div class="section-inner">
-    <h2>{title}</h2>
-    <div class="divider"></div>
-    {f'<p class="section-sub">{subtitle}</p>' if subtitle else ''}
-    {list_html}
-  </div>
-</div>"""
-
-    # ── 问答 / 互动 ──
-
-    def _slide_quiz(self, node: dict, index: int, title: str) -> str:
-        questions = self._as_raw_list(node.get("questions") or node.get("interactive_questions"))
-        if not questions:
-            questions = self._extract_key_points(node) or self._split_content_into_points(
-                str(node.get("content") or "").strip()
-            )
-        items = "".join(self._render_question(q) for q in questions)
-        script_html = self._render_script_block(node)
-        segments_html = self._render_segments(node)
-        return f"""<div class="slide quiz-slide">
-  <div class="slide-num">{index}</div>
-  <h2>💡 {title}</h2>
-  <ol class="questions">{items}</ol>
-  {script_html}
-  {segments_html}
-</div>"""
-
-    def _slide_interactive(self, node: dict, index: int, title: str) -> str:
-        """interactive 类型专属布局：与 quiz 同源但视觉区分（绿色系、互动感）。"""
-        questions = self._interactive_questions(node)
-        if not questions:
-            questions = self._extract_key_points(node) or self._split_content_into_points(
-                str(node.get("content") or "").strip()
-            )
-        items = "".join(self._render_question(q) for q in questions)
-        script_html = self._render_script_block(node)
-        segments_html = self._render_segments(node)
-        return f"""<div class="slide quiz-slide interactive-slide">
-  <div class="slide-num">{index}</div>
-  <h2>🎯 {title}</h2>
-  <ol class="questions">{items}</ol>
-  {script_html}
-  {segments_html}
-</div>"""
-
-    def _interactive_questions(self, node: dict[str, Any]) -> list[Any]:
-        """从结构化互动素材中提取题目，供预览与导出共用节点数据。"""
-        questions = self._as_raw_list(node.get("questions") or node.get("interactive_questions"))
-        if questions:
-            return questions
-        flattened: list[Any] = []
-        for item in node.get("interactive_items") or []:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("type") or "").lower() == "quiz":
-                flattened.extend(self._as_raw_list(item.get("questions")))
-        return flattened
-
-    @staticmethod
-    def _as_raw_list(value: Any) -> list[Any]:
-        """取原始列表（保留 dict 元素，供题目对象渲染）；字符串退化为单元素列表。"""
-        if isinstance(value, list):
-            return [v for v in value if v]
-        if isinstance(value, str) and value.strip():
-            return [line.strip() for line in value.split("\n") if line.strip()]
-        return []
-
-    def _render_question(self, q: Any) -> str:
-        """单题渲染：字符串题直接输出；dict 题展示题干 + 选项 + 答案 + 解析。"""
-        if isinstance(q, dict):
-            text = html.escape(str(q.get("question") or q.get("title") or "").strip())
-            options = q.get("options")
-            answer = str(q.get("answer") or "").strip()
-            explanation = str(q.get("explanation") or "").strip()
-
-            opt_html = ""
-            if isinstance(options, list) and options:
-                letters = "ABCDEFGH"
-                opt_items = []
-                for i, opt in enumerate(options[: len(letters)]):
-                    letter = letters[i]
-                    is_answer = bool(answer) and letter == answer.strip().upper()
-                    ans_cls = " q-option-answer" if is_answer else ""
-                    opt_items.append(
-                        f'<li class="q-option{ans_cls}">'
-                        f'<span class="q-opt-letter">{letter}</span>{html.escape(str(opt))}</li>'
-                    )
-                opt_html = f'<ul class="q-options">{"".join(opt_items)}</ul>'
-
-            exp_html = f'<p class="q-explanation">解析：{html.escape(explanation)}</p>' if explanation else ""
-            return f'<li class="q-item"><p class="q-text">{text}</p>{opt_html}{exp_html}</li>'
-        return f'<li class="q-item"><p class="q-text">{html.escape(str(q))}</p></li>'
-
-    # ── 总结 ──
-
-    def _slide_summary(self, node: dict, index: int, title: str) -> str:
-        points = self._extract_key_points(node)
-        points_html = self._render_key_points(points) if points else ""
-        script_html = self._render_script_block(node)
-        segments_html = self._render_segments(node)
-        return f"""<div class="slide summary-slide">
-  <div class="slide-num">{index}</div>
-  <h2>📌 {title}</h2>
-  {points_html}
-  {script_html}
-  {segments_html}
-</div>"""
-
-    # ── 通用 ──
-
-    def _slide_content(self, node: dict, index: int, title: str) -> str:
-        points = self._extract_key_points(node)
-        points_html = self._render_key_points(points) if points else ""
-
-        body_parts = []
-        for key in ("content", "summary"):
-            val = node.get(key)
-            if isinstance(val, str) and val.strip():
-                body_parts.append(f"<p>{html.escape(val)}</p>")
-            elif isinstance(val, list) and val:
-                body_parts.append("<ul>")
-                for item in val:
-                    body_parts.append(f"<li>{html.escape(str(item))}</li>")
-                body_parts.append("</ul>")
-        body_html = f'<div class="body">{"".join(body_parts)}</div>' if body_parts else ""
-
-        script_html = self._render_script_block(node)
-        segments_html = self._render_segments(node)
-        return f"""<div class="slide content-slide">
-  <div class="slide-num">{index}</div>
-  <h2>{title}</h2>
-  {points_html}
-  {body_html}
-  {script_html}
-  {segments_html}
-</div>"""
-
-    # ── 要点提取 ──
-
-    def _extract_key_points(self, node: dict[str, Any]) -> list[str]:
-        """要点字段双向兼容读取。
-
-        优先级：key_points → core_points → key_difficulties → expected_outcomes
-        → 正文（content / script / summary）拆分兜底。
-        """
-        for key in ("key_points", "core_points", "key_difficulties", "expected_outcomes"):
-            points = self._as_list(node.get(key))
-            if points:
-                return points
-        content = str(node.get("content") or node.get("script") or node.get("summary") or "").strip()
-        return self._split_content_into_points(content)
-
-    @staticmethod
-    def _as_list(value: Any) -> list[str]:
-        """把 list / 换行字符串统一转成干净的字符串列表。"""
-        if isinstance(value, list):
-            return [str(v).strip() for v in value if str(v).strip()]
-        if isinstance(value, str) and value.strip():
-            return [line.strip() for line in value.split("\n") if line.strip()]
-        return []
-
-    @staticmethod
-    def _split_content_into_points(content: str, limit: int = _MAX_FALLBACK_POINTS) -> list[str]:
-        """正文兜底：先按行拆，再按句拆，保证得到尽量短小的要点。"""
-        if not content:
-            return []
-        lines = [ln.strip().lstrip("•-*#· ").strip() for ln in content.split("\n") if ln.strip()]
-        if len(lines) >= 2:
-            return [ln for ln in lines if ln][:limit]
-        sentences = [s.strip() for s in re.split(r"[。；;！？!?]\s*", content) if s.strip()]
-        return sentences[:limit]
-
-    # ── 要点渲染 ──
-
-    @staticmethod
-    def _render_key_points(points: list[str], cls: str = "key-points", with_index: bool = False) -> str:
-        items = []
-        for i, p in enumerate(points[:_MAX_DISPLAY_POINTS], start=1):
-            idx = f'<span class="kp-idx">{i}</span>' if with_index else ""
-            # 要点视觉高亮：kp-item 列表项 + kp-highlight 文本（纯 CSS，不依赖外部资源）
-            items.append(
-                f'<li class="kp-item">{idx}<span class="kp-highlight">{html.escape(str(p))}</span></li>'
-            )
-        return f'<ul class="{cls}">{"".join(items)}</ul>'
-
-    # ── 讲授文本区块 ──
-
-    @staticmethod
-    def _render_script_block(node: dict[str, Any]) -> str:
-        """script 字段 → "讲授文本" 标签区块，与正文视觉区分。
-
-        向后兼容：script 缺失或为空白时返回空串，不产生空区块。
-        """
-        script = node.get("script")
-        if not isinstance(script, str) or not script.strip():
-            return ""
-        return (
-            '<section class="script-block"><h4>讲授文本</h4>'
-            f'<div class="script-body">{html.escape(script.strip())}</div></section>'
-        )
-
-    # ── 分段渲染 ──
-
-    def _render_segments(self, node: dict[str, Any]) -> str:
-        segments = node.get("segments") or []
-        if not segments:
-            return ""
-        items = []
-        for s in segments:
-            if not isinstance(s, dict):
-                s = {"text": s}
-            text = str(s.get("text") or "").strip()
-            if not text:
-                continue
-            seg_type = str(s.get("segment_type") or "").strip().lower()
-            # 兜底标签：已知类型用映射，未知类型用"其他"，缺失类型用"段落"
-            seg_label = _SEGMENT_TYPE_LABELS.get(
-                seg_type, _SEG_LABEL_UNKNOWN if seg_type else _SEG_LABEL_MISSING
-            )
-            badge_cls = seg_type if seg_type else "default"
-            badge = f'<span class="seg-badge seg-badge-{html.escape(badge_cls)}">{html.escape(seg_label)}</span>'
-
-            dur = int(s.get("estimated_seconds") or 0)
-            dur_html = f'<span class="seg-dur">⏱ {dur}秒</span>' if dur else ""
-
-            diff = str(s.get("difficulty") or "").strip().lower()
-            diff_icon = _SEGMENT_DIFF_ICONS.get(diff, "")
-            diff_html = f'<span class="seg-diff diff-{html.escape(diff)}">{diff_icon}</span>' if diff_icon else ""
-
-            hint = str(s.get("interaction_hint") or "").strip()
-            hint_html = f'<p class="seg-hint">💬 {html.escape(hint)}</p>' if hint else ""
-
-            kc_html = self._render_knowledge_card(s.get("knowledge_card"))
-
-            items.append(
-                f'<li class="seg-item">{badge}{dur_html}{diff_html}'
-                f'<p class="seg-text">{html.escape(text)}</p>{hint_html}{kc_html}</li>'
-            )
-        if not items:
-            return ""
-        return (
-            '<section class="segments-block"><h4>讲授分段</h4>'
-            f'<ol class="segments">{"".join(items)}</ol></section>'
-        )
-
-    @staticmethod
-    def _render_knowledge_card(kc: Any) -> str:
-        """知识卡片渲染：term / definition / formula / tags。"""
-        if not isinstance(kc, dict):
-            return ""
-        term = str(kc.get("term") or "").strip()
-        definition = str(kc.get("definition") or "").strip()
-        formula = str(kc.get("formula") or "").strip()
-        tags = [html.escape(str(t).strip()) for t in (kc.get("tags") or []) if str(t).strip()]
-        if not any([term, definition, formula, tags]):
-            return ""
-        parts = []
-        if definition:
-            parts.append(f'<p class="kc-def">{html.escape(definition)}</p>')
-        if formula:
-            parts.append(f'<pre class="kc-formula">{html.escape(formula)}</pre>')
-        if tags:
-            parts.append(f'<div class="kc-tags">{"".join(f"<span>{t}</span>" for t in tags)}</div>')
-        return f'<div class="knowledge-card"><strong class="kc-term">📘 {html.escape(term or "知识卡片")}</strong>{"".join(parts)}</div>'
+        return slide + _script_panel_html(spec.blocks)
 
     # ── HTML 包装 ──
 
-    def _wrap_html(self, title: str, slides_html: str) -> str:
+    def _wrap_html(self, title: str, slides_html: str, presentation: dict[str, str] | None = None) -> str:
+        presentation = presentation or self._presentation_from_nodes([])
+        palette = presentation.get("palette", "classic")
+        layout = presentation.get("layout", "balanced")
+        font_family = presentation.get("font_family", "system")
+        density = presentation.get("density", "comfortable")
+        # 取值来自 gen/presentation.py，与 PPTX 导出共用同一张表
+        palette_css = PALETTES.get(palette, PALETTES[FALLBACK_PALETTE])
+        font_css = FONT_STACKS.get(font_family, FALLBACK_FONT_STACK)
+        padding_css = DENSITY_PADDING.get(density, FALLBACK_DENSITY_PADDING)
+        body_padding = "28px" if layout == "visual" else ("16px" if layout == "text" else "20px")
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -572,12 +327,73 @@ class PreviewRenderer:
   .kc-tags span {{ font-size: 11px; background: #eef3fa; color: #445; padding: 1px 8px;
                    border-radius: 999px; }}
 
+  /* ── 讲稿折叠区：幻灯片给学生看，讲稿与分段只给教师看，默认收起 ── */
+  .script-panel {{ margin: 10px 0 26px; border: 1px dashed #cbd5e4; border-radius: 14px;
+                   background: #fbfcfe; }}
+  .script-panel > summary {{ cursor: pointer; padding: 12px 18px; font-size: 13px; font-weight: 600;
+                            color: #5f6c84; list-style: none; }}
+  .script-panel > summary::-webkit-details-marker {{ display: none; }}
+  .script-panel > summary::before {{ content: "▸"; display: inline-block; margin-right: 8px;
+                                     transition: transform .15s; }}
+  .script-panel[open] > summary::before {{ transform: rotate(90deg); }}
+  .script-panel-body {{ padding: 2px 18px 18px; }}
+  .script-panel-body > .script-block:first-child {{ margin-top: 0; }}
+
+  /* ── 要点展开：要点原文一行，下面是延伸出来的说明 ── */
+  .point-details {{ list-style: none; display: grid; gap: 8px; }}
+  .point-details .kp-item {{ padding: 7px 12px; border-left: 3px solid #4361ee;
+                             background: rgba(67,97,238,.05); border-radius: 0 8px 8px 0; }}
+  .point-details .kp-highlight {{ display: block; font-size: 14px; }}
+  .kp-detail {{ margin-top: 3px; font-size: 12.5px; line-height: 1.65; color: #4a5468; }}
+
+  /* ── 大字结论：规划器给的 key_conclusion，学生离开这一页时该记住的那句话 ── */
+  .conclusion-block {{ margin: 0; padding: 8px 0 8px 16px;
+                       border-left: 6px solid var(--preview-accent); }}
+  .conclusion-text {{ margin: 0; font-size: 21px; font-weight: 700; line-height: 1.45;
+                      color: var(--preview-ink); letter-spacing: .2px; }}
+
   /* ── 空态 ── */
   .empty-state {{ text-align: center; padding: 60px 20px; color: #94a3b8; font-size: 15px; }}
+
+  /* ── 页内 SVG：内容由 svg_renderer 摆版，随 slide 宽度等比缩放 ── */
+  .slide > svg {{ display: block; width: 100%; height: auto; }}
+  .svg-block {{ overflow: hidden; }}
+  /* 次要区块（要点 / 讲稿原文）降一档字重与饱和度，让分段占据视觉主位 */
+  .svg-block-secondary {{ font-size: 93%; opacity: .92; }}
+  .svg-block-secondary .key-points li {{ padding: 7px 12px 7px 34px; background: rgba(0,0,0,.02);
+                                         border: 1px dashed rgba(0,0,0,.09); }}
+  .svg-block-secondary .key-points li::before {{ content: "·"; top: 6px; }}
+  .svg-block-secondary .script-block {{ border-left-width: 3px; background: rgba(0,0,0,.015); }}
+
+  /* ── S3 样式层：由节点 metadata.presentation 驱动，保证修改后预览实时可见 ── */
+  :root {{ --preview-accent: {palette_css[0]}; --preview-page-bg: {palette_css[1]};
+           --preview-ink: {palette_css[2]}; --preview-accent-soft: {palette_css[3]};
+           --preview-deep: {palette_css[4]}; --preview-slide-padding: {padding_css}; }}
+  body {{ font-family: {font_css}; background: radial-gradient(circle at 8% 0%, #ffffff 0, var(--preview-page-bg) 42%, #e6ecea 100%); padding: {body_padding}; color: var(--preview-ink); }}
+  .presentation {{ max-width: 1180px; }}
+  .slide {{ padding: var(--preview-slide-padding); border: 1px solid rgba(24,50,47,.10); border-radius: 22px;
+            box-shadow: 0 18px 42px rgba(24,50,47,.09); min-height: 380px; }}
+  .slide h2 {{ color: var(--preview-ink); font-weight: 760; letter-spacing: -.025em; }}
+  .slide-num {{ color: var(--preview-accent); background: var(--preview-accent-soft); font-weight: 700; }}
+  .content-slide {{ border-top: 5px solid var(--preview-accent); background: rgba(255,255,255,.94); }}
+  .content-slide .key-points li, .content-slide .body {{ color: var(--preview-ink); }}
+  .content-slide .key-points li {{ background: linear-gradient(105deg, #fff, var(--preview-accent-soft)); border: 1px solid rgba(24,50,47,.07); }}
+  .cover-slide, .title-slide {{ background: linear-gradient(135deg, var(--preview-deep) 0%, var(--preview-accent) 100%); min-height: 460px; }}
+  .section-slide {{ background: linear-gradient(135deg, var(--preview-deep) 0%, var(--preview-accent) 100%); }}
+  .quiz-slide {{ border-left: 5px solid var(--preview-accent); border-top: 0; background: linear-gradient(145deg, #fff, var(--preview-accent-soft)); }}
+  .quiz-slide .questions .q-item {{ border-color: rgba(24,50,47,.10); box-shadow: 0 6px 16px rgba(24,50,47,.06); }}
+  .quiz-slide .questions .q-item::before {{ background: var(--preview-accent); }}
+  .script-block {{ border-left-color: var(--preview-accent); background: rgba(255,255,255,.72); }}
+  .script-block h4 {{ color: var(--preview-accent); }}
+  .presentation[data-layout="visual"] .slide {{ min-height: 430px; }}
+  .presentation[data-layout="visual"] .content-slide .key-points {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
+  .presentation[data-layout="text"] .slide {{ max-width: 920px; margin-left: auto; margin-right: auto; }}
+  .presentation[data-density="minimal"] .slide h2 {{ font-size: 28px; }}
+  .presentation[data-density="compact"] .slide {{ border-radius: 16px; }}
 </style>
 </head>
 <body>
-<div class="presentation">
+<div class="presentation" data-palette="{html.escape(palette)}" data-layout="{html.escape(layout)}" data-density="{html.escape(density)}">
 {slides_html}
 </div>
 </body>

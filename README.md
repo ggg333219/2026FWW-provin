@@ -12,6 +12,47 @@
 
 > 本仓库为教学/演示用途，目录与运行方式可根据部署环境调整。
 
+## 开箱即用（队友必读）
+
+> **不需要在本机安装 PostgreSQL / Redis / MinIO**，全部由 Docker 提供，端口已避让 WSL 默认端口，不会与你的 WSL 环境冲突。
+
+### 端口约定（重要）
+
+本项目所有基础设施端口都使用 **1xxxx 段**，以避让你 WSL 里默认占用的 5432 / 6379 / 9000：
+
+| 服务 | 项目端口 | 容器内端口 | 说明 |
+|---|---|---|---|
+| PostgreSQL | **15432** | 5432 | 避让 WSL 默认 5432 |
+| Redis | **16379** | 6379 | 避让 WSL 默认 6379 |
+| MinIO API | **19000** | 9000 | 避让 WSL 默认 9000 |
+| MinIO 控制台 | **19001** | 9001 | — |
+| Go 后端 | **18080** | — | 宿主机运行 |
+| AI 引擎 | **8000** | — | 宿主机运行 |
+
+### 三步启动
+
+```bash
+# 1) 准备环境变量并拉起基础设施（Postgres / Redis / MinIO）
+cp .env.example .env
+docker compose --env-file .env -f backend/docker-compose.yml up -d
+
+# 2) 准备后端配置（宿主机运行 Go 时用 127.0.0.1 + 上方端口）
+cp backend/config/config.local.yaml.example backend/config/config.local.yaml
+cd backend && go run ./cmd/teacher/main.go     # 教师端后端，默认 :8082
+
+# 3) 启动前端教师端
+cd frontend/teacher && npm install && npm run dev   # :5173
+```
+
+### 常见问题
+
+- **后端日志出现「S1 轻量服务运行中」**：说明 Postgres 或 MinIO 没连上，会自动降级为内存模式。先确认 `docker ps` 里 `teaching-postgres` / `teaching-minio` 是 healthy。
+- **端口被占用 / 容器名冲突**：若本机存在同名残留容器，先 `docker compose -f backend/docker-compose.yml down` 清理，再重新 `up -d`。
+- **AI 调用报 `api.example.com` 解析失败**：`config.yaml.example` 里的 `ai.base_url` 是占位符，需填入真实 LLM 地址（或改用 AI 引擎本地模式：把 `ai.base_url` 指向 `http://127.0.0.1:8000`）。
+- **想改端口**：只需修改根目录 `.env`（`POSTGRES_PORT` / `REDIS_PORT` / `MINIO_API_PORT`），并同步 `backend/config/config.local.yaml`。
+
+---
+
 ## 快速开始（本地开发）
 
 先决条件：已安装 Docker、Go、Node.js、npm/yarn、以及 Python（推荐通过 conda 管理虚拟环境）。

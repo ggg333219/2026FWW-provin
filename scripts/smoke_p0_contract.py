@@ -116,6 +116,10 @@ def main():
     nodes = status.get("nodes") or []
     _ensure(isinstance(nodes, list) and len(nodes) >= 2, "生成节点数 ≥2", f"n={len(nodes)}")
 
+    if str(status.get("status", "")).lower() != "done" or not nodes:
+        print("\n❌ 生成未完成，停止后续预览/版本/导出断言，原始错误已在上方输出。")
+        sys.exit(1)
+
     # ---------------------------------------------------------- 2. 节点 schema
     required = ["node_id", "title", "node_type", "content", "summary", "script",
                 "core_points", "key_points", "questions", "interactive_questions",

@@ -15,7 +15,7 @@ from io import BytesIO
 
 from pptx import Presentation
 
-from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
+from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig, resolve_node_type
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
 
 # =============================================================================
@@ -133,18 +133,20 @@ class TestPPTExporter(unittest.TestCase):
         self.assertIn("讲解", text)
         self.assertIn("这是主要内容", text)
 
-    def test_node_type_precedes_legacy_type(self):
-        """标准 node_type 优先于冲突的旧 type 字段。"""
+    def test_type_precedes_node_type_like_preview(self):
+        """与预览侧保持一致：冲突时 type 优先于 node_type。"""
         nodes = [{
-            "node_id": "n1", "title": "标准封面", "node_type": "cover",
-            "type": "quiz", "content": "标准字段优先",
+            "node_id": "n1", "title": "课堂互动", "node_type": "cover",
+            "type": "quiz", "questions": ["哪个字段优先？"],
         }]
         buf = self.ppt.export_to_bytes(nodes, "双字段")
         prs = Presentation(buf)
         self.assertEqual(len(prs.slides), 1)
         slide_text = "\n".join(shape.text for shape in prs.slides[0].shapes if hasattr(shape, "text"))
-        self.assertIn("标准封面", slide_text)
-        self.assertNotIn("INTERACTION", slide_text)
+        # 标题条只剩标题与页码：kicker（"INTERACTION"）与标题下的强调色带是导出侧
+        # 独有、预览任何版式里都没有的装饰，已去掉。这里改用页面标题断言页型判定。
+        self.assertIn("课堂互动", slide_text)
+        self.assertIn("哪个字段优先？", slide_text)
 
     def test_key_points_and_core_points_are_both_exported(self):
         """新旧要点字段同时存在时合并导出，不再产生空白要点页。"""
@@ -198,7 +200,67 @@ class TestPPTExporter(unittest.TestCase):
         text = "\n".join(shape.text for slide in prs.slides for shape in slide.shapes if hasattr(shape, "text"))
         self.assertIn("起始标记", text)
         self.assertIn("结束标记", text)
-        self.assertIn("正文（续）", text)
+        # 续页标题沿用本页标题 +「（续 N）」（export_ppt._add_content_slide）。改动前
+        # 分页走的是通用兜底文案「正文（续）」，与页面标题脱节；现在内容页自己分页，
+        # 续页仍属于同一页内容，标题就该还是原标题。
+        self.assertIn("长内容（续 2）", text)
+
+    def test_body_panel_pagination_matches_what_it_renders(self):
+        """右下正文框：分页算的高度必须就是渲染要画的高度。
+
+        改动前这里是两套算法 —— 分页按「字符数 ÷ 每行字数 + 1」估权重（给每个条目
+        多算整整一行当段距，实际只有 0.1in），渲染按「行数 × 行高 + 段距」排，于是
+        这块 2.76in 的面板只认 3 条要点，第 4 条被推到下一页，而面板里还剩一半高度。
+        这正是「右下角的框总有一行到下一页去」的成因。
+        """
+        node = {
+            "node_id": "n-fit", "node_type": "content", "title": "分页容量",
+            "point_details": [
+                {"point": f"要点{i}", "detail": f"展开{i}"} for i in range(1, 6)
+            ],
+            "figure": {"kind": "flow", "items": ["甲", "乙", "丙"]},
+        }
+        prs = Presentation(self.ppt.export_to_bytes([node], "分页容量"))
+        text = "\n".join(
+            shape.text for slide in prs.slides for shape in slide.shapes
+            if hasattr(shape, "text")
+        )
+
+        # 五条一行要点（每条约 0.36in）放得进这块面板，就该在同一页 ——
+        # 更不能出现"分页塞进来了、渲染的 cursor >= limit 又把它丢掉"。
+        self.assertEqual(len(prs.slides), 1)
+        for i in range(1, 6):
+            self.assertIn(f"要点{i}：展开{i}", text)
+
+    def test_two_column_uses_independent_left_and_right_panels(self):
+        """two_column 不再收敛为普通内容页，左右栏保持固定位置。"""
+        node = {
+            "node_id": "n-two", "node_type": "two_column", "title": "双栏教学",
+            "key_points": ["左栏要点A", "左栏要点B"],
+            "content": "右栏正文回退",
+            "segments": [{
+                "segment_type": "explanation", "text": "右栏讲授内容", "estimated_seconds": 60,
+            }],
+        }
+        self.assertEqual(resolve_node_type(node), "two_column")
+        prs = Presentation(self.ppt.export_to_bytes([node], "双栏验证"))
+        self.assertEqual(len(prs.slides), 1)
+
+        left_shapes = [
+            shape for shape in prs.slides[0].shapes
+            if hasattr(shape, "text") and "左栏要点A" in shape.text
+        ]
+        right_shapes = [
+            shape for shape in prs.slides[0].shapes
+            if hasattr(shape, "text") and "右栏讲授内容" in shape.text
+        ]
+        self.assertEqual(len(left_shapes), 1)
+        self.assertEqual(len(right_shapes), 1)
+        self.assertLess(left_shapes[0].left.inches, 6.0)
+        self.assertGreater(right_shapes[0].left.inches, 6.0)
+        all_text = "\n".join(shape.text for shape in prs.slides[0].shapes if hasattr(shape, "text"))
+        self.assertIn("双栏教学", all_text)
+        self.assertIn("讲解 · 1分钟", all_text)
 
     # ── 模板 ──
 

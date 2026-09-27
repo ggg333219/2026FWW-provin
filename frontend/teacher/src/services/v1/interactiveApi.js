@@ -10,19 +10,23 @@ import { requestJson } from './request'
 /** 互动规划数据结构（InteractivePlan） */
 export const InteractiveKinds = ['quiz', 'flashcard', 'poll', 'game']
 export const InteractiveDeliveries = ['html5_link', 'ppt_native', 'standalone_html']
+const INTERACTIVE_GENERATE_TIMEOUT_MS = 60000
 
 export const teacherInteractiveApi = {
   /**
    * POST /api/v1/generations/{generation_id}/nodes/{node_id}/interactive
    * 生成 HTML5 互动资源（规范 3.11）
    */
-  generate: ({ generation_id, node_id, interactive_plan } = {}) =>
+  generate: ({ generation_id, node_id, node, interactive_plan } = {}) =>
     requestJson(
       `/api/v1/generations/${encodeURIComponent(generation_id)}/nodes/${encodeURIComponent(node_id)}/interactive`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // 互动内容生成可能包含 AI Engine 冷启动或模型调用，不能沿用通用 10 秒上限。
+        timeoutMs: INTERACTIVE_GENERATE_TIMEOUT_MS,
         body: JSON.stringify({
+          node: node || {},
           interactive_plan: interactive_plan || {
             enabled: true,
             kind: 'quiz',

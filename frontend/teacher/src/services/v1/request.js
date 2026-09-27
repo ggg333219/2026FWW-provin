@@ -10,6 +10,7 @@ const REQUEST_TIMEOUT_MS = 10000
 
 // Mock 模式下探测后端健康检查的节流窗口：探测失败后 8s 内不再重复探测。
 const PROBE_TTL_MS = 8000
+const AUTH_TOKEN_KEY = 'fuww_teacher_auth_token'
 
 let lastProbeFailedAt = 0
 
@@ -94,15 +95,24 @@ export async function requestJson(path, options = {}) {
     }
   }
 
+  let requestTimer = 0
   try {
     const { timeoutMs = REQUEST_TIMEOUT_MS, ...fetchOptions } = options
+    const authToken = typeof window !== 'undefined'
+      ? window.localStorage.getItem(AUTH_TOKEN_KEY)
+      : null
+    const headers = new Headers(fetchOptions.headers || {})
+    if (authToken && !authToken.startsWith('local_') && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${authToken}`)
+    }
+    fetchOptions.headers = headers
     const isMultipart = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData
     const controller = new AbortController()
-    const timer = isMultipart
+    requestTimer = isMultipart
       ? 0
       : setTimeout(() => controller.abort(), timeoutMs)
     const response = await fetch(`${API_BASE}${path}`, { ...fetchOptions, signal: controller.signal })
-    if (timer) clearTimeout(timer)
+    if (requestTimer) { clearTimeout(requestTimer); requestTimer = 0 }
     const payload = await response.json().catch(() => ({}))
     if (!response.ok || (typeof payload.code !== 'undefined' && payload.code !== 200)) {
       // 标记 HTTP 级错误（后端可达但路由缺失/业务错误），区别于网络不可达
@@ -112,23 +122,31 @@ export async function requestJson(path, options = {}) {
     }
     return payload
   } catch (error) {
+    if (requestTimer) { clearTimeout(requestTimer); requestTimer = 0 }
     // 超时（AbortError）：后端可能仍在慢速处理（如 RAG 嵌入/生成）。
     // 不切换全局 mock、也不回退 Mock，避免“真实数据 → 假数据”跳变；
     // 交由调用方优雅降级（空态提示 / 轮询重试）。
     if (error && error.name === 'AbortError') {
-      throw error
+      // 超时中止：AbortError 自带的 message 不含可读信息（浏览器只给
+      // "The operation was aborted"），调用方兜底成「没反应」。这里补上
+      // 耗时与路径，让错误提示能明确区分「超时」和「网络不可达」。
+      const effectiveTimeoutMs = options?.timeoutMs || REQUEST_TIMEOUT_MS
+      const timeoutError = new Error(
+        `请求超时（${Math.round(effectiveTimeoutMs / 1000)} 秒未响应）: ${path}`
+      )
+      timeoutError.name = 'TimeoutError'
+      timeoutError.isTimeout = true
+      timeoutError.originalError = error
+      throw timeoutError
     }
-    if (isStrictS3Path(path)) {
-      throw error
-    }
-    // 尝试 Mock 回退
+    // 后端已返回 HTTP 错误时，必须把真实错误交给调用方。
+    // 尤其是 PPT/DOCX 导出：版本不存在或导出失败不能被伪装成 Mock 文件。
+    if (error?.httpStatus) throw error
+
+    // 仅网络层不可达时允许 Mock 回退
     const mockPayload = handleMockRequest(path, options, error)
     if (mockPayload) {
-      // 仅网络层不可达（连接拒绝/断开，无 httpStatus 的 TypeError）才全局切换 Mock；
-      // HTTP 级错误（路由缺失）仅对当前请求回退 Mock，其余请求继续走真实后端。
-      if (!error.httpStatus) {
-        setMockMode()
-      }
+      setMockMode()
       if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
         window.dispatchEvent(new CustomEvent('fuww:mock-fallback', {
           detail: { path, reason: error?.message || '网络不可达' }

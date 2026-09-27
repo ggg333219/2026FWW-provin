@@ -88,24 +88,25 @@ class PGVectorStore(VectorStore):
 
     # ---- 连接管理 ----
 
+    def _open_connection(self) -> None:
+        """建立连接但不触发表结构初始化，供显式迁移调用复用。"""
+        import psycopg2
+        self._conn = psycopg2.connect(self.conn_string, connect_timeout=10)
+        self._conn.autocommit = False
+
     @property
     def conn(self):
         """懒连接 PostgreSQL。"""
         if self._conn is None or self._conn.closed:
             try:
-                import psycopg2
-                self._conn = psycopg2.connect(
-                    self.conn_string,
-                    connect_timeout=10,
-                )
-                self._conn.autocommit = False
-                # 自动注册 pgvector Python 包的类型适配器
+                self._open_connection()
+                self._ensure_tables()
+                # 扩展必须先存在，之后再注册 halfvec/vector 类型。
                 try:
                     from pgvector.psycopg2 import register_vector
                     register_vector(self._conn)
                 except ImportError:
-                    pass  # pgvector 包未安装，使用字符串解析回退
-                self._ensure_tables()
+                    pass  # 未安装适配器时仍可使用字符串向量格式
             except ImportError:
                 raise RuntimeError(
                     "PGVectorStore 需要 psycopg2-binary。"
@@ -120,6 +121,13 @@ class PGVectorStore(VectorStore):
 
     def _ensure_tables(self) -> None:
         """自动创建表和索引（幂等）。"""
+        if self._conn is None or self._conn.closed:
+            try:
+                self._open_connection()
+            except ImportError:
+                raise RuntimeError(
+                    "PGVectorStore 需要 psycopg2-binary。请执行: pip install psycopg2-binary pgvector"
+                )
         cur = self._conn.cursor()
         try:
             # pgvector 扩展
@@ -174,6 +182,11 @@ class PGVectorStore(VectorStore):
             """)
 
             self._conn.commit()
+            try:
+                from pgvector.psycopg2 import register_vector
+                register_vector(self._conn)
+            except ImportError:
+                pass
         except Exception:
             self._conn.rollback()
             raise
@@ -381,6 +394,22 @@ class PGVectorStore(VectorStore):
                 )
                 for r in cur.fetchall()
             ]
+        finally:
+            cur.close()
+
+    def list_chunk_ids(self, doc_id: str) -> list[str]:
+        """按 doc_id 列出该文档下的所有 chunk_id。
+
+        对不存在的 doc_id 返回空列表（SELECT 无行 → []）。
+        用于 BM25 重建等需要枚举分块的场景。
+        """
+        cur = self.conn.cursor()
+        try:
+            cur.execute(
+                f"SELECT chunk_id FROM {self._t('rag_chunks')} WHERE doc_id = %s",
+                (doc_id,),
+            )
+            return [r[0] for r in cur.fetchall()]
         finally:
             cur.close()
 

@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -228,6 +229,8 @@ class VersionManager:
         summary: str = "",
         parent_version: Optional[int] = None,
         metadata: Optional[dict] = None,
+        page_bindings: Optional[list[dict[str, Any]]] = None,
+        presentation: Optional[dict[str, Any]] = None,
     ) -> GenerationVersion:
         """
         保存当前节点树为新版本快照。
@@ -247,6 +250,8 @@ class VersionManager:
                 generation_id=generation_id,
                 version_number=next_no,
                 nodes_snapshot=nodes,
+                page_bindings=page_bindings or [],
+                presentation=presentation or {},
                 summary=summary or f"版本 {next_no}",
                 parent_version=parent_version,
                 locked=False,
@@ -392,12 +397,14 @@ class VersionManager:
                 id=f"{generation_id}_v{new_no}",
                 generation_id=generation_id,
                 version_number=new_no,
-                nodes_snapshot=target.nodes_snapshot,
+                nodes_snapshot=deepcopy(target.nodes_snapshot),
+                page_bindings=deepcopy(target.page_bindings),
+                presentation=deepcopy(target.presentation),
                 summary=f"回滚自版本 {target_version}",
                 parent_version=target_version,
                 locked=False,
                 created_at=datetime.now(),
-                metadata={"reverted_from": target_version},
+                metadata={**deepcopy(target.metadata), "reverted_from": target_version},
             )
 
             # 写快照

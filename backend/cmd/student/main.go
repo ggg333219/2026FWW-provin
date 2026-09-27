@@ -20,12 +20,23 @@ import (
 	"smart-teaching-backend/pkg/config"
 	applogger "smart-teaching-backend/pkg/logger"
 	"smart-teaching-backend/pkg/oss"
+	"smart-teaching-backend/pkg/serveraddr"
+)
+
+// 共享的 config.yaml 里写的是教师端端口，api 单体用 18080。
+// 学生端没有独立配置文件时回退到拆分前的 8081，保持既有行为。
+const (
+	monolithDefaultPort = 18080 // 与 pkg/config setDefaults 的 server.port 一致
+	defaultStudentPort  = 8081
 )
 
 func main() {
 	_, filename, _, _ := runtime.Caller(0)
-	// Adjusted path since it's now in cmd/student/
-	projectRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filename))))
+	// 本文件位于 backend/cmd/student/main.go，向上 3 级即为 backend 根目录。
+	// 之前这里多了一级 Dir，会解析到仓库根目录；那里的 config/ 不存在，
+	// resolveConfigFiles 对缺目录返回空列表而非报错，于是静默退回 viper 默认值
+	// （database.host=localhost，而不是 docker-compose 里的 teaching-postgres）。
+	projectRoot := filepath.Dir(filepath.Dir(filepath.Dir(filename)))
 
 	cfg, err := config.LoadConfig(filepath.Join(projectRoot, "config"))
 	if err != nil {
@@ -45,8 +56,14 @@ func main() {
 		return
 	}
 
+	// 端口从配置读，不再写死 8081；实际被占用时会顺延（见 serveraddr.Serve）。
+	preferredPort := cfg.Server.Port
+	if preferredPort == monolithDefaultPort {
+		preferredPort = defaultStudentPort
+	}
 	applogger.Info("学生端系统启动中...",
-		zap.Int("port", 8081), // Default student port
+		zap.Int("port", preferredPort),
+		zap.String("mode", cfg.Server.Mode),
 	)
 
 	db, err := gorm.Open(postgres.Open(cfg.Database.DSN()), &gorm.Config{
@@ -105,8 +122,8 @@ func main() {
 	api := r.Group("/api")
 	router.RegisterStudentRoutes(api, studentHandler, compatHandler, weakPointHandler, courseHandler, knowledgeMapHandler)
 
-	applogger.Info("学生端服务运行中", zap.Int("port", 8081))
-	if err := r.Run(":8081"); err != nil {
+	applogger.Info("学生端服务运行中", zap.Int("port", preferredPort))
+	if err := serveraddr.Serve(r, preferredPort, "student", projectRoot, applogger.Sugar.Warnf); err != nil {
 		applogger.Sugar.Fatalf("启动服务失败: %v", err)
 	}
 }

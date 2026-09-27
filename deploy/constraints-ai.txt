@@ -1,0 +1,3 @@
+# FastAPI 0.134 and OpenAI 1.109 both support this release. Pinning it keeps
+# Docker builds deterministic and prevents the resolver from backtracking.
+pydantic==2.12.5

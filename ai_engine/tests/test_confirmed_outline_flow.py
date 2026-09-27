@@ -143,6 +143,10 @@ def test_gen_finalize_creates_snapshot_from_confirmed_content():
         ],
         "course_name": "冒泡排序",
         "summary": "教师确认终稿",
+        "page_bindings": [
+            {"page_id": "node_001", "evidence_refs": ["chunk_sort_1"]}
+        ],
+        "presentation": {"template_id": "deck-swiss-edu", "palette": "forest"},
     })
 
     assert resp.status_code == 200
@@ -160,6 +164,13 @@ def test_gen_finalize_creates_snapshot_from_confirmed_content():
     assert snap.version_number == 1
     assert len(snap.nodes_snapshot) == 1
     assert snap.nodes_snapshot[0].node_id == "node_001"
+    assert snap.page_bindings[0]["evidence_refs"] == ["chunk_sort_1"]
+    assert snap.presentation["template_id"] == "deck-swiss-edu"
+
+    loaded = client.get(f'/api/v1/version/{body["generation_id"]}?v=1')
+    assert loaded.status_code == 200
+    assert loaded.json()["page_bindings"] == snap.page_bindings
+    assert loaded.json()["presentation"] == snap.presentation
 
 
 def test_gen_finalize_with_existing_generation_id():
@@ -187,6 +198,61 @@ def test_gen_finalize_with_existing_generation_id():
     body = resp.json()
     assert body["generation_id"] == unique_gen_id
     assert body["version_number"] == 1
+
+
+def test_exp_contract_returns_versioned_filename():
+    """契约路径 /exp 返回 filename/courseware_title/version_no，旧字段仍保留。"""
+    import uuid
+    generation_id = f"course_export_{uuid.uuid4().hex[:8]}"
+    finalized = client.post("/api/v1/gen/finalize", json={
+        "generation_id": generation_id,
+        "nodes": [{
+            "node_id": "node_tcp",
+            "title": "TCP 三次握手",
+            "node_type": "slide",
+            "content": "SYN、SYN-ACK、ACK",
+            "summary": "TCP 建连过程",
+        }],
+    })
+    assert finalized.status_code == 200
+
+    exported = client.post(f"/api/v1/exp/{generation_id}", json={
+        "format": "pptx",
+        "version": 1,
+        "courseware_title": "TCP三次握手课件",
+    })
+
+    assert exported.status_code == 200
+    body = exported.json()
+    assert body["filename"] == "TCP三次握手课件_v1.pptx"
+    assert body["courseware_title"] == "TCP三次握手课件"
+    assert body["version_no"] == 1
+    assert body["version"] == 1
+
+
+def test_export_accepts_project_snapshot_nodes_without_engine_version(monkeypatch, tmp_path):
+    """项目版本由 Go 持久化时，导出不应依赖 AI Engine 本地版本目录。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main_module._task_store, "_use_redis", False)
+
+    generation_id = "course_project_snapshot_only"
+    exported = client.post(f"/api/v1/exp/{generation_id}", json={
+        "format": "interactive",
+        "version": 7,
+        "courseware_title": "高等数学1",
+        "nodes": [{
+            "node_id": "node_003",
+            "title": "定积分概念",
+            "node_type": "slide",
+            "content": "面积累积的思想",
+            "summary": "定积分的几何意义",
+        }],
+    })
+
+    assert exported.status_code == 200
+    body = exported.json()
+    assert body["filename"] == "高等数学1_v7.html"
+    assert body["version_no"] == 7
 
 
 def test_gen_modify_supports_content_task_ids():

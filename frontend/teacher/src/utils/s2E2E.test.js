@@ -103,27 +103,29 @@ describe('S2 前端链路（mock）', () => {
       }
     })
     const store = useMaterialStore()
+    store.activeSessionId = 's_test'
     const packet = await store.generateEvidence({ query: '完全不存在的内容' })
 
     expect(packet).toBe(null)
     expect(store.evidencePackets).toHaveLength(0)
-    expect(window.localStorage.getItem('fuww_s2_evidence_packet')).toBe(null)
+    expect(window.localStorage.getItem('fuww_s2_evidence_packet:s_test')).toBe(null)
     expect(store.error).toContain('未检索到可用证据')
   })
 
   it('清空证据历史时同时移除 S3 交接缓存', () => {
     const store = useMaterialStore()
+    store.activeSessionId = 's_test'
     store.addEvidencePacket('快速排序', {
       relevant_chunks: [{ chunk_id: 'chunk_1', content: '分治思想' }],
       synthesized_context: '快速排序使用分治思想。',
       citations: []
     })
-    expect(window.localStorage.getItem('fuww_s2_evidence_packet')).toBeTruthy()
+    expect(window.localStorage.getItem('fuww_s2_evidence_packet:s_test')).toBeTruthy()
 
     store.clearEvidencePackets()
 
     expect(store.evidencePackets).toHaveLength(0)
-    expect(window.localStorage.getItem('fuww_s2_evidence_packet')).toBe(null)
+    expect(window.localStorage.getItem('fuww_s2_evidence_packet:s_test')).toBe(null)
   })
 
   it('parseProcess → 轮询到 done 且 chunks 含 materialId', async () => {
@@ -302,7 +304,7 @@ describe('S2 前端链路（mock）', () => {
     expect(window.localStorage.getItem('fuww_mock_mode')).toBe('true')
   })
 
-  it('真实链路：后端 404 仅对当前请求回退 Mock，不全局切换', async () => {
+  it('真实链路：后端 404 直接抛出真实错误，不回退 Mock', async () => {
     // 模拟真实后端：materials 列表路由缺失(404)，但 rag 等路由真实存在(200)
     const seen = []
     globalThis.fetch = (url, opts = {}) => {
@@ -324,10 +326,9 @@ describe('S2 前端链路（mock）', () => {
       return Promise.reject(new TypeError('Failed to fetch'))
     }
 
-    // materials 404 → 回退 Mock 返回素材列表，但不设置全局 mock 模式
-    const list = await requestJson('/api/v1/teacher/materials/search')
-    expect(list.code).toBe(200)
-    expect(Array.isArray(list.data)).toBe(true)
+    // materials 404 → 保留真实 HTTP 错误，避免导出等失败请求返回假数据
+    const error = await requestJson('/api/v1/teacher/materials/search').catch((err) => err)
+    expect(error.httpStatus).toBe(404)
     expect(window.localStorage.getItem('fuww_mock_mode')).toBe(null)
 
     // rag/search 继续走真实 fetch（真实后端 200），而非 Mock

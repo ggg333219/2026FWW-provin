@@ -44,6 +44,13 @@ type AIEngine interface {
 	GenerationCreate(ctx context.Context, req GenerationCreateRequest) (*GenerationCreateResponse, error)
 	GenerationStatus(ctx context.Context, taskID string) (*GenerationStatusResponse, error)
 
+	// ---- S3: 大纲构建与 AI 修订（Python 无状态端点 /gen/outline、/gen/outline/revise）----
+	GenerateOutline(ctx context.Context, req OutlineGenerateRequest) (*OutlineGenerateResponse, error)
+	ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error)
+
+	// ---- B5: 修改意图理解（Python /api/v1/ai/parse_modify）----
+	ParseModify(ctx context.Context, req ParseModifyRequest) (*ModifyIntent, error)
+
 	// ---- P1: S3 大纲 → 内容生成（独立阶段）----
 	GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error)
 	ContentStatus(ctx context.Context, contentID string) (*GenContentStatusResponse, error)
@@ -321,6 +328,10 @@ const (
 )
 
 // IntentSummary 结构化教学意图摘要
+//
+// 注意：本结构目前**只透传、不落库** —— outline 行上只有 intent_id（指向 AI 引擎的
+// 意图会话），意图摘要本身没有对应的表。因此「按 outline_id 反查意图」在服务端做
+// 不到；要让表达规划器拿到意图，只能由客户端在请求里带上。
 type IntentSummary struct {
 	Topic            *string  `json:"topic,omitempty"`
 	DurationMinutes  *int     `json:"duration_minutes,omitempty"`
@@ -506,6 +517,68 @@ const (
 	ExportStatusFailed    = "failed"
 )
 
+// =============================================================================
+// S3: 大纲（Outline）领域 —— Go 网关侧 DTO。
+// 字段契约来源：
+//   1) 《文档/S3数据与接口规范.md》v1.0 §2.1 OutlineNode / §2.3 Outline；
+//   2) ai_engine/main.py:657 /gen/outline（GenOutlineRequest）与 :671 /gen/outline/revise；
+//   3) 前端 frontend/teacher/src/services/v1/outlineApi.js + stores/outlineStore.js。
+// Python AI Engine 侧无大纲状态持久化（main.py:673 docstring："版本和确认态仍由 Go 后端管理"），
+// 大纲草稿/确认/版本链的持久化是 Go OutlineService 的职责（见 outline_service.go）。
+// =============================================================================
+
+// OutlineInteractivePlan —— 大纲节点的互动规划（规范 §2.2）。仅声明规划，不承载题目。
+type OutlineInteractivePlan struct {
+	Enabled       bool   `json:"enabled"`
+	Kind          string `json:"kind"` // quiz | flashcard | poll | game
+	DurationMin   int    `json:"duration_minutes"`
+	QuestionCount int    `json:"question_count,omitempty"`
+	AutoGrading   bool   `json:"auto_grading,omitempty"`
+	Delivery      string `json:"delivery"` // html5_link | ppt_native | standalone_html
+}
+
+// OutlineNode —— 大纲节点（规范 §2.1）。只描述"准备讲什么"，不含完整讲稿正文。
+// 禁止字段：script / segments / interactive_items（规范 §2.1 明确禁止）。
+type OutlineNode struct {
+	NodeID               string                  `json:"node_id"`
+	Order                int                     `json:"order"` // 从 1 开始连续编号
+	Title                string                  `json:"title"`
+	Summary              string                  `json:"summary"`
+	NodeType             string                  `json:"node_type"` // content | section | quiz | interactive | summary
+	KeyPoints            []string                `json:"key_points"`
+	EstimatedDurationMin float64                 `json:"estimated_duration_minutes"` // 单位统一为分钟
+	SourceChunkIDs       []string                `json:"source_chunk_ids,omitempty"`
+	InteractivePlan      *OutlineInteractivePlan `json:"interactive_plan,omitempty"`
+}
+
+// OutlineGenerateRequest —— POST /gen/outline 请求（Python GenOutlineRequest 镜像）。
+type OutlineGenerateRequest struct {
+	SessionID      string          `json:"session_id,omitempty"`
+	IntentID       string          `json:"intent_id,omitempty"`
+	Intent         *IntentSummary  `json:"intent,omitempty"`
+	EvidencePacket *EvidencePacket `json:"evidence_packet,omitempty"`
+	Markdown       string          `json:"markdown,omitempty"`
+	CourseName     string          `json:"course_name,omitempty"`
+}
+
+// OutlineGenerateResponse —— POST /gen/outline 响应（Python 返回裸 {"nodes": [...], "used_fallback": ...}）。
+type OutlineGenerateResponse struct {
+	Nodes        []OutlineNode `json:"nodes"`
+	UsedFallback bool          `json:"used_fallback,omitempty"`
+}
+
+// OutlineReviseAIRequest —— POST /gen/outline/revise 请求（Python GenOutlineReviseRequest 镜像）。
+type OutlineReviseAIRequest struct {
+	Nodes   []OutlineNode `json:"nodes"`
+	Message string        `json:"message"`
+}
+
+// OutlineReviseAIResponse —— POST /gen/outline/revise 响应（Python 返回 {"nodes", "change_summary"}）。
+type OutlineReviseAIResponse struct {
+	Nodes         []OutlineNode `json:"nodes"`
+	ChangeSummary []string      `json:"change_summary,omitempty"`
+}
+
 // TeachingNodeItem —— 引擎 TeachingNode 的 Go 镜像（字段=ai_engine/core/schema.py）。
 // 字段只增不删：node 由 S3 生成 → S4 版本快照 / 导出 / 前端渲染全链路共用本结构。
 type TeachingNodeItem struct {
@@ -543,6 +616,14 @@ type TeachingNodeItem struct {
 	FontSizeHint    string `json:"font_size_hint,omitempty"`
 	TextAlignment   string `json:"text_alignment,omitempty"`
 	SlideBackground string `json:"slide_background,omitempty"`
+	// 教学内容表达字段（教学表达规划器链路）。Go 的 encoding/json 反序列化到本结构时
+	// 会忽略未声明字段，因此引擎侧每新增一个节点字段，这里不同步就等于在网关这一跳丢弃。
+	// PointDetails 不带 omitempty：与 segments/questions 同为引擎恒定输出的列表字段。
+	// 其余三个是真正可选的（只有拿到规划的页才有），omitempty 与引擎的「缺失即降级」一致。
+	PointDetails  []map[string]any `json:"point_details"`
+	Figure        map[string]any   `json:"figure,omitempty"`
+	KeyConclusion string           `json:"key_conclusion,omitempty"`
+	TeachingPlan  map[string]any   `json:"teaching_plan,omitempty"`
 }
 
 type GenerationCreateRequest struct {
@@ -633,6 +714,11 @@ type GenerationModifyRequest struct {
 	Nodes        []interface{}       `json:"nodes,omitempty"`
 	CourseName   string              `json:"course_name,omitempty"`
 	Regenerate   bool                `json:"regenerate"`
+	// 契约 v1.0 模块1 接口3：页面级局部修改的证据约束（字段只增不删，向后兼容）。
+	// PageID 对应大纲节点 ID（node_id == page_id）；EvidenceRefs 为空时保持现有全库行为。
+	PageID          string   `json:"page_id,omitempty"`
+	EvidenceRefs    []string `json:"evidence_refs,omitempty"`
+	UserInstruction string   `json:"user_instruction,omitempty"`
 }
 
 type GenerationModifyResponse struct {
@@ -641,6 +727,9 @@ type GenerationModifyResponse struct {
 	VersionNumber   int           `json:"version_number,omitempty"`
 	CommandsApplied []string      `json:"commands_applied,omitempty"`
 	Errors          []string      `json:"errors,omitempty"`
+	// 契约 v1.0 模块1：本次修改实际使用的证据 chunk（"用了哪些证据"）。
+	CitationRefs []string `json:"citation_refs,omitempty"`
+	EvidenceUsed []string `json:"evidence_used,omitempty"`
 }
 
 type VersionSnapshot struct {
@@ -648,6 +737,8 @@ type VersionSnapshot struct {
 	GenerationID  string             `json:"generation_id"`
 	VersionNumber int                `json:"version_number"`
 	NodesSnapshot []TeachingNodeItem `json:"nodes_snapshot,omitempty"`
+	PageBindings  []map[string]any   `json:"page_bindings,omitempty"`
+	Presentation  map[string]any     `json:"presentation,omitempty"`
 	Summary       string             `json:"summary,omitempty"`
 	Locked        bool               `json:"locked"`
 	CreatedAt     string             `json:"created_at"`
@@ -662,8 +753,11 @@ type VersionRollbackRequest struct {
 }
 
 type VersionRollbackResponse struct {
-	CurrentVersion int    `json:"current_version"`
-	Status         string `json:"status"`
+	CurrentVersion int                `json:"current_version"`
+	Status         string             `json:"status"`
+	Nodes          []TeachingNodeItem `json:"nodes,omitempty"`
+	PageBindings   []map[string]any   `json:"page_bindings,omitempty"`
+	Presentation   map[string]any     `json:"presentation,omitempty"`
 }
 
 type VersionLockResponse struct {
@@ -673,23 +767,28 @@ type VersionLockResponse struct {
 }
 
 type ExportCreateRequest struct {
-	Format    string   `json:"format"`
-	Version   int      `json:"version"`
-	VersionID string   `json:"version_id,omitempty"`
-	Formats   []string `json:"formats,omitempty"`
+	Format          string             `json:"format"`
+	Version         int                `json:"version"`
+	VersionID       string             `json:"version_id,omitempty"`
+	Formats         []string           `json:"formats,omitempty"`
+	CoursewareTitle string             `json:"courseware_title,omitempty"`
+	Nodes           []TeachingNodeItem `json:"nodes,omitempty"`
 }
 
 type ExportCreateResponse struct {
 	JobID           string   `json:"job_id"`
+	Filename        string   `json:"filename,omitempty"`
 	Status          string   `json:"status"`
 	CoursewareTitle string   `json:"courseware_title,omitempty"`
 	Version         int      `json:"version,omitempty"`
+	VersionNo       int      `json:"version_no,omitempty"`
 	Formats         []string `json:"formats,omitempty"`
 }
 
 type ExportStatusResponse struct {
 	JobID        string `json:"job_id"`
 	GenerationID string `json:"generation_id,omitempty"`
+	Filename     string `json:"filename,omitempty"`
 	Status       string `json:"status"`
 	DownloadURL  string `json:"download_url,omitempty"`
 	Error        string `json:"error,omitempty"`
@@ -699,6 +798,7 @@ type ExportStatusResponse struct {
 	FileSize        int64                `json:"file_size,omitempty"`
 	CoursewareTitle string               `json:"courseware_title,omitempty"`
 	Version         int                  `json:"version,omitempty"`
+	VersionNo       int                  `json:"version_no,omitempty"`
 	Files           map[string]string    `json:"files,omitempty"`
 	QualityReport   *ExportQualityReport `json:"quality_report,omitempty"`
 }
@@ -727,6 +827,8 @@ type GenerationFinalizeRequest struct {
 	Summary        string             `json:"summary,omitempty"`
 	OutlineID      string             `json:"outline_id,omitempty"`
 	OutlineVersion int                `json:"outline_version,omitempty"`
+	PageBindings   []map[string]any   `json:"page_bindings,omitempty"`
+	Presentation   map[string]any     `json:"presentation,omitempty"`
 }
 
 type GenerationFinalizeResponse struct {
@@ -748,18 +850,26 @@ func (c *aiEngineClient) GenerationFinalize(ctx context.Context, req GenerationF
 // =============================================================================
 
 type GenContentRequest struct {
-	Nodes             []TeachingNodeItem `json:"nodes"`
-	ContextMarkdown   string             `json:"context_markdown"`
-	CourseName        string             `json:"course_name"`
-	Mode              string             `json:"mode"`
-	Enhanced          bool               `json:"enhanced"`
-	OutlineID         string             `json:"outline_id"`
-	OutlineVersion    int                `json:"outline_version"`
-	TargetNodeIDs     []string           `json:"target_node_ids,omitempty"`
-	ModifyInstruction string             `json:"modify_instruction,omitempty"`
-	Actions           []string           `json:"actions,omitempty"`
-	Constraints       []string           `json:"constraints,omitempty"`
-	AdjacentNodes     []TeachingNodeItem `json:"adjacent_nodes,omitempty"`
+	Nodes           []TeachingNodeItem `json:"nodes"`
+	ContextMarkdown string             `json:"context_markdown"`
+	CourseName      string             `json:"course_name"`
+	Mode            string             `json:"mode"`
+	Enhanced        bool               `json:"enhanced"`
+	OutlineID       string             `json:"outline_id"`
+	OutlineVersion  int                `json:"outline_version"`
+	// B6: 局部重生成（mode=partial 时生效）
+	TargetNodeIDs     []string `json:"target_node_ids,omitempty"`
+	ModifyAction      string   `json:"modify_action,omitempty"`
+	ModifyConstraints []string `json:"modify_constraints,omitempty"`
+	// 契约 v1.0 模块1：目标页绑定的证据 chunk_id，由 Python 侧解析成原文注入提示词
+	EvidenceRefs []string `json:"evidence_refs,omitempty"`
+	// 教学意图摘要。Python 侧的表达规划器靠它决定「这一页该怎么教」；不传是合法
+	// 输入（规划器退化为只从节点自身推断），因此用 omitempty + 指针。
+	//
+	// 注意：IntentSummary 目前在 Go 侧**没有落库**（只在 intent 抽取 → 大纲 → 节点
+	// 之间透传），所以这里补不了「按 outline_id 反查」—— 客户端带着 intent 发
+	// /gen/content 时才能填上。详见 IntentSummary 的注释。
+	Intent *IntentSummary `json:"intent,omitempty"`
 }
 
 type GenContentStatusResponse struct {
@@ -790,14 +900,6 @@ type ModifyIntentResponse struct {
 	Confidence          float64  `json:"confidence"`
 	ClarificationNeeded bool     `json:"clarification_needed"`
 	Clarification       string   `json:"clarification,omitempty"`
-}
-
-func (c *aiEngineClient) ParseModify(ctx context.Context, req ModifyIntentRequest) (*ModifyIntentResponse, error) {
-	var result ModifyIntentResponse
-	if err := c.postJSON(ctx, "/api/v1/ai/parse_modify", req, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
 }
 
 func (c *aiEngineClient) GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error) {
@@ -1065,6 +1167,18 @@ func (c *aiEngineClient) ReviseOutline(ctx context.Context, req OutlineReviseAIR
 		return nil, err
 	}
 	return &result, nil
+}
+
+// ParseModify [B5] 调 Python /api/v1/ai/parse_modify 解析修改意图。
+func (c *aiEngineClient) ParseModify(ctx context.Context, req ParseModifyRequest) (*ModifyIntent, error) {
+	var result struct {
+		ModifyIntent
+	}
+	// Python 返回扁平 intent 对象，直接反序列化
+	if err := c.postJSON(ctx, "/api/v1/ai/parse_modify", req, &result); err != nil {
+		return nil, err
+	}
+	return &result.ModifyIntent, nil
 }
 
 func (c *aiEngineClient) GenerationStatus(ctx context.Context, taskID string) (*GenerationStatusResponse, error) {

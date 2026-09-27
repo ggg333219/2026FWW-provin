@@ -1,5 +1,16 @@
 <template>
   <div class="s2-workspace">
+    <section class="auto-evidence-card" aria-live="polite">
+      <div>
+        <span class="auto-badge">自动证据</span>
+        <strong>依据 S1 教学意图检索并绑定整份 PPT 草稿</strong>
+        <p>{{ automaticQuery || '等待 S1 教学意图' }}</p>
+      </div>
+      <button :disabled="autoEvidenceLoading || !automaticQuery" @click="refreshAutomaticEvidence({ indexMaterials: true, force: true })">
+        {{ autoEvidenceLoading ? '正在自动检索…' : '重新自动检索' }}
+      </button>
+      <span v-if="autoEvidenceError" class="auto-error">{{ autoEvidenceError }}</span>
+    </section>
     <!-- 证据预渲染区：已绑定证据包预览 -->
     <section v-if="boundEvidenceList.length > 0" class="evidence-strip">
       <div class="strip-head">
@@ -35,35 +46,21 @@
 
       <!-- 右侧：知识库 RAG 检索 + 证据融合 -->
       <div class="s2-col">
-        <!-- 当前绑定节点指示器 -->
-        <div class="node-ref-bar">
-          <span class="node-ref-label">绑定到当前节点：</span>
-          <template v-if="editingNodeRef">
-            <input
-              v-model="nodeRefInput"
-              class="node-ref-input"
-              placeholder="输入节点 ID，如 p1_n2"
-              @keyup.enter="confirmNodeRef"
-              @keyup.escape="cancelEditNodeRef"
-            />
-            <button class="node-ref-confirm" @click="confirmNodeRef">确定</button>
-            <button class="node-ref-cancel" @click="cancelEditNodeRef">取消</button>
-          </template>
-          <template v-else>
-            <span class="node-ref-value" :class="{ empty: !currentNodeRef }">
-              {{ currentNodeRef || '未指定（将绑定到空节点）' }}
-            </span>
-            <button class="node-ref-edit" @click="startEditNodeRef" title="编辑节点引用">✎</button>
-            <span class="node-ref-hint">由 S3 传入，也可手动指定</span>
-          </template>
+        <div class="auto-result-panel">
+          <h4>全局证据包</h4>
+          <p>上传资料解析完成后会自动重新索引，并按照 S1 意图更新整份课件的证据包，无需逐节点检索。</p>
+          <div v-if="boundEvidenceList.length" class="auto-result-ok">已绑定 {{ boundEvidenceList.at(-1)?.packet?.relevant_chunks?.length || 0 }} 个相关切片</div>
+          <div v-else class="auto-result-empty">暂无可用证据，仍可继续上传资料；S3 会保留无证据生成兜底。</div>
         </div>
-
-        <KnowledgeBasePanel
-          :session-id="sessionId"
-          :bound-node-ref="currentNodeRef"
-          @toast="handleToast"
-          @bind-evidence="handleBindEvidence"
-        />
+        <details class="advanced-search">
+          <summary>高级：手动检索与核对</summary>
+          <KnowledgeBasePanel
+            :session-id="sessionId"
+            bound-node-ref="draft"
+            @toast="handleToast"
+            @bind-evidence="handleBindEvidence"
+          />
+        </details>
       </div>
     </div>
 
@@ -75,12 +72,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMaterialStore } from '../../stores/materialStore'
+import { useMaterialStore, isEvidencePacketUsable } from '../../stores/materialStore'
 import { useIntentStore } from '../../stores/intentStore'
 import S2MaterialHub from './S2MaterialHub.vue'
 import KnowledgeBasePanel from './KnowledgeBasePanel.vue'
+import { buildIntentEvidenceQuery } from '../../utils/intentEvidence'
 
 const materialStore = useMaterialStore()
 const intentStore = useIntentStore()
@@ -123,6 +121,9 @@ const nodeRefInput = ref('')
 
 /** 已绑定证据包（跨刷新持久化） */
 const boundEvidenceList = ref([])
+const autoEvidenceLoading = ref(false)
+const autoEvidenceError = ref('')
+const automaticQuery = computed(() => buildIntentEvidenceQuery(intentStore.intentSummary || {}))
 
 const persistEvidence = () => {
   if (typeof window === 'undefined') return
@@ -204,7 +205,7 @@ const showInlineToast = (message) => {
   }, 2800)
 }
 
-const handleTaskFinished = (payload) => {
+const handleTaskFinished = async (payload) => {
   // 解析完成后，自动把新素材同步为选中，便于立即查看切片
   if (payload?.status === 'done' && payload.chunkCount > 0) {
     const fresh = materialStore.materials[0]
@@ -212,6 +213,42 @@ const handleTaskFinished = (payload) => {
       materialStore.selectMaterial(fresh.id)
       persistSelection()
     }
+    await nextTick()
+    await refreshAutomaticEvidence({ indexMaterials: true, force: true })
+  }
+}
+
+async function refreshAutomaticEvidence({ indexMaterials = false, force = false } = {}) {
+  const query = automaticQuery.value
+  if (!query || autoEvidenceLoading.value) return null
+  const latest = boundEvidenceList.value.at(-1)
+  if (!force && latest?.query === query && isEvidencePacketUsable(latest.packet)) return latest.packet
+  autoEvidenceLoading.value = true
+  autoEvidenceError.value = ''
+  try {
+    if (indexMaterials && materialStore.allChunks.length) {
+      await materialStore.indexKnowledgeBase({ sessionId: sessionId.value })
+    }
+    const packet = await materialStore.generateEvidence({
+      query,
+      context: { intent: intentStore.intentSummary || {}, binding_scope: 'draft', auto_bind: true },
+    })
+    if (!isEvidencePacketUsable(packet)) {
+      autoEvidenceError.value = materialStore.error || '知识库暂未返回可用证据'
+      return null
+    }
+    boundEvidenceList.value = [{
+      id: `ev_auto_${Date.now()}`,
+      query,
+      packet,
+      createdAt: new Date().toISOString(),
+      nodeRef: '整份PPT草稿',
+    }]
+    persistEvidence()
+    showInlineToast('已依据 S1 意图自动更新整份 PPT 的证据包')
+    return packet
+  } finally {
+    autoEvidenceLoading.value = false
   }
 }
 
@@ -251,13 +288,14 @@ onMounted(async () => {
         if (Array.isArray(parsed)) {
           boundEvidenceList.value = parsed
           const latest = parsed[parsed.length - 1]?.packet
-          if (latest) window.localStorage.setItem('fuww_s2_evidence_packet', JSON.stringify(latest))
+          if (latest) window.localStorage.setItem(`fuww_s2_evidence_packet:${sessionId.value}`, JSON.stringify(latest))
         }
       }
     } catch {
       // noop
     }
   }
+  await refreshAutomaticEvidence({ indexMaterials: materialStore.allChunks.length > 0 })
 })
 
 // 选中变化时持久化
@@ -281,6 +319,23 @@ defineExpose({ setSearchQuery })
   padding: 20px;
   min-height: calc(100vh - 140px);
 }
+
+.auto-evidence-card { display:flex; align-items:center; gap:16px; margin-bottom:16px; padding:14px 18px; border:1px solid #bcded1; border-radius:16px; background:linear-gradient(135deg,#edf9f4,#f9fcfb); color:#244f49; }
+.auto-evidence-card>div { flex:1; min-width:0; }
+.auto-evidence-card strong { display:block; margin-top:5px; font-size:14px; }
+.auto-evidence-card p { margin:5px 0 0; color:#668078; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.auto-evidence-card button { padding:8px 14px; border:1px solid #72ad98; border-radius:9px; background:#fff; color:#2f6658; font:600 12px/1.2 inherit; cursor:pointer; }
+.auto-evidence-card button:disabled { opacity:.55; cursor:not-allowed; }
+.auto-badge { display:inline-flex; padding:3px 8px; border-radius:999px; background:#2f8069; color:#fff; font-size:10px; font-weight:700; }
+.auto-error { max-width:240px; color:#a54b36; font-size:11px; }
+.auto-result-panel { padding:18px; border:1px solid #dceae4; border-radius:14px; background:#fff; }
+.auto-result-panel h4 { margin:0 0 7px; color:#2f605a; }
+.auto-result-panel p { margin:0; color:#6d8179; font-size:12px; line-height:1.6; }
+.auto-result-ok,.auto-result-empty { margin-top:12px; padding:10px 12px; border-radius:10px; font-size:12px; }
+.auto-result-ok { background:#eaf8f1; color:#276a55; }
+.auto-result-empty { background:#f7f8f8; color:#7b8984; }
+.advanced-search { margin-top:12px; border:1px solid #e1e9e5; border-radius:12px; background:#fff; }
+.advanced-search>summary { padding:12px 14px; color:#61756d; font-size:12px; cursor:pointer; }
 
 /* ---------- 证据预渲染 ---------- */
 .evidence-strip {

@@ -1,6 +1,7 @@
 <template>
   <div class="section-card">
     <h3>导出中心</h3>
+    <p v-if="genId" class="export-context">{{ exportDescription }}</p>
 
     <div v-if="!genId" class="empty-tip">请先加载版本</div>
     <div v-else class="export-panel">
@@ -63,10 +64,15 @@
         <!-- 完成 -->
         <div v-if="exportStatus === 'done'" class="done-section">
           <span class="done-icon">✅ 导出完成</span>
+          <div v-if="downloadFiles.length" class="download-list">
+            <button v-for="file in downloadFiles" :key="file.format" class="btn btn-sm" @click="handleDownload(file.url)">
+              下载 {{ file.label }}
+            </button>
+          </div>
           <button
-            v-if="exportDownloadUrl && !Object.keys(exportFiles).length"
+            v-else-if="exportDownloadUrl"
             class="btn btn-sm"
-            @click="handleDownload"
+            @click="handleDownload(exportDownloadUrl)"
           >
             下载文件
           </button>
@@ -120,6 +126,8 @@ const props = defineProps({
   intent: { type: Object, default: () => ({}) },
   /** 当前版本节点树，直接渲染为幻灯片（跳过 LLM） */
   nodes: { type: Array, default: () => [] }
+  ,courseTitle: { type: String, default: '未命名课件' }
+  ,versionLabel: { type: String, default: 'v1' }
 })
 
 defineEmits(['start-export', 'reset-export', 'skill-preview'])
@@ -132,7 +140,7 @@ async function handleSkillPreview() {
   // intent 为空时用最小结构
   const intent = props.intent?.title
     ? props.intent
-    : { title: '课件预览', description: 'AI 智课课件', key_points: [] }
+    : { title: '课件预览', description: '智能互动课件', key_points: [] }
   skillPreviewLoading.value = true
   try {
     const { teacherGenerationApi: api } = await import('../../services/v1/generationApi')
@@ -162,11 +170,20 @@ async function handleSkillPreview() {
 }
 
 const exportIsActive = computed(() => ['pending', 'exporting'].includes(props.exportStatus))
-const qualityStatusText = computed(() => ({
-  passed: '质量检查通过',
-  passed_with_warnings: '质量检查通过，有提示',
-  failed: '质量检查未通过'
-}[props.exportQualityReport?.status] || '质量检查'))
+const exportFileName = computed(() => {
+  const safeTitle = String(props.courseTitle || '未命名课件').replace(/[\\/:*?"<>|]/g, '_')
+  const extension = selectedFormat.value === 'both' ? 'zip' : (selectedFormat.value === 'interactive' ? 'html' : (selectedFormat.value === 'lesson_plan' ? 'docx' : selectedFormat.value))
+  return `${safeTitle}_${props.versionLabel}.${extension}`
+})
+const exportDescription = computed(() => selectedFormat.value === 'both'
+  ? `导出文件：${String(props.courseTitle || '未命名课件')}_${props.versionLabel}（PPTX + DOCX + HTML5）`
+  : `导出文件：${exportFileName.value}`)
+const downloadFiles = computed(() => {
+  const labels = { pptx: 'PPTX', docx: 'DOCX', html: 'HTML5', html5: 'HTML5', interactive: 'HTML5' }
+  return Object.entries(props.exportFiles || {})
+    .filter(([, url]) => Boolean(url))
+    .map(([format, url]) => ({ format, url, label: labels[format] || format.toUpperCase() }))
+})
 
 const statusText = computed(() => {
   const map = {
@@ -199,10 +216,8 @@ watch(() => props.exportStatus, (val) => {
   }
 })
 
-function handleDownload() {
-  if (props.exportDownloadUrl) {
-    window.open(props.exportDownloadUrl, '_blank')
-  }
+function handleDownload(url) {
+  if (url) window.open(url, '_blank', 'noopener')
 }
 </script>
 
@@ -213,6 +228,7 @@ function handleDownload() {
   height: fit-content;
 }
 .section-card h3 { margin: 0 0 12px; font-size: 16px; color: #2d5f58; }
+.export-context { margin: -5px 0 12px; color: #71847d; font-size: 12px; }
 .empty-tip { color: #94a3b8; text-align: center; padding: 40px 0; font-size: 14px; }
 
 .export-panel { display: flex; flex-direction: column; gap: 14px; }
@@ -250,7 +266,8 @@ function handleDownload() {
   height: 100%; background: linear-gradient(90deg, #5ca68f, #3b8b7a); border-radius: 3px; transition: width 0.4s;
 }
 
-.done-section { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.done-section { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.download-list { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .done-icon { font-size: 14px; color: #059669; font-weight: 500; }
 
 .error-section { margin-top: 4px; }

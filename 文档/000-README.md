@@ -1,7 +1,7 @@
 # 多模态 AI 互动式教学智能体 — 方案总览
 
 > 锐捷网络 · 服务外包赛题 A12  
-> 最后更新: 2026-07-17
+> 最后更新: 2026-09-23
 
 ## 目录
 
@@ -11,8 +11,16 @@
 | [002-任务包-Go后端-A.md](002-任务包-Go后端-A.md) | Go 后端任务：死代码清理、God Object 拆分、会话/版本/导出模块 | **后端同学** |
 | [003-任务包-PythonAI引擎-B.md](003-任务包-PythonAI引擎-B.md) | Python AI Engine 任务：目录重组、多模态解析、课件生成、RAG 知识库 | **AI 同学** |
 | [004-任务包-Vue前端-C.md](004-任务包-Vue前端-C.md) | Vue 前端任务：教师工作台重构、组件按域分组、API 对接 | **前端同学** |
-| [005-接口契约手册.md](005-接口契约手册.md) | 三层间关键 API 定义、数据模型、状态机 | **所有人（参考）** |
-| [006-进度与里程碑.md](006-进度与里程碑.md) | 当前进度、里程碑、验收标准 | **所有人** |
+| [005-接口契约手册.md](005-接口契约手册.md) | 三层间关键 API 定义、数据模型、状态机（旧版，参考） | **所有人（参考）** |
+| 006-进度与里程碑.md | 当前进度、里程碑、验收标准 | **所有人** |
+| **[011-S2S3新功能接口契约-v1.0.md](011-S2S3新功能接口契约-v1.0.md)** | **S2-S3 新功能的权威契约（页面级资料绑定 / 版本迭代 / 互动导出）。008/009/010 已被本文替代** | **所有人（必读）** |
+| ~~008-任务包-B-AI引擎-页面级资料绑定.md~~ | **已废**：被 011 模块 1 替代 | — |
+| ~~009-任务包-A-Go后端-页面级资料绑定.md~~ | **已废**：被 011 模块 1 替代 | — |
+| ~~010-任务包-C-前端-页面级资料绑定.md~~ | **已废**：被 011 模块 1 替代 | — |
+| [重设计方案](../docs/design/skills/S2-S3-redesign-2026-09-intent-driven-binding.md) | 页面级绑定 + 意图自动绑定 + 三层确认门（011 的设计基线） | **所有人（必读）** |
+
+> ⚠️ 008/009/010 是 v0.2 任务包，字段命名、错误码、信封格式已被 011（契约 v1.0）覆盖。
+> 看到任何以这四个编号命名的 issue / PR，请先对照 011。
 
 ## 项目一句话
 
@@ -34,8 +42,11 @@
 ```
 Phase 1 [████████████████████] 100% ✅  项目现状分析与需求提取
 Phase 2 [████████████████████] 100% ✅  4 Skill + 知识库架构设计
-Phase 3 [░░░░░░░░░░░░░░░░░░░░]   0%    代码质量提升与解耦 ← 本轮起点
-Phase 4 [░░░░░░░░░░░░░░░░░░░░]   0%    Skill 实现开发
+Phase 3 [████████████████████] 100% ✅  代码质量提升与解耦
+Phase 4 [██░░░░░░░░░░░░░░░░░░░]  10%   Skill 实现开发 ← 本轮起点
+        └─ 模块 1 页面级资料绑定 ✅（契约 v1.0 接口 1/2/3 已落代码 + 单测 + 真库集成）
+        └─ 模块 2 版本迭代闭环   ⏳
+        └─ 模块 3 互动+导出增强  ⏳
 Phase 5 [░░░░░░░░░░░░░░░░░░░░]   0%    记录跟踪与收尾
 ```
 
@@ -102,3 +113,43 @@ Phase 5 [░░░░░░░░░░░░░░░░░░░░]   0%    �
 | **工具复用** | 上传、文档解析、视频解析、OCR、索引是共享工具层，不在 Skill 内重复 |
 | **证据协议** | 每次生成调用接收 `evidence_packet`；输出携带 `citation_refs[]` |
 | **版本边界** | 版本模块在生成/预览/导出后调用 — Skill 产生内容，版本模块快照 |
+
+## 运行期约定（2026-09-23 起）
+
+### 端口自动顺延
+
+本机同时跑教师端（8082）、学生端（8081）、API 单体（18080）时，配置端口被占用是最常见的
+启动失败原因。三个入口现在都通过 `backend/pkg/serveraddr.Serve` 自动顺延：
+
+- **不会**终止占用端口的进程（避免误杀用户本地已起的服务）
+- 首选端口被占 → 顺延 `+1`…`+99`，再不行交给系统分配
+- 顺延后会在日志打 `WARN` 提示实际端口，并写入机器可读的端口公告
+- 前端 dev server、CI、脚本想跟自动化，可读：
+
+```
+backend/.runtime/teacher.json   {"service":"teacher","port":8083,"started_at":"…"}
+backend/.runtime/student.json   {"service":"student","port":8082,"started_at":"…"}
+backend/.runtime/api.json       {"service":"api","port":18080,"started_at":"…"}
+```
+
+`.runtime/` 已被 `.gitignore` 忽略，是临时态，不要手动提交。
+
+### 学生端配置路径回归（已修复）
+
+`cmd/student/main.go` 的 `projectRoot` 多了一层 `filepath.Dir`，会指向仓库根目录而非 `backend/`，
+于是 `resolveConfigFiles` 找不到 `backend/config/`、**不报错**而是返回空列表，配置静默退回
+viper 默认值（`database.host=localhost` 而不是 docker 里的 `teaching-postgres`）。已修正为 3 层。
+学生端在没有 `SERVER_PORT` / `config.yaml.server.port` 时也会回退到拆分前的 `8081`。
+
+### 契约 v1.0 模块 1 已交付
+
+`PUT/GET /api/v1/coursewares/:project_id/page-bindings` 与 `POST /api/v1/gen/modify` 的
+`evidence_refs` / `page_id` / `user_instruction` / `citation_refs` / `evidence_used` 全部对齐
+`011-S2S3新功能接口契约-v1.0.md`。验证三件套：
+
+```
+go test ./internal/handler -run TestPageBindings  -count=1   # 内存 store + 契约信封
+go test ./internal/service -run TestPageBindings  -count=1   # gorm + 真实 PostgreSQL
+COURSEWARE_PG_DSN=postgres://postgres:123456@127.0.0.1:25432/teaching_test?sslmode=disable \
+  go test ./internal/handler -run TestPageBindingsHTTPOverPostgres -count=1 -v  # HTTP 端到端
+```

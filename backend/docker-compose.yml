@@ -30,7 +30,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-15432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
@@ -46,7 +46,7 @@ services:
     image: redis:7
     container_name: teaching-redis
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${REDIS_PORT:-16379}:6379"
     volumes:
       - redis-data:/data
     networks:
@@ -66,8 +66,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"   # API端口
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"   # 控制台端口
+      - "${MINIO_API_PORT:-19000}:9000"   # API端口
+      - "${MINIO_CONSOLE_PORT:-19001}:9001"   # 控制台端口
     volumes:
       - minio-data:/data
     networks:

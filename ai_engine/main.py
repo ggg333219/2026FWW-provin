@@ -1,5 +1,9 @@
 from datetime import datetime
 import sys
+# 必须模块级导入：函数内写 `import logging` 会让 logging 成为**该函数的局部名**
+# （编译期决定），于是同一函数中更早的 logging 引用抛 UnboundLocalError 而非
+# NameError —— 那种情况下顶层的 import 也救不了，降级日志本身会把链路带崩。
+import logging
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +30,8 @@ from ai_engine.core.llm import resolve_llm_timeout, _is_retryable_error
 from ai_engine.reconstructor import LessonReconstructor, ReconstructionConfig
 from ai_engine.recommendation.service import router as recommendation_router
 from ai_engine.gen.outline import OutlineBuilder, OutlineConfig
+from ai_engine.gen.modify_intent import ModifyIntentParser
+from ai_engine.gen.evidence_binding import bind_evidence_to_draft_nodes
 from ai_engine.gen.node import NodeGenerator, NodeGenConfig
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
@@ -33,7 +39,6 @@ from ai_engine.gen.preview import PreviewRenderer
 from ai_engine.gen.validator import ContentValidator
 from ai_engine.gen.commands import CommandParser, EditCommand, CommandType
 from ai_engine.gen.patch import NodePatcher
-from ai_engine.gen.modify_intent import parse_modify_instruction
 from ai_engine.gen.interactive import InteractiveBuilder
 from ai_engine.intent.router import router as intent_router
 # RAG 内联调用支持（S2→KB 证据自动注入 S3 管线）
@@ -46,6 +51,7 @@ from ai_engine.core.schema import (
     ExportStatusResponse, ExportStatus, ExportJob,
     ExportQualityReport,
     RollbackRequest,
+    normalize_generation_nodes,
 )
 
 app = FastAPI(title="泛雅 AI 智课系统后端", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
@@ -612,6 +618,24 @@ class GenOutlineReviseRequest(BaseModel):
     message: str
 
 
+class ParseModifyRequest(BaseModel):
+    """[B5] /api/v1/ai/parse_modify 请求体。"""
+    project_id: str = ""
+    instruction: str
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+
+
+_modify_intent_parser: ModifyIntentParser | None = None
+
+
+def get_modify_intent_parser() -> ModifyIntentParser:
+    """[B5] 单例：LLM 客户端复用。"""
+    global _modify_intent_parser
+    if _modify_intent_parser is None:
+        _modify_intent_parser = ModifyIntentParser()
+    return _modify_intent_parser
+
+
 class GenNodesRequest(BaseModel):
     """生成节点讲稿请求"""
     nodes: list[dict[str, Any]]
@@ -647,6 +671,9 @@ class ModifyRequest(BaseModel):
     commands: list[dict[str, Any]]  # 结构化命令列表
     regenerate: bool = False
     course_name: str | None = None
+    page_id: str | None = None
+    evidence_refs: list[str] = Field(default_factory=list)
+    user_instruction: str = ""
 
 
 class InteractiveRequest(BaseModel):
@@ -703,11 +730,23 @@ class GenContentRequest(BaseModel):
     enhanced: bool = False
     outline_id: str = ""
     outline_version: int = 0
-    target_node_ids: list[str] = Field(default_factory=list)
-    modify_instruction: str = ""
-    actions: list[str] = Field(default_factory=list)
-    constraints: list[str] = Field(default_factory=list)
-    adjacent_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    # B6: 局部重生成
+    target_node_ids: list[str] = Field(default_factory=list, description="[B6] 局部重生成目标节点ID；非空时进入 partial 模式")
+    modify_action: str = ""
+    """[B6] 修改动作：simplify/expand/rewrite/restyle 等"""
+    modify_constraints: list[str] = Field(default_factory=list)
+    """[B6] 教师修改约束"""
+    evidence_refs: list[str] = Field(default_factory=list)
+    """[契约 v1.0 模块1] 页面级绑定的证据 chunk_id 列表。
+    与 /gen/modify 的 evidence_refs 同义：只允许引用这些 chunk 的原文。
+    Go 端 Modify 从 courseware_page_bindings 取目标节点的绑定后透传。"""
+    intent: dict[str, Any] = Field(default_factory=dict)
+    """教学意图摘要（IntentSummary：topic / style / target_student /
+    key_difficulties / expected_outcomes …）。
+
+    这是「教学意图 → 核心知识点 → 怎么教 → 页面」这条链路里，意图第一次真正抵达
+    表达决策层。**缺席是合法输入**：规划器会退化为只从节点自身推断表达形式，
+    不报错、不缺页。"""
 
 
 class GenContentStatusResponse(BaseModel):
@@ -738,13 +777,6 @@ class ModifyIntentRequest(BaseModel):
     instruction: str = ""
     nodes: list[dict[str, Any]] = Field(default_factory=list)
     modify_session_id: str = ""
-
-
-@app.post("/api/v1/ai/parse_modify")
-async def parse_modify(req: ModifyIntentRequest):
-    if not req.instruction.strip():
-        raise HTTPException(status_code=400, detail="instruction 不能为空")
-    return parse_modify_instruction(req.project_id, req.instruction, req.nodes)
 
 
 def _persist_content_task_sync(content_id: str, data: dict) -> None:
@@ -813,20 +845,182 @@ async def generate_content(req: GenContentRequest):
     )
 
 
+def _plan_deck_safe(intent: Any, nodes: list[dict], evidence: str) -> dict[str, dict]:
+    """规划整份课件的教学表达；任何失败都退回「没有规划」，绝不拖垮内容生成。
+
+    规划是**加分项**：拿不到 plan 时，节点上就没有 teaching_plan / figure /
+    key_conclusion，预览退化成改动前的样子 —— 这比整个内容生成失败好得多。
+    """
+    try:
+        from ai_engine.gen.teaching_plan import plan_deck
+        return plan_deck(intent, nodes, evidence=evidence)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "[Content Pipeline] 教学表达规划失败，本批不挂规划：%s", exc
+        )
+        return {}
+
+
+def _attach_teaching_plan(node: dict[str, Any], plan: Any) -> dict[str, Any]:
+    """把规划器对**这一页**的决策挂到节点上。
+
+    teaching_plan / figure / key_conclusion 都由这里落盘，而不是让讲稿 LLM 回显 ——
+    plan_to_figure 是纯机械映射，表达决策只在规划阶段发生一次；让模型复述一遍，只
+    会在「抄漏了」时制造图示与规划不一致，没有任何好处。
+
+    figure / key_conclusion 只有内容页会消费（page_spec._content_blocks），挂在封面
+    / 测验页上不会改变它们的渲染，所以这里不做页型判断。
+
+    空 dict 与 None 同等对待：它一条决策都没有。挂上去会让下游看到"这页规划过"
+    （`"teaching_plan" in node` 为真）却读不到任何内容，比缺席更难排查。
+    """
+    if not isinstance(plan, dict) or not plan:
+        return node
+    from ai_engine.gen.teaching_plan import plan_to_figure
+
+    merged = {**node, "teaching_plan": plan}
+    conclusion = str(plan.get("key_conclusion") or "").strip()
+    if conclusion:
+        merged["key_conclusion"] = conclusion
+    figure = plan_to_figure(plan)
+    if figure:
+        merged["figure"] = figure
+    return merged
+
+
+#: 交给规划器的参考材料长度上限。规划只需要「不得编造材料中不存在的知识点」这一层
+#: 依据，不需要读全文；塞进整份原文只会把节点树挤出模型窗口。
+_PLAN_EVIDENCE_LIMIT = 2000
+
+
+def _evidence_brief(evidence: Any) -> str:
+    """把 S3 的证据包压成规划器可用的参考材料。
+
+    ``/api/v1/gen/create`` 拿到的是 EvidencePacket 的 dict（``/gen/content`` 拿的是
+    chunk 引用列表，走 ``_load_page_evidence``），其中 ``synthesized_context`` 已是 LLM
+    浓缩过的上下文，正是规划需要的粒度；为空时退回拼接相关 chunk 正文。
+    """
+    if not isinstance(evidence, dict):
+        return ""
+    parts: list[str] = []
+    synthesized = str(evidence.get("synthesized_context") or "").strip()
+    if synthesized:
+        parts.append(synthesized)
+    else:
+        for chunk in evidence.get("relevant_chunks") or []:
+            if not isinstance(chunk, dict):
+                continue
+            text = str(chunk.get("content") or "").strip()
+            if text:
+                parts.append(text)
+            if sum(len(part) for part in parts) >= _PLAN_EVIDENCE_LIMIT:
+                break
+    return "\n\n".join(parts)[:_PLAN_EVIDENCE_LIMIT]
+
+
+#: 讲稿生成结果里可以并回节点的字段。刻意**不含** node_id / title / node_type / type /
+#: content / summary —— 这几个由大纲确定，讲稿生成器无权改写。
+_SCRIPT_MERGE_KEYS = (
+    "script", "segments", "point_details",
+    "key_points", "core_points", "questions", "interactive_questions",
+    "layout_hint", "font_size_hint", "text_alignment", "slide_background",
+)
+
+
+def _merge_script_into_node(node: dict[str, Any], script_data: Any) -> dict[str, Any]:
+    """把讲稿生成结果并回节点，只在讲稿侧**确有内容**时覆盖。
+
+    不能写成 ``{**node, **script_data}``（``_run_content_pipeline`` 的增强分支是那么写的，
+    但那条链路此前从未真实跑过）：``normalize_stage3_scripts`` 会给缺失字段填默认值 ——
+    ``title`` 缺失填 ``node_id``、``key_points`` 缺失填 ``[]``、``node_type`` 取讲稿模型
+    自报的值。整体合并的结果是：讲稿模型漏一个标题，页面上就出现 "n3" 当标题；讲稿模型
+    把封面页报成 content，封面就退回普通内容页。这些都是老师已经确认过的大纲信息。
+
+    只增不减：``None`` / ``""`` / ``[]`` / ``{}`` 一律不覆盖，其余照收 ——
+    ``point_details`` 正是靠这一步才到得了预览与导出。
+    """
+    if not isinstance(script_data, dict):
+        return {**node}
+    merged = {**node}
+    for key in _SCRIPT_MERGE_KEYS:
+        value = script_data.get(key)
+        if value:
+            merged[key] = value
+    return merged
+
+
 def _run_content_pipeline(content_id: str, req: GenContentRequest):
-    """后台内容生成管道：逐节点生成讲稿（同步，daemon 线程）"""
+    """后台内容生成管道：逐节点生成讲稿（同步，daemon 线程）
+
+    [B6] mode=partial 或 target_node_ids 非空时走局部重生成：
+    只重新生成目标节点，其余节点内容与引用关系不变。
+    """
     with _content_tasks_lock:
         task = _content_tasks.get(content_id)
         if not task:
             return
 
     try:
+        # ---- B6: 局部重生成分支 ----
+        if req.target_node_ids and req.mode == "partial":
+            from ai_engine.gen.partial_content import run_partial_pipeline
+            generator = NodeGenerator()
+            # 页面级绑定证据（契约 v1.0 模块1）：教师显式绑到这些页上的 chunk
+            # 优先级高于课件级 context_markdown，放在前面一起作为参考材料。
+            bound_evidence, _bound_used = _load_page_evidence(req.evidence_refs)
+            partial_context = "\n\n".join(
+                part for part in (bound_evidence.strip(), (req.context_markdown or "").strip()) if part
+            )
+            updated_nodes = run_partial_pipeline(
+                nodes=req.nodes,
+                target_node_ids=req.target_node_ids,
+                modify_action=req.modify_action or "rewrite",
+                modify_constraints=req.modify_constraints,
+                context_markdown=partial_context,
+                course_name=req.course_name,
+                generator=generator,
+            )
+            with _content_tasks_lock:
+                task = _content_tasks.get(content_id)
+                if task:
+                    task["nodes"] = updated_nodes
+                    task["status"] = "done"
+                    task["progress_pct"] = 100.0
+                    task["completed_nodes"] = len(req.target_node_ids)
+                    task["total_nodes"] = len(req.nodes)
+                    _content_tasks[content_id] = task
+                _persist_content_task_sync(content_id, task)
+            return
+
         generator = NodeGenerator()
         nodes = req.nodes
         target_ids = set(req.target_node_ids)
         total = len(nodes)
         completed = []
         errors = []
+
+        # 教学表达规划：一次规划整份课件。「这一页该不该出图」只有在全局节奏里才判断
+        # 得准（连着三页都是流程图，第四页就该换一种表达），所以不逐节点调。
+        # 规划失败不阻断生成 —— 见 _plan_deck_safe。
+        bound_evidence, _bound_used = _load_page_evidence(req.evidence_refs)
+        plan_evidence = "\n\n".join(
+            part for part in (bound_evidence.strip(), (req.context_markdown or "").strip()) if part
+        )
+        plans = _plan_deck_safe(req.intent, nodes, plan_evidence)
+
+        # 增强批量生成原本写在循环体内：对 N 个节点会把**整批**讲稿生成 N 次，
+        # 最坏延迟与 token 费用都放大 N 倍。提到循环外只算一次；失败则退回逐节点
+        # 单生成（下面的 script_data is None 分支），行为不劣于改动前。
+        enhanced_scripts: list[dict] = []
+        if req.enhanced:
+            try:
+                enhanced_scripts = generator.generate_enhanced(
+                    nodes, req.context_markdown, req.course_name
+                ).get("scripts", []) or []
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger(__name__).warning(
+                    "[Content Pipeline] 批量增强生成失败，退回逐节点生成：%s", exc
+                )
 
         for idx, node in enumerate(nodes):
             try:
@@ -837,28 +1031,12 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                     _content_tasks[content_id] = task
                 _persist_content_task_sync(content_id, task)
 
-                if req.mode == "partial" and node.get("node_id") not in target_ids:
-                    merged = dict(node)
-                    completed.append(merged)
-                    task["completed_nodes"] = idx + 1
-                    task["nodes"] = list(completed)
-                    with _content_tasks_lock:
-                        _content_tasks[content_id] = task
-                    _persist_content_task_sync(content_id, task)
-                    continue
-
                 node_type = str(node.get("node_type") or node.get("type") or "").strip().lower()
-                generation_node = dict(node)
-                if req.mode == "partial" and req.modify_instruction:
-                    generation_node["content"] = (
-                        f"{node.get('content', '')}\n\n修改要求：{req.modify_instruction}\n"
-                        f"约束：{'；'.join(req.constraints)}"
-                    )
                 if node_type == "interactive":
-                    interactive_items = InteractiveBuilder().build_all(generation_node)
+                    interactive_items = InteractiveBuilder().build_all(node)
                     from ai_engine.gen.export_html5 import render_interactive_html
                     merged = {
-                        **generation_node,
+                        **node,
                         "interactive_items": interactive_items,
                         "content": render_interactive_html(
                             interactive_items,
@@ -867,15 +1045,30 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                         ),
                     }
                 elif req.enhanced:
-                    result = generator.generate_enhanced(nodes, req.context_markdown, req.course_name)
                     script_data = next(
-                        (s for s in result.get("scripts", []) if s.get("node_id") == node.get("node_id")),
-                        {"script": "", "segments": []},
+                        (s for s in enhanced_scripts if s.get("node_id") == node.get("node_id")),
+                        None,
                     )
+                    # 批量结果里没有这一页时逐节点补生成。此前这里既没赋值 merged、
+                    # 也没兜住缺页：首个节点走增强分支会 UnboundLocalError，之后每个
+                    # 节点都会把**上一页**的 merged 再 append 一次，页数直接翻倍。
+                    if script_data is None:
+                        script_data = generator.generate_single(
+                            node, req.course_name,
+                            context_markdown=req.context_markdown,
+                            teaching_plan=plans.get(str(node.get("node_id") or "")),
+                        )
+                    merged = {**node, **script_data}
                 else:
-                    script_data = generator.generate_single(generation_node, req.course_name)
+                    script_data = generator.generate_single(
+                        node, req.course_name,
+                        context_markdown=req.context_markdown,
+                        teaching_plan=plans.get(str(node.get("node_id") or "")),
+                    )
 
-                    merged = {**generation_node, **script_data}
+                    merged = {**node, **script_data}
+
+                merged = _attach_teaching_plan(merged, plans.get(str(node.get("node_id") or "")))
                 completed.append(merged)
                 task["completed_nodes"] = idx + 1
                 task["nodes"] = list(completed)
@@ -884,7 +1077,6 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                 _persist_content_task_sync(content_id, task)
 
             except Exception as node_err:
-                import logging
                 logging.getLogger(__name__).warning(
                     "[Content Pipeline] node %s error: %s", node.get("node_id"), str(node_err)
                 )
@@ -907,7 +1099,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         _persist_content_task_sync(content_id, task)
 
     except Exception as e:
-        import logging, traceback
+        import traceback
         logging.getLogger(__name__).error(
             "[Content Pipeline ERROR] content_id=%s error=%s\n%s",
             content_id, str(e), traceback.format_exc()
@@ -1030,6 +1222,8 @@ class GenFinalizeRequest(BaseModel):
     summary: str = "教师确认终稿"
     outline_id: str = ""
     outline_version: int = 0
+    page_bindings: list[dict[str, Any]] = Field(default_factory=list)
+    presentation: dict[str, Any] = Field(default_factory=dict)
 
 
 class GenFinalizeResponse(BaseModel):
@@ -1089,6 +1283,8 @@ async def gen_finalize(req: GenFinalizeRequest):
             "outline_id": req.outline_id,
             "outline_version": req.outline_version,
         },
+        page_bindings=req.page_bindings,
+        presentation=req.presentation,
     )
 
     return GenFinalizeResponse(
@@ -1127,6 +1323,8 @@ async def render_preview(req: PreviewRequest):
             if snapshot.summary and snapshot.summary not in ("", "课件预览", "初始版本", f"版本 {version_number}"):
                 course_name = snapshot.summary
 
+        # 预览必须走 PreviewRenderer：它是唯一读取 metadata.presentation
+        # （配色/字体/密度）的渲染器，且内部已自行润色（见 preview.py render()）。
         html_content = renderer.render(nodes, course_name)
         return {
             "html": html_content,
@@ -1139,6 +1337,30 @@ async def render_preview(req: PreviewRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"预览渲染失败: {str(e)}")
+
+
+def _load_page_evidence(evidence_refs: list[str] | None) -> tuple[str, list[str]]:
+    """Load only explicitly bound chunks for page-scoped regeneration."""
+    if not evidence_refs:
+        return "", []
+    from importlib import import_module
+
+    store = import_module("ai_engine.rag.router")._store
+    blocks: list[str] = []
+    used: list[str] = []
+    for raw_ref in evidence_refs:
+        ref = str(raw_ref or "").strip()
+        if not ref or ref in used:
+            continue
+        chunk = store.get_chunk(ref)
+        content = str(getattr(chunk, "content", "") or "").strip() if chunk else ""
+        if not content:
+            continue
+        used.append(ref)
+        blocks.append(f"[{ref}] {content}")
+    if not blocks:
+        return "", []
+    return "仅依据以下已绑定证据修改，不得引用其他资料：\n" + "\n\n".join(blocks), used
 
 
 @app.post("/api/v1/gen/modify")
@@ -1193,11 +1415,42 @@ async def modify_nodes(req: ModifyRequest):
 
     # 执行修补
     generator = NodeGenerator(NodeGenConfig()) if req.regenerate else None
-    regenerate_fn = (lambda nid, node: generator.generate_single(node, req.course_name)) if generator else None
+    evidence_context, evidence_used = _load_page_evidence(req.evidence_refs)
+
+    def regenerate_node(nid, node):
+        if not generator:
+            return node
+        applies_to_page = not req.page_id or str(nid) == str(req.page_id)
+        parts = []
+        if applies_to_page and req.user_instruction.strip():
+            parts.append(req.user_instruction.strip())
+        if applies_to_page and evidence_context:
+            parts.append(evidence_context)
+        return generator.generate_single(
+            node,
+            req.course_name,
+            extra_instruction="\n\n".join(parts),
+        )
+
+    regenerate_fn = regenerate_node if generator else None
     try:
         result = await asyncio.to_thread(patcher.apply, nodes, parse_result.commands, regenerate_fn)
     except Exception as e:
         raise _llm_endpoint_error(e, "修改命令执行失败")
+
+    # 把本次实际使用的绑定证据写回目标页；不让请求中的缺失 chunk 伪装成引用。
+    if evidence_used and not result.errors:
+        target_ids = {str(req.page_id)} if req.page_id else {
+            str(command.params.get("node_id"))
+            for command in parse_result.commands
+            if command.params.get("node_id")
+        }
+        for node in result.nodes:
+            if target_ids and str(node.get("node_id")) not in target_ids:
+                continue
+            refs = list(dict.fromkeys([*(node.get("source_chunk_ids") or []), *evidence_used]))
+            node["source_chunk_ids"] = refs
+            node["citation_refs"] = list(refs)
 
     # 保存修改结果
     version_number = None
@@ -1238,6 +1491,9 @@ async def modify_nodes(req: ModifyRequest):
         "changes": result.changes,
         "errors": result.errors,
         "version_number": version_number,
+        "page_id": req.page_id,
+        "citation_refs": evidence_used,
+        "evidence_used": evidence_used,
     }
 
 
@@ -1328,7 +1584,13 @@ async def version_rollback(gen_id: str, req: RollbackRequest):
     vm = get_version_manager()
     try:
         new_ver = vm.revert_to(gen_id, req.target_version)
-        return {"current_version": new_ver.version_number, "status": "done"}
+        return {
+            "current_version": new_ver.version_number,
+            "status": "done",
+            "nodes": [n.model_dump() if hasattr(n, "model_dump") else n for n in new_ver.nodes_snapshot],
+            "page_bindings": new_ver.page_bindings,
+            "presentation": new_ver.presentation,
+        }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1355,6 +1617,8 @@ async def version_load(gen_id: str, v: int | None = None):
         "version_number": snap.version_number,
         "id": snap.id,
         "nodes_snapshot": [n.model_dump() if hasattr(n, "model_dump") else n for n in snap.nodes_snapshot],
+        "page_bindings": snap.page_bindings,
+        "presentation": snap.presentation,
         "summary": snap.summary,
         "locked": snap.locked,
         "created_at": snap.created_at.isoformat() if snap.created_at else "",
@@ -1553,7 +1817,6 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
                     )
                     evidence_dict = synthesized.model_dump() if hasattr(synthesized, "model_dump") else dict(synthesized)
             except Exception as e:
-                import logging
                 logging.getLogger(__name__).warning(
                     "[S3 Evidence] 自动证据获取失败，改为无证据生成: session_id=%s, error=%s",
                     req.session_id, str(e)
@@ -1584,8 +1847,22 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
                 intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
                 outline = builder.build(intent_dict, evidence_dict)
             nodes = outline.get("nodes", [])
+        # Outline responses may use the legacy Go-facing `content` type. The
+        # generation pipeline must validate only the internal TeachingNode
+        # enum, so normalize both confirmed and legacy paths at one boundary.
+        nodes = normalize_generation_nodes(nodes)
+        # S1→S3 自动检索绑定的是整份 PPT 草稿。必须在 AI 任务与版本快照
+        # 层写入引用，不能只依赖前端渲染后补字段，否则刷新/回滚会丢绑定。
+        nodes = bind_evidence_to_draft_nodes(nodes, evidence_dict)
         task.nodes = [TeachingNode.model_validate(node) for node in nodes]
         task.progress_pct = 50.0
+
+        # Stage 3.5: 教学表达规划 —— 先决定"每一页该怎么教"，再写讲稿。
+        #
+        # 这是老师端真正在走的链路（/api/v1/gen/create），与 /gen/content 那条链路共用
+        # 同一套规划器。规划结果不在这里落盘，而是随写稿结果一起经 _attach_teaching_plan
+        # 挂到节点上（见下方合并段）—— 表达决策只发生一次，不让模型复述。
+        plans = _plan_deck_safe(req.intent, nodes, _evidence_brief(evidence_dict))
 
         # Stage 4: 讲稿生成（增强版）
         # 有 markdown 时用 LessonGenerator（已验证 LLM 路径正确），无 markdown 时降级为 NodeGenerator
@@ -1617,23 +1894,26 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             scripts_dict = {"scripts": scripts_list}
         else:
             generator = NodeGenerator()
-            scripts_dict = generator.generate_all(nodes, "", course_name)
+            scripts_dict = generator.generate_all(nodes, "", course_name, plans=plans)
             scripts_list = scripts_dict.get("scripts", [])
             node_ids = {n["node_id"] for n in nodes}
         task.progress_pct = 80.0
 
-        # 合并节点
+        # 合并节点：讲稿结果并回节点，再挂上本页的教学表达规划。
+        #
+        # 这里以前只挑 script / segments 两个键，其余一律丢弃 —— point_details 由
+        # _run_batch_generation 产出、也已通过 schema.normalize_stage3_scripts 的白名单，
+        # 却唯独栽在这一步，于是"要点展开"永远到不了预览与导出。
         merged_nodes = []
         for node in nodes:
             script_data = next(
                 (s for s in scripts_list if s.get("node_id") == node.get("node_id")),
                 {"script": "", "segments": []},
             )
-            merged = {**node}
-            if isinstance(script_data, dict):
-                merged["script"] = script_data.get("script", "")
-                merged["segments"] = script_data.get("segments", [])
-            merged_nodes.append(merged)
+            merged = _merge_script_into_node(node, script_data)
+            merged_nodes.append(
+                _attach_teaching_plan(merged, plans.get(str(node.get("node_id") or "")))
+            )
         task.nodes = merged_nodes
 
         # Stage 5: 内容自适应校验（标注超长节点字号/分页提示）
@@ -1671,7 +1951,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         _persist_task_sync(task)
 
     except Exception as e:
-        import logging, traceback
+        import traceback
         logging.getLogger(__name__).error(
             "[Pipeline ERROR] gen_id=%s task_id=%s error=%s\n%s",
             getattr(task, 'generation_id', '?'), task_id, str(e), traceback.format_exc()
@@ -1802,6 +2082,17 @@ async def _load_export_job(job_id: str) -> ExportJob | None:
         return _export_tasks.get(job_id)
 
 
+def _export_contract_filename(courseware_title: str, version: int, fmt: ExportFormat) -> str:
+    safe_title = "".join("_" if ch in '\\/:*?\"<>|' else ch for ch in courseware_title).strip(" .") or "课件"
+    extension = {
+        ExportFormat.DOCX: "docx",
+        ExportFormat.LESSON_PLAN: "docx",
+        ExportFormat.INTERACTIVE: "html",
+    }.get(fmt, "pptx")
+    return f"{safe_title}_v{version}.{extension}"
+
+
+@app.post("/api/v1/exp/{gen_id}", response_model=ExportStatusResponse)
 @app.post("/api/v1/export/{gen_id}", response_model=ExportStatusResponse)
 async def export_create(gen_id: str, req: ExportRequest):
     """
@@ -1811,20 +2102,34 @@ async def export_create(gen_id: str, req: ExportRequest):
     """
     job_id = f"exp_{uuid.uuid4().hex[:12]}"
 
-    # Export the explicitly selected snapshot; zero retains the latest-version default.
-    vm = get_version_manager()
-    selected = vm.load_version(gen_id, req.version if req.version and req.version > 0 else None)
-    if not selected:
-        raise HTTPException(status_code=404, detail="版本不存在")
-    nodes = selected.nodes_snapshot
+    requested_version = int(req.version or 0)
+    # S4 项目版本以 Go/PostgreSQL 的快照为权威来源。传入 nodes 时直接
+    # 导出该快照，避免 AI Engine 重启或跨存储后找不到同名 generation 版本。
+    if req.nodes:
+        nodes = req.nodes
+        selected_version = requested_version if requested_version > 0 else 1
+    else:
+        # 兼容旧调用：按 generation_id 从 AI Engine 版本存储加载。
+        vm = get_version_manager()
+        selected = vm.load_version(gen_id, requested_version) if requested_version > 0 else vm.load_version(gen_id)
+        if not selected:
+            raise HTTPException(status_code=404, detail="版本不存在")
+        nodes = selected.nodes_snapshot
+        selected_version = selected.version_number
+    courseware_title = (req.courseware_title or "课件").strip() or "课件"
 
     # 创建导出任务
     job = ExportJob(
         job_id=job_id,
         generation_id=gen_id,
         format=req.format,
-        version=selected.version_number,
+        version=selected_version,
         status=ExportStatus.PENDING,
+        metadata={
+            "courseware_title": courseware_title,
+            "version": selected_version,
+            "filename": _export_contract_filename(courseware_title, selected_version, req.format),
+        },
         created_at=datetime.now(),
     )
 
@@ -1844,18 +2149,28 @@ async def export_create(gen_id: str, req: ExportRequest):
                 break
 
     # 后台执行导出
-    asyncio.create_task(_run_export(job_id, nodes, req.format, intent=intent_dict))
+    asyncio.create_task(
+        _run_export(
+            job_id, nodes, req.format, intent=intent_dict,
+            courseware_title=courseware_title, version=selected_version,
+        )
+    )
 
     return ExportStatusResponse(
         job_id=job_id,
+        filename=job.metadata["filename"],
         status=ExportStatus.PENDING,
         download_url=None,
         error=None,
+        courseware_title=courseware_title,
+        version=selected_version,
+        version_no=selected_version,
     )
 
 
 async def _run_export(
     job_id: str, nodes: list[dict], fmt: ExportFormat, intent: dict | None = None,
+    courseware_title: str = "课件", version: int = 1,
 ):
     """后台导出任务"""
     async with _export_lock:
@@ -1867,9 +2182,12 @@ async def _run_export(
         job.status = ExportStatus.EXPORTING
         await _persist_export_job(job)
 
-        course_name = "课件"
+        course_name = courseware_title
         export_dir = Path("data/exports")
         export_dir.mkdir(parents=True, exist_ok=True)
+        job.metadata = job.metadata or {}
+        job.metadata["courseware_title"] = course_name
+        job.metadata["version"] = version
 
         # Word 标准教案（A12 赛题 4b）：LLM 生成 + 确定性 fallback，导出永不空。
         # 产物存 doc_path（.docx），复用既有上传/下载链路，无需改动 upload 循环。
@@ -1992,6 +2310,7 @@ async def _run_export(
         await _persist_export_job(job)
 
 
+@app.get("/api/v1/exp/status/{job_id}", response_model=ExportStatusResponse)
 @app.get("/api/v1/export/status/{job_id}", response_model=ExportStatusResponse)
 async def export_status(job_id: str):
     """
@@ -2004,27 +2323,31 @@ async def export_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="导出任务不存在")
 
-    download_url = None
     meta = job.metadata or {}
-    files = {
-        ext: f"/download/{job_id}.{ext}"
-        for ext, key in (("pptx", "ppt_path"), ("docx", "doc_path"), ("html", "html_path"))
-        if meta.get(key) and Path(meta[key]).is_file()
-        and (ext != "pptx" or not (job.quality_report and job.quality_report.status == "failed"))
-    }
-    if job.status == ExportStatus.DONE:
-        download_url = next(iter(files.values()), None)
+    files: dict[str, str] = {}
+    for ext, key in (("pptx", "ppt_path"), ("docx", "doc_path"), ("html", "html_path")):
+        if not meta.get(key) or not Path(meta[key]).is_file():
+            continue
+        if ext == "pptx" and job.quality_report and job.quality_report.status == "failed":
+            continue
+        files[ext] = f"/download/{job_id}.{ext}"
+    download_url = next(iter(files.values()), None) if job.status == ExportStatus.DONE else None
     return ExportStatusResponse(
         job_id=job.job_id,
         generation_id=job.generation_id,
+        filename=meta.get("filename") or _export_contract_filename(
+            meta.get("courseware_title") or "课件", int(meta.get("version") or job.version or 1), job.format,
+        ),
         status=job.status,
         download_url=download_url,
-        files=files,
         error=job.error,
         upload_status=meta.get("upload_status"),
         minio_path=job.minio_path,
         file_size=job.file_size,
-        version=job.version,
+        courseware_title=meta.get("courseware_title") or "课件",
+        version=int(meta.get("version") or job.version or 1),
+        version_no=int(meta.get("version") or job.version or 1),
+        files=files,
         quality_report=job.quality_report,
     )
 
@@ -2053,7 +2376,15 @@ async def export_download(job_id: str, extension: str):
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "html": "text/html; charset=utf-8",
     }
-    return FileResponse(path, media_type=media_types[extension.lower()], filename=path.name)
+    meta = job.metadata or {}
+    title = str(meta.get("courseware_title") or "课件")
+    safe_title = "".join("_" if ch in '\\/:*?\"<>|' else ch for ch in title).strip(" .") or "课件"
+    version = int(meta.get("version") or job.version or 1)
+    return FileResponse(
+        path,
+        media_type=media_types[extension.lower()],
+        filename=f"{safe_title}_v{version}.{extension.lower()}",
+    )
 
 
 # =============================================================================
@@ -2102,6 +2433,20 @@ class AuthResponse(BaseModel):
     code: int = 200
     message: str = "ok"
     data: Optional[dict] = None
+
+@app.post("/api/v1/ai/parse_modify")
+async def ai_parse_modify(req: ParseModifyRequest):
+    """[B5] 修改意图理解与节点定位：自然语言 → 结构化修改操作。
+
+    对应 Go 端：A6 modify 编排的第一步；低置信度返回 clarification_needed=true。
+    """
+    try:
+        parser = get_modify_intent_parser()
+        result = await asyncio.to_thread(parser.parse, req.instruction, req.nodes)
+        return result
+    except Exception as e:
+        raise _llm_endpoint_error(e, "修改指令解析失败")
+
 
 @app.post("/api/v1/auth/register")
 def auth_register(req: AuthRegisterRequest):

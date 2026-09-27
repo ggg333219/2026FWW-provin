@@ -41,11 +41,11 @@ func TestGenerationCreateInjectsBackendConfirmedOutline(t *testing.T) {
 	defer aiServer.Close()
 
 	outlineService := service.NewOutlineService(handlerOutlineAI{})
-	outline, err := outlineService.Create(context.Background(), service.OutlineCreateRequest{Intent: map[string]any{"topic": "测试课程"}})
+	outline, err := outlineService.CreateOutline(context.Background(), service.OutlineGenerateRequest{SessionID: "sess_001"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = outlineService.Confirm(outline.OutlineID, outline.OutlineVersion); err != nil {
+	if _, err = outlineService.ConfirmOutline(context.Background(), outline.OutlineID, outline.OutlineVersion); err != nil {
 		t.Fatal(err)
 	}
 

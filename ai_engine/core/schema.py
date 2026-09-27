@@ -91,6 +91,34 @@ class NodeType(str, Enum):
     DIVIDER = "divider"
 
 
+def normalize_generation_node_type(raw: Any) -> str:
+    """Normalize outline-facing aliases before validating a TeachingNode.
+
+    The outline API may expose ``content``/``summary`` for compatibility with
+    the Go outline contract, while the generation pipeline uses the stricter
+    TeachingNode enum. Keep that conversion at this boundary instead of
+    widening the internal enum.
+    """
+    value = str(raw or "").strip().lower()
+    if value in {"content", "summary", ""}:
+        return NodeType.SLIDE.value
+    if value in {item.value for item in NodeType}:
+        return value
+    return NodeType.SLIDE.value
+
+
+def normalize_generation_nodes(nodes: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Return copied nodes with an internal-valid node_type/type pair."""
+    normalized: list[dict[str, Any]] = []
+    for raw_node in nodes or []:
+        node = dict(raw_node or {})
+        node_type = normalize_generation_node_type(node.get("node_type") or node.get("type"))
+        node["node_type"] = node_type
+        node["type"] = node_type
+        normalized.append(node)
+    return normalized
+
+
 class ModifyCommandType(str, Enum):
     """S4 修改命令类型。"""
     UPDATE_NODE = "update_node"
@@ -418,6 +446,35 @@ class TeachingNode(BaseModel):
     """
 
     # -------------------------------------------------------------------------
+    # 教学内容表达字段（教学表达规划器链路，见 gen/teaching_plan.py）
+    #
+    # 与 script 字段同理：字段只增不删。本类未声明 extra 策略，吃 pydantic 默认的
+    # extra='ignore' —— 未在此声明的键会在 model_validate 时被静默丢弃，且丢弃点不在
+    # 一处：main.py 的 task.nodes（→ /gen/status 响应）、GenerationVersion 快照落盘、
+    # Redis 恢复、以及 Go 侧 TeachingNodeItem 镜像。新增字段务必四处同步。
+    # -------------------------------------------------------------------------
+    point_details: list[dict[str, Any]] = Field(default_factory=list)
+    """
+    要点展开：[{point, detail}]，由讲稿 LLM 产出（schema.normalize_point_details）。
+    预览与导出都据此渲染右下正文面板。
+    """
+    figure: dict[str, Any] = Field(default_factory=dict)
+    """
+    程序化图示，形状由 gen/page_spec.normalize_figure 定义：
+    flow / compare / cycle / hierarchy / chart / matrix。空 dict 表示本页不出图。
+    """
+    key_conclusion: str = ""
+    """
+    本页大字结论，长度上限 gen/page_spec.MAX_CONCLUSION_CHARS。
+    非空时在「图示 → 正文 → 结论」的顺序里插入 conclusion 区块。
+    """
+    teaching_plan: dict[str, Any] = Field(default_factory=dict)
+    """
+    教学表达规划器对**这一页**的决策（gen/teaching_plan.py）。
+    规划是加分项：空 dict 表示这页没有规划，下游一律「缺失即降级」。
+    """
+
+    # -------------------------------------------------------------------------
     # 排版元数字段（对齐主流开源 AI-PPT 标准化规范）
     # -------------------------------------------------------------------------
     layout_hint: Optional[str] = None
@@ -493,6 +550,10 @@ class GenerationVersion(BaseModel):
     generation_id: str = ""
     version_number: int = 1
     nodes_snapshot: list[TeachingNode] = Field(default_factory=list)
+    page_bindings: list[dict[str, Any]] = Field(default_factory=list)
+    """页面级证据绑定快照，回滚分叉时必须与节点一起恢复。"""
+    presentation: dict[str, Any] = Field(default_factory=dict)
+    """模板、配色、版式等呈现层快照。"""
     summary: str = ""
     """版本的变更摘要（如"修改第3页内容"）"""
     parent_version: Optional[int] = None
@@ -600,10 +661,18 @@ class SearchRequest(BaseModel):
     query: str = ""
     knowledge_base_ids: list[str] = Field(default_factory=list)
     top_k: int = 5
-    min_score: float = 0.6
+    min_score: float = 0.2
+    """相似度阈值，低于此分数的 chunk 不返回。默认 0.2（之前为 0.6 偏高，在 bm25
+    兜底路径或弱 embedding 场景下会把所有候选过滤掉，导致 RAG 静默失效）。"""
+
     scope: str = "course"
+    """检索作用域: course（默认，全库）/ node（限定 node_id）/ page（限定 page_id）。"""
+
     node_id: Optional[str] = None
+    """scope=node 时必填；元数据中含 node_id 的 chunk 才会返回。"""
+
     page_id: Optional[str] = None
+    """scope=page 时必填；元数据中含 page_id 的 chunk 才会返回。"""
 
 
 class SearchResponse(BaseModel):
@@ -686,19 +755,26 @@ class RollbackRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     format: ExportFormat = ExportFormat.PPTX
-    version: Optional[int] = None
+    version: Optional[int] = 0
+    courseware_title: str = ""
+    # S4 项目版本导出时，Go 端的项目快照是权威数据源；允许直接传入
+    # 当前版本节点，避免依赖 AI Engine 进程本地的旧版本目录。
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ExportStatusResponse(BaseModel):
     job_id: str = ""
     generation_id: Optional[str] = None
+    filename: str = ""
     status: ExportStatus = ExportStatus.PENDING
     download_url: Optional[str] = None
     files: dict[str, str] = Field(default_factory=dict)
+    quality_report: Optional[ExportQualityReport] = None
     error: Optional[str] = None
     # 导出产物上传状态（字段只增不删）：uploaded / failed / skipped，None 表示尚未尝试
     upload_status: Optional[str] = None
     minio_path: Optional[str] = None
     file_size: Optional[int] = None
+    courseware_title: Optional[str] = None
     version: Optional[int] = None
-    quality_report: Optional[ExportQualityReport] = None
+    version_no: Optional[int] = None
