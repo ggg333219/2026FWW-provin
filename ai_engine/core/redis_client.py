@@ -274,7 +274,14 @@ class RedisTaskStore:
         if self._use_redis:
             raw = await asyncio.to_thread(self._redis.hgetall, self._key_export(job_id))
             if raw:
-                return self._deserialize(raw)
+                data = self._deserialize(raw)
+                for field in (
+                    "completed_at", "download_url", "error", "file_size",
+                    "minio_path", "quality_report",
+                ):
+                    if data.get(field) == "":
+                        data[field] = None
+                return data
         return self._mem.load_export(job_id)
 
 

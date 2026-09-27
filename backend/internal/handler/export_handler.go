@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"path"
 	"strconv"
@@ -8,21 +9,45 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"smart-teaching-backend/internal/model"
 	"smart-teaching-backend/internal/service"
 )
 
 // ExportHandler S4 导出任务 — HTTP 处理器
 type ExportHandler struct {
-	aiClient       service.AIEngine
-	projectService *service.CoursewareProjectService
+	aiClient       exportAIClient
+	projectService coursewareProjectLookup
 }
 
-func NewExportHandler(aiClient service.AIEngine, projectServices ...*service.CoursewareProjectService) *ExportHandler {
-	var projectService *service.CoursewareProjectService
+type exportAIClient interface {
+	ExportCreate(context.Context, string, service.ExportCreateRequest) (*service.ExportCreateResponse, error)
+	ExportStatus(context.Context, string) (*service.ExportStatusResponse, error)
+	VersionLoad(context.Context, string, int) (*service.VersionSnapshot, error)
+}
+
+type coursewareProjectLookup interface {
+	FindByGeneration(context.Context, string, string) (*model.CoursewareProject, error)
+}
+
+func NewExportHandler(aiClient exportAIClient, projectServices ...coursewareProjectLookup) *ExportHandler {
+	var projectService coursewareProjectLookup
 	if len(projectServices) > 0 {
 		projectService = projectServices[0]
 	}
 	return &ExportHandler{aiClient: aiClient, projectService: projectService}
+}
+
+func (h *ExportHandler) authorizeGeneration(c *gin.Context, genID string) bool {
+	userID := c.GetString("userID")
+	if userID == "" || h.projectService == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "课件不存在"})
+		return false
+	}
+	if _, err := h.projectService.FindByGeneration(c.Request.Context(), userID, genID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "课件不存在"})
+		return false
+	}
+	return true
 }
 
 // CreateV2 provides the canonical generation-scoped export contract.
@@ -30,6 +55,9 @@ func (h *ExportHandler) CreateV2(c *gin.Context) {
 	genID := c.Param("generation_id")
 	if genID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 generation_id"})
+		return
+	}
+	if !h.authorizeGeneration(c, genID) {
 		return
 	}
 	var req service.ExportCreateRequest
@@ -80,10 +108,8 @@ func (h *ExportHandler) CreateV2(c *gin.Context) {
 	}
 	resp.Formats = requestedFormats
 	resp.Version = req.Version
-	if h.projectService != nil && c.GetString("userID") != "" {
-		if p, findErr := h.projectService.FindByGeneration(c.Request.Context(), c.GetString("userID"), genID); findErr == nil {
-			resp.CoursewareTitle = p.Title
-		}
+	if p, findErr := h.projectService.FindByGeneration(c.Request.Context(), c.GetString("userID"), genID); findErr == nil {
+		resp.CoursewareTitle = p.Title
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
@@ -99,6 +125,18 @@ func (h *ExportHandler) StatusV2(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "查询导出状态失败: " + err.Error()})
 		return
 	}
+	if !h.authorizeGeneration(c, resp.GenerationID) {
+		return
+	}
+	for ext := range resp.Files {
+		resp.Files[ext] = "/api/v1/export/download/" + jobID + "/" + ext
+	}
+	if resp.DownloadURL != "" {
+		ext := strings.TrimPrefix(path.Ext(resp.DownloadURL), ".")
+		if ext != "" {
+			resp.DownloadURL = "/api/v1/export/download/" + jobID + "/" + ext
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
 
@@ -107,6 +145,9 @@ func (h *ExportHandler) Create(c *gin.Context) {
 	genID := c.Param("gen_id")
 	if genID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "缺少 gen_id"})
+		return
+	}
+	if !h.authorizeGeneration(c, genID) {
 		return
 	}
 	var req service.ExportCreateRequest
@@ -134,16 +175,18 @@ func (h *ExportHandler) Status(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "查询导出状态失败: " + err.Error()})
 		return
 	}
+	if !h.authorizeGeneration(c, resp.GenerationID) {
+		return
+	}
 	if resp.DownloadURL != "" {
 		extension := strings.TrimPrefix(path.Ext(resp.DownloadURL), ".")
 		if extension == "" {
 			extension = "pptx"
 		}
-		if _, ok := h.aiClient.(interface {
-			ExportDownloadURL(string, string) string
-		}); ok {
-			resp.DownloadURL = "/api/v1/export/download/" + jobID + "/" + extension
-		}
+		resp.DownloadURL = "/api/v1/export/download/" + jobID + "/" + extension
+	}
+	for ext := range resp.Files {
+		resp.Files[ext] = "/api/v1/export/download/" + jobID + "/" + ext
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
@@ -164,6 +207,10 @@ func (h *ExportHandler) Download(c *gin.Context) {
 	})
 	if !ok {
 		c.JSON(http.StatusNotImplemented, gin.H{"code": 501, "message": "当前 AI 客户端不支持导出下载"})
+		return
+	}
+	status, err := h.aiClient.ExportStatus(c.Request.Context(), jobID)
+	if err != nil || !h.authorizeGeneration(c, status.GenerationID) {
 		return
 	}
 	c.Redirect(http.StatusTemporaryRedirect, provider.ExportDownloadURL(jobID, extension))

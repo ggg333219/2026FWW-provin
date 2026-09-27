@@ -64,12 +64,15 @@
         <div v-if="exportStatus === 'done'" class="done-section">
           <span class="done-icon">✅ 导出完成</span>
           <button
-            v-if="exportDownloadUrl"
+            v-if="exportDownloadUrl && !Object.keys(exportFiles).length"
             class="btn btn-sm"
             @click="handleDownload"
           >
             下载文件
           </button>
+          <a v-for="(url, format) in exportFiles" :key="format" class="btn btn-sm" :href="url" :download="`courseware.${format}`">
+            下载 {{ format.toUpperCase() }}
+          </a>
           <button class="btn btn-sm" @click="$emit('reset-export')">重新导出</button>
         </div>
 
@@ -81,6 +84,13 @@
               {{ finding.slide_number ? `第 ${finding.slide_number} 页：` : '' }}{{ finding.message }}
             </li>
           </ul>
+        </div>
+
+        <div v-if="exportStatus === 'failed' && Object.keys(exportFiles).length" class="partial-files">
+          <strong>其他格式仍可下载</strong>
+          <a v-for="(url, format) in exportFiles" :key="format" class="btn btn-sm" :href="url" :download="`courseware.${format}`">
+            下载 {{ format.toUpperCase() }}
+          </a>
         </div>
 
         <!-- 失败 -->
@@ -102,6 +112,7 @@ const props = defineProps({
   exportStatus: { type: String, default: 'idle' },
   exportFormat: { type: String, default: 'pptx' },
   exportDownloadUrl: { type: String, default: '' },
+  exportFiles: { type: Object, default: () => ({}) },
   exportError: { type: String, default: '' },
   exportQualityReport: { type: Object, default: null },
   loading: { type: Boolean, default: false },

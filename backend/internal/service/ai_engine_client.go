@@ -688,10 +688,11 @@ type ExportCreateResponse struct {
 }
 
 type ExportStatusResponse struct {
-	JobID       string `json:"job_id"`
-	Status      string `json:"status"`
-	DownloadURL string `json:"download_url,omitempty"`
-	Error       string `json:"error,omitempty"`
+	JobID        string `json:"job_id"`
+	GenerationID string `json:"generation_id,omitempty"`
+	Status       string `json:"status"`
+	DownloadURL  string `json:"download_url,omitempty"`
+	Error        string `json:"error,omitempty"`
 	// 引擎侧导出产物上传状态等扩展字段（字段只增不删），透传给前端。
 	UploadStatus    string               `json:"upload_status,omitempty"`
 	MinioPath       string               `json:"minio_path,omitempty"`

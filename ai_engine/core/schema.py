@@ -691,8 +691,10 @@ class ExportRequest(BaseModel):
 
 class ExportStatusResponse(BaseModel):
     job_id: str = ""
+    generation_id: Optional[str] = None
     status: ExportStatus = ExportStatus.PENDING
     download_url: Optional[str] = None
+    files: dict[str, str] = Field(default_factory=dict)
     error: Optional[str] = None
     # 导出产物上传状态（字段只增不删）：uploaded / failed / skipped，None 表示尚未尝试
     upload_status: Optional[str] = None

@@ -1907,12 +1907,14 @@ async def _run_export(
                 }
             job.quality_report = ExportQualityReport.model_validate(quality_result)
             if job.quality_report.status == "failed":
-                job.status = ExportStatus.FAILED
+                job.metadata.pop("ppt_path", None)
                 job.error = "PPTX quality validation failed; the artifact is unavailable."
-                async with _export_lock:
-                    _export_tasks[job_id] = job
-                await _persist_export_job(job)
-                return
+                job.status = ExportStatus.FAILED
+                if fmt != ExportFormat.BOTH:
+                    async with _export_lock:
+                        _export_tasks[job_id] = job
+                    await _persist_export_job(job)
+                    return
 
         if fmt in (ExportFormat.BOTH, ExportFormat.DOCX):
             exporter = DOCExporter()
@@ -1933,7 +1935,8 @@ async def _run_export(
             job.metadata["html_path"] = html5["path"]
             job.file_size = html5["file_size"]
 
-        job.status = ExportStatus.DONE
+        if not (job.quality_report and job.quality_report.status == "failed"):
+            job.status = ExportStatus.DONE
 
         # 真实上传 MinIO（导出成功后尽力上传；失败降级为本地路径，任务仍为 done）。
         # 上传段独立捕获异常：任何上传问题都不能把已 DONE 的导出翻转为 FAILED。
@@ -2002,20 +2005,21 @@ async def export_status(job_id: str):
         raise HTTPException(status_code=404, detail="导出任务不存在")
 
     download_url = None
-    if job.status == ExportStatus.DONE:
-        meta = job.metadata or {}
-        if "ppt_path" in meta:
-            download_url = f"/download/{job_id}.pptx"
-        elif "doc_path" in meta:
-            download_url = f"/download/{job_id}.docx"
-        elif "html_path" in meta:
-            download_url = f"/download/{job_id}.html"
-
     meta = job.metadata or {}
+    files = {
+        ext: f"/download/{job_id}.{ext}"
+        for ext, key in (("pptx", "ppt_path"), ("docx", "doc_path"), ("html", "html_path"))
+        if meta.get(key) and Path(meta[key]).is_file()
+        and (ext != "pptx" or not (job.quality_report and job.quality_report.status == "failed"))
+    }
+    if job.status == ExportStatus.DONE:
+        download_url = next(iter(files.values()), None)
     return ExportStatusResponse(
         job_id=job.job_id,
+        generation_id=job.generation_id,
         status=job.status,
         download_url=download_url,
+        files=files,
         error=job.error,
         upload_status=meta.get("upload_status"),
         minio_path=job.minio_path,
@@ -2030,10 +2034,16 @@ async def export_download(job_id: str, extension: str):
     """下载已完成的 PPTX/DOCX/HTML5 导出文件。"""
     job = await _load_export_job(job_id)
 
-    if not job or job.status != ExportStatus.DONE:
+    if not job:
         raise HTTPException(status_code=404, detail="导出文件不存在或任务尚未完成")
 
     key = {"pptx": "ppt_path", "docx": "doc_path", "html": "html_path"}.get(extension.lower())
+    if extension.lower() == "pptx" and job.quality_report and job.quality_report.status == "failed":
+        raise HTTPException(status_code=404, detail="PPTX 未通过质量检查")
+    if job.status != ExportStatus.DONE and not (
+        job.format == ExportFormat.BOTH and key in {"doc_path", "html_path"}
+    ):
+        raise HTTPException(status_code=404, detail="导出文件不存在或任务尚未完成")
     path = Path(job.metadata.get(key, "")) if key else None
     if not path or not path.is_file():
         raise HTTPException(status_code=404, detail="请求的导出格式不存在")

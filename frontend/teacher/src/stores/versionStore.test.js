@@ -75,6 +75,7 @@ describe('versionStore S4 导出闭环（Mock）', () => {
       job_id: 'exp_quality',
       status: 'done',
       download_url: '/download/exp_quality.pptx',
+      files: { pptx: '/download/exp_quality.pptx', docx: '/download/exp_quality.docx' },
       quality_report: {
         status: 'passed_with_warnings',
         slide_count: 3,
@@ -91,5 +92,6 @@ describe('versionStore S4 导出闭环（Mock）', () => {
     expect(store.exportStatus).toBe('done')
     expect(store.exportQualityReport.status).toBe('passed_with_warnings')
     expect(store.exportQualityReport.findings[0].slide_number).toBe(2)
+    expect(store.exportFiles.docx).toContain('/download/exp_quality.docx')
   })
 })

@@ -194,6 +194,7 @@
                       :gen-id="versionStore.genId"
                       :export-status="versionStore.exportStatus"
                       :export-download-url="versionStore.exportDownloadUrl"
+                      :export-files="versionStore.exportFiles"
                       :export-error="versionStore.exportError"
                       :export-quality-report="versionStore.exportQualityReport"
                       :loading="versionStore.loading"

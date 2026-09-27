@@ -1,6 +1,7 @@
 """S4 export quality behavior through the public AI Engine export API."""
 
 import time
+import asyncio
 import zipfile
 from io import BytesIO
 
@@ -25,6 +26,33 @@ class MemoryExportStore:
 
     async def load_export(self, job_id):
         return self.jobs.get(job_id)
+
+
+class SharedRedisStub:
+    def __init__(self):
+        self.hashes = {}
+
+    def hmset(self, key, values):
+        self.hashes[key] = dict(values)
+        return True
+
+    def hgetall(self, key):
+        return self.hashes.get(key, {})
+
+
+class RedisBackedTestStore:
+    def __init__(self, redis):
+        from ai_engine.core.redis_client import RedisTaskStore
+
+        self.store = RedisTaskStore.__new__(RedisTaskStore)
+        self.store._redis = redis
+        self.store._use_redis = True
+
+    async def save_export(self, job_id, data):
+        await self.store.save_export(job_id, data)
+
+    async def load_export(self, job_id):
+        return await self.store.load_export(job_id)
 
 
 def _prepare_generation(tmp_path, monkeypatch, generation_id, snapshots):
@@ -53,7 +81,7 @@ def _poll_export(client, job_id):
         if data["status"] in {"done", "failed"}:
             return data
         time.sleep(0.025)
-    raise AssertionError("export did not reach a terminal state")
+    raise AssertionError(f"export did not reach a terminal state: {data}")
 
 
 def test_selected_version_export_reports_quality_and_remains_downloadable(
@@ -103,6 +131,72 @@ def test_selected_version_export_reports_quality_and_remains_downloadable(
         assert restored["quality_report"] == result["quality_report"]
 
     assert store.jobs[job_id]["quality_report"]["status"] == "passed"
+
+
+def test_status_recovers_from_a_new_store_instance(tmp_path, monkeypatch):
+    redis = SharedRedisStub()
+    store = RedisBackedTestStore(redis)
+    _prepare_generation(tmp_path, monkeypatch, "generation-store-restart", [[{
+        "node_id": "restart-slide", "title": "Persistent export", "type": "content",
+    }]])
+    monkeypatch.setattr(main_module, "_task_store", store)
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/export/generation-store-restart",
+            json={"format": "pptx", "version": 1},
+        )
+        job_id = created.json()["job_id"]
+        expected = _poll_export(client, job_id)
+        assert f"exports:{job_id}" in redis.hashes
+        from ai_engine.core.redis_client import RedisTaskStore
+        persisted = RedisTaskStore._deserialize(redis.hashes[f"exports:{job_id}"])
+        assert persisted["generation_id"] == "generation-store-restart"
+        main_module._export_tasks.pop(job_id)
+        monkeypatch.setattr(main_module, "_task_store", RedisBackedTestStore(redis))
+        assert asyncio.run(main_module._load_export_job(job_id)) is not None
+        restored = client.get(f"/api/v1/export/status/{job_id}").json()
+        assert "quality_report" in restored, restored
+        assert restored["quality_report"] == expected["quality_report"]
+        assert restored["generation_id"] == "generation-store-restart"
+
+
+def test_invalid_pptx_in_both_keeps_docx_downloadable(tmp_path, monkeypatch):
+    _prepare_generation(tmp_path, monkeypatch, "generation-both", [[{
+        "node_id": "both-slide", "title": "Both formats", "type": "content",
+    }]])
+    monkeypatch.setattr(
+        main_module.PPTExporter, "export_to_bytes",
+        lambda *_args, **_kwargs: BytesIO(b"invalid pptx"),
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/export/generation-both",
+            json={"format": "both", "version": 1},
+        )
+        job_id = created.json()["job_id"]
+        result = _poll_export(client, job_id)
+        assert result["status"] == "failed"
+        assert "pptx" not in result["files"]
+        assert "docx" in result["files"]
+        assert client.get(f"/download/{job_id}.pptx").status_code == 404
+        assert client.get(result["files"]["docx"]).status_code == 200
+
+
+@pytest.mark.parametrize("fmt", ["docx", "interactive"])
+def test_non_pptx_exports_do_not_claim_pptx_quality(tmp_path, monkeypatch, fmt):
+    _prepare_generation(tmp_path, monkeypatch, f"generation-{fmt}", [[{
+        "node_id": "non-pptx", "title": "No presentation", "type": "content",
+    }]])
+
+    with TestClient(app) as client:
+        created = client.post(
+            f"/api/v1/export/generation-{fmt}", json={"format": fmt, "version": 1}
+        )
+        result = _poll_export(client, created.json()["job_id"])
+        assert result["status"] == "done"
+        assert result["quality_report"] is None
 
 
 def _empty_pptx_bytes():
