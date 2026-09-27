@@ -11,6 +11,8 @@ Triage: ready-for-agent
 
 在现有异步导出流程中加入 PPTX 产物质量闸门。系统仍按后端实际选择的课件版本生成文件；文件生成后、标记导出完成及开放下载前，执行结构和版面相关检查。导出状态向教师提供稳定的总体结论及可操作的检查摘要；无法交付的产物不得标记为成功或提供下载。诊断结果与对应导出任务关联，便于复查。
 
+当一次请求包含多种格式时，状态按整体任务返回：任一请求格式（包括 PPTX）失败即为 `failed`；`files` 只列出已生成且可交付的格式。PPTX 质量失败必须从 `files` 中排除 PPTX，但不得因此丢弃同一任务中成功生成的 DOCX/HTML5。教师端应将失败原因与仍可下载的格式分别呈现。单格式请求继续使用 `download_url` 兼容字段。
+
 质量判定至少能区分阻止交付的问题和非阻断警告。PPTX 无法解析、包结构损坏或没有有效幻灯片等属于阻断问题；版面边界及疑似文本裁切/溢出属于检查目标，其检测方法、阈值和严重级别由实现根据当前 `python-pptx` 导出结构确定，并通过外部行为测试锁定。检查不应声称能发现其实际无法检测的视觉问题。
 
 ## User Stories
@@ -59,6 +61,7 @@ Triage: ready-for-agent
 - Cover a warning-only result remaining distinguishable from failure and preserving the contract for whether a download is available.
 - Cover version-specific export to ensure the bytes and report refer to the version selected in the export request, not the latest draft.
 - Cover DOCX and HTML5 export regression behavior to prove this PPTX-specific gate does not change other formats.
+- Cover a mixed-format request where PPTX validation fails but a valid DOCX/HTML5 remains independently downloadable; verify the aggregate job stays failed and PPTX remains blocked.
 - Reuse existing export lifecycle tests as prior art, extending them at the API/service boundary rather than relying only on unit tests of the PPTX exporter.
 
 ## Out of Scope
