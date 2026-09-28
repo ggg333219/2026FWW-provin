@@ -622,6 +622,7 @@ class ParseModifyRequest(BaseModel):
     project_id: str = ""
     instruction: str
     nodes: list[dict[str, Any]] = Field(default_factory=list)
+    active_node_id: str = ""  # 教师界面当前选中的页面；「这页」靠它定位
 
 
 _modify_intent_parser: ModifyIntentParser | None = None
@@ -959,7 +960,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
     try:
         # ---- B6: 局部重生成分支 ----
         if req.target_node_ids and req.mode == "partial":
-            from ai_engine.gen.partial_content import run_partial_pipeline
+            from ai_engine.gen.partial_content import CONTENT_ACTIONS, run_partial_pipeline
             generator = NodeGenerator()
             # 页面级绑定证据（契约 v1.0 模块1）：教师显式绑到这些页上的 chunk
             # 优先级高于课件级 context_markdown，放在前面一起作为参考材料。
@@ -976,6 +977,22 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                 course_name=req.course_name,
                 generator=generator,
             )
+
+            # 单页重规划：这一页的正文刚被重写过，「该怎么教」的决策也得跟着换 ——
+            # 与 /gen/modify 同一条理由（完整的说明在那里）：最新的正文配着上一版的
+            # 图示与大字结论，幻灯片上就是一张与新内容对不上的图，而 figure /
+            # key_conclusion 只由规划器落盘，讲稿模型无权改写。
+            # 只碰目标页，且用 plan_node 逐页决策 —— 老师正在改这一页，它出图是对
+            # 这次编辑的回应，不走整份课件的出图配额。
+            if (req.modify_action or "rewrite") in CONTENT_ACTIONS:
+                target_ids = {str(nid) for nid in req.target_node_ids}
+                updated_nodes = [
+                    _attach_teaching_plan(
+                        node, _plan_node_safe(req.intent, node, partial_context), replace=True
+                    ) if str(node.get("node_id")) in target_ids else node
+                    for node in updated_nodes
+                ]
+
             with _content_tasks_lock:
                 task = _content_tasks.get(content_id)
                 if task:
@@ -2425,7 +2442,9 @@ async def ai_parse_modify(req: ParseModifyRequest):
     """
     try:
         parser = get_modify_intent_parser()
-        result = await asyncio.to_thread(parser.parse, req.instruction, req.nodes)
+        result = await asyncio.to_thread(
+            parser.parse, req.instruction, req.nodes, req.active_node_id
+        )
         return result
     except Exception as e:
         raise _llm_endpoint_error(e, "修改指令解析失败")

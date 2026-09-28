@@ -793,9 +793,9 @@ def normalize_text_list(value: Any) -> list[str]:
 def normalize_point_details(value: Any) -> list[dict[str, str]]:
     """把 point_details 归一成 [{"point", "detail"}]。
 
-    这是内容页「要点展开」的正文来源 —— 由 S3（讲稿阶段）为每个要点写 1~2 句展开，
-    所以局部修改（同样走 S3 的 generate_single）能连它一起重生成，改动才在幻灯片上
-    看得见。
+    这是内容页「要点展开」的正文来源 —— 由 S3（讲稿阶段）为每个要点写 1~2 句展开。
+    局部修改走 gen/partial_content.py 的 revise_slide 契约把它连同 summary 一起重写，
+    改动才会落在幻灯片上；只重写 script / segments 是看不见的（它们渲染在折叠的讲稿区）。
 
     放在 schema.py 而不是 gen/page_spec.py，是因为 schema.py 不依赖任何 ai_engine
     子模块，是唯一不会引起循环导入的共享位置（gen/__init__ → node → schema）。

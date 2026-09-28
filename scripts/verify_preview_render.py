@@ -13,6 +13,7 @@
 不依赖网络，不调用 LLM API。
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -126,10 +127,19 @@ def main() -> int:
                     html_out.count('<li class="q-option') >= 5)  # quiz 4 项 + interactive 4 项
     all_ok &= check("quiz 答案选项高亮", '<li class="q-option q-option-answer">' in html_out)
     all_ok &= check("quiz 解析渲染", "解析：冒泡排序最坏情况下需要进行 n(n-1)/2 次比较" in html_out)
+    # 断言的是「这页有没有专属 slide class」，不是「div 上只能有 class 一个属性」——
+    # 外壳自 P2 起还带 data-node-id（局部刷新的锚），所以只匹到 class 为止。
     all_ok &= check("quiz 页专属布局（quiz-slide div）",
-                    '<div class="slide quiz-slide">' in html_out)
+                    'class="slide quiz-slide"' in html_out)
     all_ok &= check("interactive 页专属布局（quiz-slide interactive-slide div）",
-                    '<div class="slide quiz-slide interactive-slide">' in html_out)
+                    'class="slide quiz-slide interactive-slide"' in html_out)
+
+    # a2. 局部刷新的锚：每页都带 data-node-id，且互不重复
+    page_ids = re.findall(r'<div class="slide [^"]*" data-node-id="([^"]*)"', html_out)
+    all_ok &= check("每页都有 data-node-id（局部刷新的锚）",
+                    len(page_ids) == len(SAMPLE_NODES) and all(page_ids))
+    all_ok &= check("data-node-id 与节点一一对应且不重复",
+                    page_ids == [n["node_id"] for n in SAMPLE_NODES])
 
     # b. key_points 视觉高亮（断言渲染产物而非 CSS 定义）
     all_ok &= check("key_points 高亮文本 class（kp-highlight）",

@@ -72,14 +72,17 @@ export const projectModifyApi = {
 
   /**
    * A6 修改编排：自然语言 → 意图解析 → 局部重生成 → 版本快照
+   *
+   * activeNodeId 是教师界面上当前选中的页面，用于解析「这页」这类指示代词；
+   * 不传即退回「按指令里的页号 / 标题定位」。
    * 响应 data: { modified_nodes, all_nodes, intent, previous_version_no, new_version_no, clarification? }
    */
-  modify: (project_id, instruction, nodes) =>
+  modify: (project_id, instruction, nodes, { activeNodeId = '' } = {}) =>
     requestJson(`/api/v1/coursewares/${project_id}/modify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       timeoutMs: MODIFY_LLM_TIMEOUT_MS,
-      body: JSON.stringify({ instruction, nodes }),
+      body: JSON.stringify({ instruction, nodes, active_node_id: activeNodeId || '' }),
     }),
 
   /** 修改记录列表 */

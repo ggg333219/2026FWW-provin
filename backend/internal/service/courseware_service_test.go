@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 )
 
-// ---- fake：只实现 modifyClient 窄接口（ParseModify + GenerateContent）----
+// ---- fake：实现 modifyClient 窄接口（ParseModify + GenerateContent + ContentStatus）----
 
 type fakeModifyAI struct {
 	intent     *ModifyIntent
@@ -15,6 +17,15 @@ type fakeModifyAI struct {
 	genResp    *GenContentStatusResponse
 	genErr     error
 	lastGenReq *GenContentRequest
+
+	// 轮询侧。statusQueue 按序出队、最后一个反复返回（省得为每个用例把
+	// "generating" 重复写 N 遍）；队列为空时退到 statusResp，再为空则一直
+	// "generating"（专门用来测超时）。statusErrFor > 0 时前 N 次查询报错。
+	statusQueue  []*GenContentStatusResponse
+	statusResp   *GenContentStatusResponse
+	statusErr    error
+	statusErrFor int
+	statusCalls  int
 }
 
 func (f *fakeModifyAI) ParseModify(_ context.Context, _ ParseModifyRequest) (*ModifyIntent, error) {
@@ -30,6 +41,24 @@ func (f *fakeModifyAI) GenerateContent(_ context.Context, req GenContentRequest)
 		return nil, f.genErr
 	}
 	return f.genResp, nil
+}
+
+func (f *fakeModifyAI) ContentStatus(_ context.Context, _ string) (*GenContentStatusResponse, error) {
+	f.statusCalls++
+	if f.statusErrFor > 0 && f.statusCalls <= f.statusErrFor {
+		return nil, f.statusErr
+	}
+	if len(f.statusQueue) > 0 {
+		resp := f.statusQueue[0]
+		if len(f.statusQueue) > 1 {
+			f.statusQueue = f.statusQueue[1:]
+		}
+		return resp, nil
+	}
+	if f.statusResp != nil {
+		return f.statusResp, nil
+	}
+	return &GenContentStatusResponse{Status: "generating"}, nil
 }
 
 func sampleTeachingNodes() []TeachingNodeItem {
@@ -90,7 +119,7 @@ func TestModifySnapshotPerCall(t *testing.T) {
 	p := mustCreateProject(t, svc)
 
 	// 第一次修改
-	r1, err := svc.Modify(context.Background(), p.ProjectID, "第二页精简", sampleTeachingNodes())
+	r1, err := svc.Modify(context.Background(), p.ProjectID, "第二页精简", sampleTeachingNodes(), "")
 	if err != nil {
 		t.Fatalf("Modify#1: %v", err)
 	}
@@ -114,7 +143,7 @@ func TestModifySnapshotPerCall(t *testing.T) {
 
 	// 第二、三次修改 → 版本 2、3
 	for i := 0; i < 2; i++ {
-		if _, err := svc.Modify(context.Background(), p.ProjectID, "再改一次", r1.AllNodes); err != nil {
+		if _, err := svc.Modify(context.Background(), p.ProjectID, "再改一次", r1.AllNodes, ""); err != nil {
 			t.Fatalf("Modify#%d: %v", i+2, err)
 		}
 	}
@@ -160,7 +189,12 @@ func TestModifyPartialCarriesCourseNameAndBoundEvidence(t *testing.T) {
 			TargetType: "node", TargetIDs: []string{"node_2"},
 			Action: "expand", Confidence: 0.9,
 		},
-		genResp: &GenContentStatusResponse{Status: "done"},
+		// 与真实引擎一致：POST 只回 content_id 与 "generating"，节点要轮询才有
+		genResp: &GenContentStatusResponse{ContentID: "content_test", Status: "generating"},
+		statusResp: &GenContentStatusResponse{
+			ContentID: "content_test", Status: "done",
+			Nodes: []TeachingNodeItem{{NodeID: "node_2", Title: "冒泡排序", Script: "重生成的讲稿"}},
+		},
 	}
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc) // 项目标题为 "排序算法"
@@ -173,7 +207,7 @@ func TestModifyPartialCarriesCourseNameAndBoundEvidence(t *testing.T) {
 		t.Fatalf("SavePageBindings: %v", err)
 	}
 
-	if _, err := svc.Modify(context.Background(), p.ProjectID, "第二页展开讲讲", sampleTeachingNodes()); err != nil {
+	if _, err := svc.Modify(context.Background(), p.ProjectID, "第二页展开讲讲", sampleTeachingNodes(), ""); err != nil {
 		t.Fatalf("Modify: %v", err)
 	}
 	if ai.lastGenReq == nil {
@@ -195,12 +229,16 @@ func TestModifyPartialWithoutBindingsSendsNoEvidence(t *testing.T) {
 			TargetType: "node", TargetIDs: []string{"node_2"},
 			Action: "simplify", Confidence: 0.9,
 		},
-		genResp: &GenContentStatusResponse{Status: "done"},
+		genResp: &GenContentStatusResponse{ContentID: "content_test", Status: "generating"},
+		statusResp: &GenContentStatusResponse{
+			ContentID: "content_test", Status: "done",
+			Nodes: []TeachingNodeItem{{NodeID: "node_2", Script: "重生成的讲稿"}},
+		},
 	}
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc)
 
-	if _, err := svc.Modify(context.Background(), p.ProjectID, "第二页精简", sampleTeachingNodes()); err != nil {
+	if _, err := svc.Modify(context.Background(), p.ProjectID, "第二页精简", sampleTeachingNodes(), ""); err != nil {
 		t.Fatalf("Modify: %v", err)
 	}
 	if len(ai.lastGenReq.EvidenceRefs) != 0 {
@@ -220,7 +258,7 @@ func TestModifyClarification(t *testing.T) {
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc)
 
-	result, err := svc.Modify(context.Background(), p.ProjectID, "改一下", sampleTeachingNodes())
+	result, err := svc.Modify(context.Background(), p.ProjectID, "改一下", sampleTeachingNodes(), "")
 	if err != nil {
 		t.Fatalf("Modify: %v", err)
 	}
@@ -251,7 +289,7 @@ func TestModifyCanRemoveTeachingText(t *testing.T) {
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc)
 
-	result, err := svc.Modify(context.Background(), p.ProjectID, "去掉第三页讲授文本", sampleTeachingNodes())
+	result, err := svc.Modify(context.Background(), p.ProjectID, "去掉第三页讲授文本", sampleTeachingNodes(), "")
 	if err != nil {
 		t.Fatalf("Modify: %v", err)
 	}
@@ -271,7 +309,7 @@ func TestModifyDeleteAction(t *testing.T) {
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc)
 
-	result, err := svc.Modify(context.Background(), p.ProjectID, "删掉冒泡排序", sampleTeachingNodes())
+	result, err := svc.Modify(context.Background(), p.ProjectID, "删掉冒泡排序", sampleTeachingNodes(), "")
 	if err != nil {
 		t.Fatalf("Modify(delete): %v", err)
 	}
@@ -294,7 +332,7 @@ func TestModifyReorderAction(t *testing.T) {
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc)
 
-	result, err := svc.Modify(context.Background(), p.ProjectID, "首尾换一下", sampleTeachingNodes())
+	result, err := svc.Modify(context.Background(), p.ProjectID, "首尾换一下", sampleTeachingNodes(), "")
 	if err != nil {
 		t.Fatalf("Modify(reorder): %v", err)
 	}
@@ -324,7 +362,7 @@ func TestRollbackClonesVersion(t *testing.T) {
 	// 3 次修改 → v1/v2/v3
 	nodes := sampleTeachingNodes()
 	for i := 0; i < 3; i++ {
-		if _, err := svc.Modify(context.Background(), p.ProjectID, "改", nodes); err != nil {
+		if _, err := svc.Modify(context.Background(), p.ProjectID, "改", nodes, ""); err != nil {
 			t.Fatalf("Modify#%d: %v", i+1, err)
 		}
 	}
@@ -454,5 +492,204 @@ func TestContractVersionSnapshotAndRollbackByID(t *testing.T) {
 	versions, err := svc.Versions(context.Background(), p.ProjectID)
 	if err != nil || len(versions) != 2 {
 		t.Fatalf("history should preserve source and fork: err=%v count=%d", err, len(versions))
+	}
+}
+
+// =============================================================================
+// 局部修改的异步取数 —— 「报已更新但 HTML 没变」的根因回归
+// =============================================================================
+
+// shrinkContentPolling 把轮询参数调到测试量级。
+// 不下调的话，一个超时用例要真等 90 秒。
+func shrinkContentPolling(t *testing.T, interval, budget time.Duration) {
+	t.Helper()
+	prevInterval, prevBudget := contentPollInterval, contentPollBudget
+	contentPollInterval, contentPollBudget = interval, budget
+	t.Cleanup(func() { contentPollInterval, contentPollBudget = prevInterval, prevBudget })
+}
+
+func asyncIntent(action string) *ModifyIntent {
+	return &ModifyIntent{
+		TargetType: "node", TargetIDs: []string{"node_2"},
+		Action: action, Confidence: 0.9,
+	}
+}
+
+// TestModifyWaitsForAsyncContentTask —— 老师报的那个 bug 的正面回归。
+//
+// /gen/content 起一个后台线程后立刻返回，首个响应里的 nodes **恒为空**。旧实现
+// 把这份空结果交给 mergePartialResult，而后者首行就是
+// `if len(partial) == 0 { return base }` —— 原样退回旧节点；可 modifiedIDs 照样
+// 被填成 target_ids，于是对话报「已更新」，而返回给前端的节点一个字节都没变，
+// 预览渲染出来自然一模一样。这个用例钉住：结果必须取自轮询，而不是首个响应。
+func TestModifyWaitsForAsyncContentTask(t *testing.T) {
+	shrinkContentPolling(t, time.Millisecond, time.Second)
+
+	ai := &fakeModifyAI{
+		intent: asyncIntent("simplify"),
+		// 真实引擎的 POST 响应形状：有 content_id，没有 nodes
+		genResp: &GenContentStatusResponse{ContentID: "content_async", Status: "generating"},
+		statusQueue: []*GenContentStatusResponse{
+			{ContentID: "content_async", Status: "generating"},
+			{ContentID: "content_async", Status: "generating"},
+			{ContentID: "content_async", Status: "done", Nodes: []TeachingNodeItem{
+				{NodeID: "node_2", Title: "冒泡排序", Summary: "精简后的正文", Script: "精简后的讲稿"},
+			}},
+		},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+
+	result, err := svc.Modify(context.Background(), p.ProjectID, "第二页精简", sampleTeachingNodes(), "")
+	if err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if got := result.AllNodes[1].Script; got != "精简后的讲稿" {
+		t.Fatalf("异步结果没被取回，讲稿仍是旧的: %q", got)
+	}
+	if got := result.AllNodes[1].Summary; got != "精简后的正文" {
+		t.Fatalf("正文（上屏内容）没被取回: %q", got)
+	}
+	if ai.statusCalls < 3 {
+		t.Fatalf("应轮询到任务结束，实际只查了 %d 次", ai.statusCalls)
+	}
+	if result.AllNodes[0].Script != "原始讲稿1" || result.AllNodes[2].Script != "原始讲稿3" {
+		t.Fatal("非目标页不应变化")
+	}
+	if result.NewVersionNo != 1 {
+		t.Fatalf("应为 v1, 实际 %d", result.NewVersionNo)
+	}
+}
+
+// TestModifyErrorsWhenTaskFinishesWithoutNodes —— 任务自称完成却没有节点，
+// 必须报错，而不是拿旧内容冒充「已更新」。
+func TestModifyErrorsWhenTaskFinishesWithoutNodes(t *testing.T) {
+	shrinkContentPolling(t, time.Millisecond, time.Second)
+
+	ai := &fakeModifyAI{
+		intent:  asyncIntent("rewrite"),
+		genResp: &GenContentStatusResponse{ContentID: "content_empty", Status: "generating"},
+		statusResp: &GenContentStatusResponse{
+			ContentID: "content_empty", Status: "done", Error: "3 个节点生成失败",
+		},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+
+	_, err := svc.Modify(context.Background(), p.ProjectID, "重写第二页", sampleTeachingNodes(), "")
+	if err == nil {
+		t.Fatal("任务完成但无节点时必须报错")
+	}
+	if !strings.Contains(err.Error(), "3 个节点生成失败") {
+		t.Fatalf("错误应带上引擎给的原因, 实际 %v", err)
+	}
+	versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
+	if len(versions) != 0 {
+		t.Fatalf("失败不应产生快照, 实际 %d", len(versions))
+	}
+}
+
+// TestModifyPropagatesEngineFailure —— 引擎报 failed，错误要透上来。
+func TestModifyPropagatesEngineFailure(t *testing.T) {
+	shrinkContentPolling(t, time.Millisecond, time.Second)
+
+	ai := &fakeModifyAI{
+		intent:     asyncIntent("expand"),
+		genResp:    &GenContentStatusResponse{ContentID: "content_bad", Status: "generating"},
+		statusResp: &GenContentStatusResponse{ContentID: "content_bad", Status: "failed", Error: "模型调用超时"},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+
+	_, err := svc.Modify(context.Background(), p.ProjectID, "第二页展开", sampleTeachingNodes(), "")
+	if err == nil || !strings.Contains(err.Error(), "模型调用超时") {
+		t.Fatalf("应透传引擎失败原因, 实际 %v", err)
+	}
+}
+
+// TestModifyErrorsWithoutContentID —— 引擎既没给节点也没给 content_id：
+// 立刻报错，不要空转一整个轮询预算。
+func TestModifyErrorsWithoutContentID(t *testing.T) {
+	shrinkContentPolling(t, time.Millisecond, 50*time.Millisecond)
+
+	ai := &fakeModifyAI{
+		intent:  asyncIntent("simplify"),
+		genResp: &GenContentStatusResponse{Status: "generating"},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+
+	_, err := svc.Modify(context.Background(), p.ProjectID, "第二页精简", sampleTeachingNodes(), "")
+	if err == nil || !strings.Contains(err.Error(), "content_id") {
+		t.Fatalf("无 content_id 应立刻报错, 实际 %v", err)
+	}
+	if ai.statusCalls != 0 {
+		t.Fatalf("无 content_id 就不该发起状态查询, 实际 %d 次", ai.statusCalls)
+	}
+}
+
+// TestModifyToleratesTransientStatusErrors —— 单次状态查询失败不放弃：
+// 任务在引擎侧照跑，网络抖一下还是该把结果取回来。
+func TestModifyToleratesTransientStatusErrors(t *testing.T) {
+	shrinkContentPolling(t, time.Millisecond, time.Second)
+
+	ai := &fakeModifyAI{
+		intent:       asyncIntent("expand"),
+		genResp:      &GenContentStatusResponse{ContentID: "content_flaky", Status: "generating"},
+		statusErr:    errors.New("connection reset by peer"),
+		statusErrFor: 2,
+		statusResp: &GenContentStatusResponse{
+			ContentID: "content_flaky", Status: "done",
+			Nodes: []TeachingNodeItem{{NodeID: "node_2", Script: "抖完之后的讲稿"}},
+		},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+
+	result, err := svc.Modify(context.Background(), p.ProjectID, "第二页展开", sampleTeachingNodes(), "")
+	if err != nil {
+		t.Fatalf("抖动不应导致整体失败: %v", err)
+	}
+	if result.AllNodes[1].Script != "抖完之后的讲稿" {
+		t.Fatalf("抖动恢复后应取回结果, 实际 %q", result.AllNodes[1].Script)
+	}
+}
+
+// TestModifyTimesOutWhenTaskNeverFinishes —— 任务一直不结束：报超时，
+// 而不是无限等下去（前端 MODIFY_LLM_TIMEOUT_MS 是 120s）。
+func TestModifyTimesOutWhenTaskNeverFinishes(t *testing.T) {
+	shrinkContentPolling(t, time.Millisecond, 30*time.Millisecond)
+
+	ai := &fakeModifyAI{
+		intent:  asyncIntent("simplify"),
+		genResp: &GenContentStatusResponse{ContentID: "content_stuck", Status: "generating"},
+		// statusResp 留空 → 永远 generating
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+
+	_, err := svc.Modify(context.Background(), p.ProjectID, "第二页精简", sampleTeachingNodes(), "")
+	if err == nil || !strings.Contains(err.Error(), "超时") {
+		t.Fatalf("应报超时, 实际 %v", err)
+	}
+}
+
+// TestModifyAbortsWhenContextIsCancelled —— 前端断开连接时不该继续空转。
+func TestModifyAbortsWhenContextIsCancelled(t *testing.T) {
+	shrinkContentPolling(t, time.Millisecond, time.Second)
+
+	ai := &fakeModifyAI{
+		intent:  asyncIntent("simplify"),
+		genResp: &GenContentStatusResponse{ContentID: "content_cancel", Status: "generating"},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := svc.Modify(ctx, p.ProjectID, "第二页精简", sampleTeachingNodes(), "")
+	if err == nil || !strings.Contains(err.Error(), "已取消") {
+		t.Fatalf("取消后应中止等待, 实际 %v", err)
 	}
 }

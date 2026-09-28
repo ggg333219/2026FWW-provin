@@ -68,6 +68,51 @@ def _plan_constraint(plan: Any) -> str:
     return "\n".join(lines) + "\n"
 
 
+#: 局部修改时追加到系统提示词的「改的是幻灯片」契约。
+#:
+#: 默认的 generate_single 是**写稿**视角（"生成分段讲授脚本"），而老师说的
+#: "这页减少文字、加个生活案例"改的是**页面上看得见的东西**。不点破这一层，
+#: 模型会把力气全花在 script / segments 上，point_details 常把入参要点复述一遍
+#: —— 讲稿确实变了，幻灯片一字未动，老师看到的就是"对话说已更新，页面没变化"。
+_SLIDE_REVISION_CLAUSE = (
+    "\n【本次是局部修改，改的是幻灯片上看得见的内容】\n"
+    "教师的要求针对**这一页幻灯片**，不只是讲稿。幻灯片上的正文与要点依次来自：\n"
+    "- summary：正文（段落）\n"
+    "- point_details：要点展开（每条 point + detail）\n"
+    "因此：\n"
+    "1. 必须同时返回 summary 与 point_details，并按修改要求重写它们的表述；\n"
+    "2. 严禁把【当前页面内容】里的句子原样抄回 —— 一字不改等于这次修改没有发生；\n"
+    "3. 讲稿（script / segments）要跟着新表述走，不能停在旧内容上；\n"
+    "4. summary 是给学生看的正文，1~3 句、合计不超过 120 字，不要写成讲稿；\n"
+    "5. 不要改动页面身份：标题、页型、node_id 一律保持原样。\n"
+)
+
+
+def _current_slide_context(node: dict[str, Any]) -> str:
+    """把这一页**当前显示的内容**摊给模型看。
+
+    局部修改是「编辑」而不是「重写」。不给它看现状，模型只能照着 core_points 之类的
+    大纲字段重新生成一份，结果往往与原文高度相似 —— 老师拿到的是「改了等于没改」。
+    给出现状之后，「在原文基础上减少文字」才有可以减的对象。
+    """
+    parts: list[str] = []
+    summary = str(node.get("summary") or node.get("content") or "").strip()
+    if summary:
+        parts.append(f"正文：{summary}")
+
+    details = normalize_point_details(node.get("point_details"))
+    if details:
+        lines = [
+            f"- {item['point']}：{item['detail']}" if item.get("detail") else f"- {item['point']}"
+            for item in details
+        ]
+        parts.append("要点展开：\n" + "\n".join(lines))
+
+    if not parts:
+        return ""
+    return "\n【当前页面内容（将被改写）】\n" + "\n".join(parts) + "\n"
+
+
 def _plans_brief(plans: Any, nodes: list[dict[str, Any]]) -> str:
     """把整份课件的逐页规划，拼成批量写稿提示词里的约束块。
 
@@ -267,7 +312,8 @@ class NodeGenerator:
                         max_attempts: Optional[int] = None,
                         extra_instruction: str = "",
                         context_markdown: str = "",
-                        teaching_plan: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                        teaching_plan: Optional[dict[str, Any]] = None,
+                        revise_slide: bool = False) -> dict[str, Any]:
         """生成单个节点的讲稿（供 S4 修补时部分重生成使用）
 
         max_attempts: 收紧 LLM 重试次数（1 = 不重试），None 时按环境变量/默认值。
@@ -278,6 +324,10 @@ class NodeGenerator:
                           不传则 prompt 与之前逐字相同（向后兼容）。
         teaching_plan: 教学表达规划器对**这一页**的决策。非空时作为**约束**注入
                       （见 _plan_constraint），不传则 prompt 与之前逐字相同。
+        revise_slide: 局部修改时置 True —— 把任务框成「改写这一页幻灯片上的表达」，
+                      并把当前的正文 / 要点展开摊给模型（见 _current_slide_context），
+                      返回值里随之多一个 ``summary``。默认 False 时 prompt 与返回形状
+                      都与加这个参数之前逐字相同，新建/批量路径不受影响。
         """
         node_id = str(node.get("node_id") or "node_unknown")
         title = str(node.get("title") or "未命名节点")
@@ -303,6 +353,10 @@ class NodeGenerator:
                 "8. 禁止编造 node_id，不得缺少任何必填字段。\n"
                 "9. 输出严格遵循 JSON Schema，additionalProperties=False。"
             )
+            if revise_slide:
+                # 局部修改时多要一个 summary：它是幻灯片正文（page_spec.body_paragraphs
+                # 优先读 content，其次 summary），不给就改不动页面上的正文段落。
+                system_prompt += _SLIDE_REVISION_CLAUSE
             user_prompt = (
                 f"课程名: {course_name or '未提供'}\n"
                 f"节点标题: {title}\n摘要: {summary}\n"
@@ -310,6 +364,8 @@ class NodeGenerator:
                 f"示例: {json.dumps(examples, ensure_ascii=False)}\n"
                 f"易错点: {json.dumps(confusions, ensure_ascii=False)}\n"
             )
+            if revise_slide:
+                user_prompt += _current_slide_context(node)
             if teaching_plan:
                 user_prompt += "\n" + _plan_constraint(teaching_plan)
             if extra_instruction:
@@ -329,7 +385,7 @@ class NodeGenerator:
                 # prompt 约定 script = 所有 segments.text 拼接，模型漏给 script 时补齐，
                 # 保证两者不会互相矛盾（与 _normalize_enhanced_scripts 同一处理）
                 script = "".join(seg["text"] for seg in segments)
-            return {
+            output = {
                 "node_id": node_id, "title": title,
                 "script": script or fallback["script"],
                 # 不混用 fallback 的 segments：那会和模型给的 script 对不上，
@@ -342,6 +398,11 @@ class NodeGenerator:
                 "reteach_script": self._clean_text(result.get("reteach_script")) or fallback["reteach_script"],
                 "transition": self._clean_text(result.get("transition")) or fallback["transition"],
             }
+            if revise_slide:
+                # 只在局部修改路径上多带这一个键：新建/批量路径的返回形状保持不变。
+                # 空串不写回（由 partial_content 按「有值才覆盖」处理）。
+                output["summary"] = self._clean_text(result.get("summary"))
+            return output
         except Exception:
             return fallback
 

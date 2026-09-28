@@ -11,6 +11,30 @@
       </div>
     </div>
 
+    <!--
+      当前页 —— 对话里说「这页 / 本页 / 当前页」时的所指。
+      不选就退回「按指令里的页号或标题定位」，与加这条之前完全一致。
+    -->
+    <div v-if="liveNodes.length" class="active-page-bar">
+      <span class="apb-label">当前页</span>
+      <select
+        class="apb-select"
+        :value="modifyStore.activeNodeId"
+        :disabled="modifyStore.modifying"
+        aria-label="选择当前页"
+        @change="modifyStore.setActiveNode($event.target.value)"
+      >
+        <option value="">未指定（按指令里的页号定位）</option>
+        <option
+          v-for="(node, index) in liveNodes"
+          :key="node.node_id || index"
+          :value="node.node_id"
+        >
+          第 {{ index + 1 }} 页 · {{ node.title || '未命名节点' }}
+        </option>
+      </select>
+    </div>
+
     <!-- 快捷指令 -->
     <div class="quick-chips">
       <button v-for="chip in modifyStore.quickChips" :key="chip.label"
@@ -51,7 +75,7 @@
     <!-- 输入区 -->
     <div class="input-area">
       <textarea v-model="modifyStore.inputText" rows="2" maxlength="500"
-        placeholder="例如：第三页减少文字，增加一个生活案例"
+        :placeholder="inputPlaceholder"
         :disabled="modifyStore.modifying"
         @keydown.enter.exact.prevent="handleSend"
         class="modify-input"></textarea>
@@ -61,16 +85,22 @@
       </button>
     </div>
 
-    <section v-if="liveNodes.length" class="live-preview" aria-label="节点局部预览">
+    <section v-if="liveNodes.length" class="live-preview" aria-label="页面列表">
       <div class="preview-head">
-        <strong>局部预览</strong>
-        <span>仅更新发生变化的节点</span>
+        <strong>页面</strong>
+        <span>点一行即选中，对话里就能说「这页」</span>
       </div>
       <article v-for="(node, index) in liveNodes" :key="node.node_id || index"
-        :class="['preview-node', { modified: isRecentlyModified(node) }]">
+        :class="['preview-node', { modified: isRecentlyModified(node), active: isActiveNode(node) }]"
+        role="button" tabindex="0"
+        :aria-pressed="isActiveNode(node)"
+        @click="toggleActiveNode(node)"
+        @keydown.enter.prevent="toggleActiveNode(node)"
+        @keydown.space.prevent="toggleActiveNode(node)">
         <div class="preview-node-head">
           <span>第 {{ index + 1 }} 页 · {{ node.title || '未命名节点' }}</span>
-          <span v-if="isRecentlyModified(node)" class="modified-badge">已修改</span>
+          <span v-if="isActiveNode(node)" class="active-badge">当前页</span>
+          <span v-else-if="isRecentlyModified(node)" class="modified-badge">已修改</span>
         </div>
         <p>{{ node.summary || node.content || node.script || '暂无内容' }}</p>
       </article>
@@ -123,6 +153,15 @@ const liveNodes = computed(() => generationStore.currentScriptNodes?.length
   ? generationStore.currentScriptNodes
   : outlineStore.nodes)
 const isRecentlyModified = (node) => modifyStore.recentlyModifiedIds.includes(node.node_id)
+// 选中页时直接教老师说「这页」—— 这是最短的一句指令
+const inputPlaceholder = computed(() => modifyStore.activeNodeId
+  ? '例如：这页减少文字，加一个生活案例'
+  : '例如：第三页减少文字，增加一个生活案例')
+const isActiveNode = (node) => !!node?.node_id && node.node_id === modifyStore.activeNodeId
+const toggleActiveNode = (node) => {
+  // 再点一次取消选中，回到「按指令里的页号定位」
+  modifyStore.setActiveNode(isActiveNode(node) ? '' : node.node_id)
+}
 const previewVersion = (version) => { selectedVersion.value = version }
 const changeKind = (version) => /风格|样式|模板|配色|字体|版式|style|template/i.test(version?.modify_instruction || '') ? 'style' : 'content'
 const handleGlobalKeydown = (event) => { if (event.key === 'Escape') selectedVersion.value = null }
@@ -130,11 +169,17 @@ onMounted(() => window.addEventListener('keydown', handleGlobalKeydown))
 onBeforeUnmount(() => window.removeEventListener('keydown', handleGlobalKeydown))
 
 // 节点转 TeachingNodeItem 格式（outlineStore.nodes → Go TeachingNodeItem JSON）
+//
+// 整节点透传（`...n`）而不是手工列字段：幻灯片真正画的是 point_details / figure /
+// key_conclusion / teaching_plan，漏掉任何一个，都等于在这一跳把引擎的修改丢掉 ——
+// 对话里报「已更新」，页面上却是「改了看不见」。引擎侧每加一个节点字段，
+// 手工白名单就得同步一次，这条链路上没有谁会记得。
 function nodesForApi() {
   const source = generationStore.currentScriptNodes?.length
     ? generationStore.currentScriptNodes
     : outlineStore.nodes
   return (source || []).map((n) => ({
+    ...n,
     node_id: n.node_id,
     title: n.title,
     summary: n.summary,
@@ -260,6 +305,28 @@ watch(() => modifyStore.messages.length, scrollToBottom)
 }
 .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .icon-btn:hover:not(:disabled) { background: #eee; }
+
+.active-page-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eee;
+  background: #f6f9ff;
+}
+.apb-label { font-size: 12px; color: #4a5b70; white-space: nowrap; }
+.apb-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid #ccd8e6;
+  border-radius: 6px;
+  background: #fff;
+  color: #33443e;
+  cursor: pointer;
+}
+.apb-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .quick-chips {
   display: flex;
@@ -416,8 +483,12 @@ watch(() => modifyStore.messages.length, scrollToBottom)
 .preview-head,.preview-node-head,.history-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .preview-head { margin-bottom:8px; font-size:12px; }
 .preview-head span { color:#78828c; font-size:11px; }
-.preview-node { margin:6px 0; padding:8px; border:1px solid #e0e7e4; border-radius:8px; background:#fff; transition:border-color .25s,box-shadow .25s,background .25s; }
+.preview-node { margin:6px 0; padding:8px; border:1px solid #e0e7e4; border-radius:8px; background:#fff; cursor:pointer; transition:border-color .25s,box-shadow .25s,background .25s; }
+.preview-node:hover { background:#f7faf9; }
+.preview-node:focus-visible { outline:2px solid #4a90d9; outline-offset:2px; }
+.preview-node.active { border-color:#4a90d9; background:#f4f8ff; box-shadow:inset 3px 0 0 #4a90d9; }
 .preview-node.modified { border-color:#24a36f; background:#edfff7; box-shadow:0 0 0 3px rgba(36,163,111,.14); animation:modifiedPulse 2s ease-out; }
+.active-badge { padding:2px 6px; border-radius:999px; background:#4a90d9; color:#fff; font-size:10px; white-space:nowrap; }
 .preview-node-head { color:#33443e; font-size:12px; font-weight:650; }
 .preview-node p,.history-nodes p { margin:5px 0 0; color:#66736f; font-size:11px; line-height:1.45; white-space:pre-wrap; }
 .preview-node p { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:3; }

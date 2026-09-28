@@ -29,6 +29,14 @@ MODIFY_ACTIONS = ("simplify", "expand", "delete", "add", "reorder", "restyle", "
 TARGET_TYPES = ("node", "page", "global", "style")
 CONFIDENCE_THRESHOLD = 0.6
 
+#: 需要「指得动某一页」的两个动作集。
+#: `_NODE_ACTIONS` 是「没有目标就必须追问」的那一组；`active_node_id` 只在这组里兜底
+#: —— reorder / add 的目标语义不同（「当前页和下一页交换」要两个 id），强行套用只会改错。
+_NODE_ACTIONS = ("simplify", "expand", "delete", "rewrite")
+
+#: 指示代词。老师说「这页」时，所指由 UI 选中决定，不让模型猜。
+_DEICTIC_TERMS = ("这页", "这一页", "本页", "当前页", "这张", "此页")
+
 
 def build_modify_intent_schema() -> dict[str, Any]:
     """结构化输出的 JSON Schema（chat_with_schema ①级约束）。"""
@@ -100,14 +108,45 @@ _SYSTEM_PROMPT = """你是课件修改指令解析器。教师会用自然语言
 6. confidence：0~1，指令含糊（无明确目标/互相矛盾）时给低分。
 7. clarification_needed：confidence 不足或存在歧义时为 true，并给 clarification_question（一句追问）。
 8. presentation：只有 restyle 时填写样式层字段；不确定的字段返回空字符串，禁止修改正文内容。
+9. 指令里出现「这页 / 本页 / 当前页 / 这张 / 此页」这类指示代词时，target_ids 必须是**教师当前选中的页面**（在下面的用户消息里给出）。选中页为空时才按上下文推断。
 
 判断示例：
 - "第三页太复杂，减少文字，增加一个生活案例" → target=node_3, action=simplify, secondary=[expand], constraints=["增加生活案例"]
 - "把第二部分和第三部分换一下" → action=reorder, target_ids=[node_2, node_3]
 - "整体风格换成科技感" → target_type=style, action=restyle, constraints=["科技感"]
 - "删掉练习那页" → action=delete, 目标为含"练习"的节点
-- "这页讲得不清楚，重新写" → action=rewrite
+- "这页讲得不清楚，重新写" → action=rewrite, target_ids=[教师当前选中的页面]
 """
+
+
+def _resolve_active_target(
+    instruction: str,
+    target_ids: list[str],
+    action: str,
+    target_type: str,
+    active_node_id: str,
+    valid_ids: set[str],
+) -> list[str]:
+    """让「这页」有所指：命中时用界面选中页覆盖模型的猜测。
+
+    两种命中方式，都只在 `_NODE_ACTIONS` 那组动作上生效：
+
+      1. 指令里出现指示代词（「这页」）→ 直接采纳选中页。模型看到的只有标题和摘要，
+         让它去猜「这页」是哪页，本来就是件它无从知道的事。
+      2. 模型没定位到任何页 → 用选中页兜底，不再回一句「请说明是哪一页」。
+         选中页是教师刚刚用手指点的，比追问更接近他的意思。
+
+    显式页号（「第三页」）不带指示代词，因此不受影响：模型选中了谁就是谁。
+    """
+    if action not in _NODE_ACTIONS or target_type not in ("node", "page"):
+        return target_ids
+    active = str(active_node_id or "").strip()
+    if not active or active not in valid_ids:
+        # 未选中或选中页已不在当前节点树里（换过版本/删过页）→ 退回模型结果
+        return target_ids
+    if any(term in (instruction or "") for term in _DEICTIC_TERMS):
+        return [active]
+    return target_ids or [active]
 
 
 class ModifyIntentParser:
@@ -124,8 +163,14 @@ class ModifyIntentParser:
             )
         return self._llm
 
-    def parse(self, instruction: str, nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    def parse(self, instruction: str, nodes: list[dict[str, Any]], active_node_id: str = "") -> dict[str, Any]:
         """解析修改指令。
+
+        Args:
+            instruction: 教师的自然语言修改指令。
+            nodes: 当前大纲/内容快照。
+            active_node_id: 教师界面上当前选中的页面。老师说「这页」时用它定位，
+                不再依赖模型从标题里猜 —— 没有它，「这页加个例子」只会得到一句追问。
 
         Returns:
             {target_type, target_ids, action, secondary_actions,
@@ -148,8 +193,10 @@ class ModifyIntentParser:
             ensure_ascii=False,
         )
 
+        active = str(active_node_id or "").strip()
         user_prompt = (
             f"大纲快照（{len(nodes or [])} 个节点）：\n{nodes_brief}\n\n"
+            f"教师当前选中的页面：{active or '（未选中）'}\n\n"
             f"教师修改指令：{instruction}"
         )
 
@@ -164,7 +211,7 @@ class ModifyIntentParser:
             logger.warning("[parse_modify] LLM 调用失败: %s", exc)
             return self._clarify("AI 服务暂不可用，请稍后重试或换一种说法。")
 
-        return self._normalize(result, nodes or [])
+        return self._normalize(result, nodes or [], active, instruction)
 
     # ------------------------------------------------------------------
 
@@ -190,7 +237,13 @@ class ModifyIntentParser:
             return {key: "" for key in keys}
         return {key: str(value.get(key) or "").strip() for key in keys}
 
-    def _normalize(self, result: Any, nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    def _normalize(
+        self,
+        result: Any,
+        nodes: list[dict[str, Any]],
+        active_node_id: str = "",
+        instruction: str = "",
+    ) -> dict[str, Any]:
         """LLM 返回容错归一：非 dict / 枚举外值 / 越界 node_id 收敛到安全值。"""
         if not isinstance(result, dict):
             return self._clarify("指令解析失败，请换一种说法（例如“第三页减少文字”）。")
@@ -210,8 +263,11 @@ class ModifyIntentParser:
         target_ids = [
             str(t) for t in (result.get("target_ids") or []) if str(t) in valid_ids
         ]
+        target_ids = _resolve_active_target(
+            instruction, target_ids, action, target_type, active_node_id, valid_ids
+        )
         # 节点类动作但没定位到合法 id → 需要澄清
-        if action in ("simplify", "expand", "delete", "rewrite") and target_type in ("node", "page") and not target_ids:
+        if action in _NODE_ACTIONS and target_type in ("node", "page") and not target_ids:
             return self._clarify("没有定位到要修改的节点，请说明是哪一页（例如“第三页”）。")
 
         secondary = [a for a in (result.get("secondary_actions") or []) if a in MODIFY_ACTIONS and a != action]

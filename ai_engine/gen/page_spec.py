@@ -10,8 +10,11 @@
 现在三者都只消费本模块的 ``build_page_spec``（导出侧原先的 ``_main_items`` /
 ``_select_visualization`` 已改为读区块），差异只剩**摆版方式**。
 
-局部修改（gen/partial_content.py）只覆盖 `script` / `segments`，后两个渲染器恰好
-都不读它们，于是「改了看不见」，且两端内容对不上。
+局部修改（gen/partial_content.py）曾经只覆盖 `script` / `segments`，后两个渲染器恰好
+都不读它们，于是「改了看不见」，且两端内容对不上。现在那条路径按本模块的角色划分
+回写：**ROLE_PRIMARY 的字段（summary / point_details）必须写回**，`script` /
+`segments` 只是跟着走；`figure` / `key_conclusion` 由教学表达规划器重新决策
+（见 main.py 的 _run_content_pipeline）—— 它们本来就只由规划阶段落盘。
 
 本模块把「页面由哪些区块构成、每个区块什么角色」抽成一份中间表示（IR），
 让渲染器只负责**摆版**、不负责**决定内容**。与 gen/presentation.py 对样式层
@@ -291,7 +294,8 @@ def normalize_point_details(node: dict[str, Any]) -> list[dict]:
     """把节点上的 point_details 归一成 [{"point", "detail"}]。
 
     这是内容页的正文来源 —— 由 S3（讲稿阶段）为每个要点写 1~2 句展开，所以局部
-    修改（同样走 S3 的 generate_single）能连它一起重生成，改动才在幻灯片上看得见。
+    修改（partial_content 的 revise_slide 契约）能连它一起重生成，改动才在幻灯片上
+    看得见。
 
     任一字段为空的条目直接丢弃；`point` 缺失时用 `detail` 兜底，避免出现只有标题
     没有展开的空壳。

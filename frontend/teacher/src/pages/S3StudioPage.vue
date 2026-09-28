@@ -204,12 +204,19 @@
               新窗口打开
             </button>
           </div>
+          <!--
+            走 srcdoc 而不是 data: URL：srcdoc 继承父源，父页面才拿得到 contentDocument，
+            局部修改后可以只把变了的页原地换掉（见 utils/previewPatch.js）。
+            sandbox 保持 allow-same-origin，去掉它这条链路就断了。
+          -->
           <iframe
-            v-if="previewFrameSrc"
-            :src="previewFrameSrc"
+            v-if="previewSrcDoc"
+            ref="previewFrameEl"
+            :srcdoc="previewSrcDoc"
             class="preview-frame"
             sandbox="allow-scripts allow-same-origin"
             title="课件预览"
+            @load="previewFrameReady = true"
           ></iframe>
           <div v-else class="preview-placeholder">
             预览将在生成完成后自动加载
@@ -269,7 +276,16 @@
             v-for="page in generationPages"
             :key="page.page_id"
             class="page-item"
-            :class="[`page-status-${page.status}`, { 'page-modified': modifyStore.recentlyModifiedIds.includes(page.node_id) }]"
+            :class="[`page-status-${page.status}`, {
+              'page-modified': modifyStore.recentlyModifiedIds.includes(page.node_id),
+              'page-active': isActivePage(page),
+            }]"
+            role="button"
+            tabindex="0"
+            :aria-pressed="isActivePage(page)"
+            @click="selectPage(page)"
+            @keydown.enter.prevent="selectPage(page)"
+            @keydown.space.prevent="selectPage(page)"
           >
             <div class="page-item-left">
               <span class="page-order">第 {{ page.page_order }} 页</span>
@@ -395,6 +411,7 @@ import { teacherV1Api } from "../services/v1";
 import { projectModifyApi } from "../services/v1/projectModifyApi";
 import { API_BASE, AI_API_BASE } from "../config/api";
 import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline } from "../utils/intentEvidence";
+import { patchPreview, PATCH_MODE } from "../utils/previewPatch";
 
 const generationStore = useGenerationStore();
 const outlineStore = useOutlineStore();
@@ -413,7 +430,25 @@ const generateMode = ref("page_incremental");
 const genError = ref("");
 const generationPages = ref([]);
 const regeneratingPageId = ref("");
-const previewFrameSrc = ref("");
+const previewFrameEl = ref(null);
+/** iframe 当前承载的文档。补丁成功时不更新它 —— 更新了 Vue 就会重设 srcdoc，等于整份重载。 */
+const previewSrcDoc = ref("");
+/** iframe 里的文档已经加载完，contentDocument 可用。 */
+const previewFrameReady = ref(false);
+const activePageLabel = computed(() => {
+  const nodeId = modifyStore.activeNodeId;
+  if (!nodeId) return "";
+  const index = generationPages.value.findIndex((page) => page.node_id === nodeId);
+  if (index < 0) return "";
+  const page = generationPages.value[index];
+  const title = page.title || page.node_title || "";
+  return `第 ${page.page_order || index + 1} 页${title ? ` · ${title}` : ""}`;
+});
+const isActivePage = (page) => !!page?.node_id && page.node_id === modifyStore.activeNodeId;
+const selectPage = (page) => {
+  // 再点一次取消选中 —— 取消后指令里的显式页号（「第三页」）仍然照常生效
+  modifyStore.setActiveNode(isActivePage(page) ? "" : page.node_id);
+};
 const templateId = ref("default");
 const palette = ref("classic");
 const layoutMode = ref("balanced");
@@ -435,7 +470,15 @@ const evidenceBootstrapError = ref("");
 const requiresAutomaticEvidence = computed(() => String(route.query.auto_evidence || "") === "1");
 
 const asyncActivity = computed(() => {
-  if (modifyStore.modifying) return { title: "AI 正在修改课件", detail: "正在理解指令并局部更新相关页面，完成后会自动刷新预览。" };
+  if (modifyStore.modifying) {
+    // 说得出是哪一页，老师就知道自己刚才那句点中了没有，不必等结果回来
+    return {
+      title: "AI 正在修改课件",
+      detail: activePageLabel.value
+        ? `正在修改${activePageLabel.value}，完成后预览里只有这一页会更新。`
+        : "正在理解指令并局部更新相关页面，完成后会自动刷新预览。",
+    };
+  }
   if (materialStore.searching) return { title: "正在检索资料与证据", detail: "正在从知识库筛选并融合可追溯引用。" };
   if (generationStore.isGenerating) return { title: "正在生成课件内容", detail: generationStore.generateStageText || "AI 正在逐页生成，请保持当前页面打开。", progress: generationStore.generateProgress || 0 };
   if (interactiveStore.loading) return { title: "正在生成互动内容", detail: "正在构建可预览的 HTML5 互动资源。" };
@@ -614,9 +657,32 @@ watch(() => generationStore.currentScriptNodes, (nodes) => {
     };
   });
 }, { deep: true });
-watch(() => generationStore.previewHtml, (html) => {
-  previewFrameSrc.value = html ? `data:text/html;charset=utf-8,${encodeURIComponent(html)}` : "";
-});
+/**
+ * 把新渲染的预览交给 iframe。
+ *
+ * 首次（或上一次走了整份重设）时设 `srcdoc`；之后按 `data-node-id` 只换变了的页，
+ * 滚动位置、其余页与展开的讲稿都不动。补丁不适用时 `patchPreview` 自己返回
+ * `'srcdoc'`，这里退回整份重设 —— 与改造前行为一致，只是慢一点，不会白屏。
+ */
+function applyPreviewHtml(html) {
+  if (!html) {
+    previewSrcDoc.value = "";
+    previewFrameReady.value = false;
+    return;
+  }
+  const iframe = previewFrameEl.value;
+  if (!iframe || !previewFrameReady.value) {
+    previewSrcDoc.value = html;
+    return;
+  }
+  const { mode } = patchPreview(iframe, html);
+  if (mode === PATCH_MODE.SRCDOC) {
+    previewFrameReady.value = false;
+    previewSrcDoc.value = html;
+  }
+}
+
+watch(() => generationStore.previewHtml, applyPreviewHtml);
 onBeforeUnmount(() => { projectStore.saveNow(draftSnapshot()).catch(() => {}); });
 onBeforeRouteLeave(async () => { await projectStore.saveNow(draftSnapshot()).catch(() => {}); });
 
@@ -711,15 +777,13 @@ async function handleStartGeneration() {
     await loadGenerationStatus();
     bindEvidenceToWholeDraft();
 
-    // 渲染预览
+    // 渲染预览 —— renderCoursewarePreview 写 generationStore.previewHtml，
+    // 由上面的 watcher 统一交给 iframe（首次设 srcdoc，之后只补变了的页）。
     generationStore.setGenerateProgress(92, "正在加载预览");
-    const html = await generationStore.renderCoursewarePreview(
+    await generationStore.renderCoursewarePreview(
       outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
       { genId },
     );
-    if (html) {
-      previewFrameSrc.value = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
-    }
 
     generationStore.setGenerateProgress(100, "生成完成");
   } catch (err) {
@@ -1482,6 +1546,16 @@ function handleError(msg) {
   background: #fff;
   border: 1.5px solid #e2ece6;
   border-radius: 10px;
+  cursor: pointer;
+}
+.page-item:focus-visible {
+  outline: 2px solid #4a90d9;
+  outline-offset: 2px;
+}
+/* 选中页 = 对话里「这页」的所指，所以用比 hover 更实的左边条标出来 */
+.page-item.page-active {
+  border-color: #4a90d9;
+  box-shadow: inset 3px 0 0 #4a90d9;
 }
 .page-item.page-modified {
   border-color: #24a36f;

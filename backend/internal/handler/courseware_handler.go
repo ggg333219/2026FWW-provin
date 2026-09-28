@@ -198,6 +198,8 @@ func (h *CoursewareHandler) Modify(c *gin.Context) {
 	var req struct {
 		Instruction string                     `json:"instruction"`
 		Nodes       []service.TeachingNodeItem `json:"nodes"`
+		// 教师界面当前选中的页面；「这页加个例子」靠它定位。可选。
+		ActiveNodeID string `json:"active_node_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
@@ -207,7 +209,7 @@ func (h *CoursewareHandler) Modify(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "instruction 不能为空"})
 		return
 	}
-	result, err := h.svc.Modify(c.Request.Context(), projectID, req.Instruction, req.Nodes)
+	result, err := h.svc.Modify(c.Request.Context(), projectID, req.Instruction, req.Nodes, req.ActiveNodeID)
 	if err != nil {
 		h.mapError(c, err)
 		return
