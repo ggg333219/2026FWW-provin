@@ -32,7 +32,11 @@ if str(_ROOT) not in sys.path:
 
 from ai_engine import main as main_module  # noqa: E402
 from ai_engine.core.llm import LLMClient  # noqa: E402
-from ai_engine.core.schema import IntentSummary, TeachingNode  # noqa: E402
+from ai_engine.core.schema import (  # noqa: E402
+    IntentSummary,
+    TeachingNode,
+    normalize_generation_nodes,
+)
 from ai_engine.gen import teaching_plan as tp  # noqa: E402
 from ai_engine.gen.node import NodeGenerator  # noqa: E402
 from ai_engine.gen.version import VersionManager  # noqa: E402
@@ -48,8 +52,14 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def _deterministic_planner(monkeypatch):
-    """强制规划器走确定性兜底：不碰网络，也不受 AI_GEN_MODE 影响。"""
-    monkeypatch.setattr(tp, "_use_llm", lambda llm=None: None)
+    """不构造真实 LLM 客户端：显式传入的 fake 照用，其余一律走确定性兜底。
+
+    掐掉的只是 ``_use_llm`` 里「从 settings 新建客户端」那一支，不是让它恒返回 ``None``
+    —— 后者会把测试自己传进来的 fake 也一并吞掉（``_use_llm`` 首行本就是
+    ``if llm is not None: return llm``），于是「规划器收得到意图吗」这类用例会静默地
+    退化成启发式路径，测了个寂寞。
+    """
+    monkeypatch.setattr(tp, "_use_llm", lambda llm=None: llm)
 
 
 # =============================================================================
@@ -182,8 +192,18 @@ def test_merge_script_ignores_empty_and_non_dict():
 # =============================================================================
 
 def _planned_node() -> dict:
-    node = {"node_id": "n1", "title": "复杂度基础", "node_type": "content",
-            "summary": "复杂度描述算法规模增长趋势。", "key_points": ["时间复杂度"]}
+    """一个走完「大纲别名 → 内部枚举」这一跳的节点，与管线里的形态一致。
+
+    ``node_type`` 刻意写成 ``"content"``：这是大纲接口（Go outline 契约）真实上送的
+    值，由 :func:`normalize_generation_nodes` 翻成内部枚举 ``"slide"``
+    （``main.py:1840``，就在规划器上游两行）。别名直接喂给 ``TeachingNode.model_validate``
+    会被枚举拒掉 —— 内部枚举**不放宽**是既定裁定（见 ``normalize_generation_node_type``
+    的 docstring），所以这里先过一遍归一化，而不是把 fixture 改成 ``"slide"`` 绕开边界。
+    """
+    node = normalize_generation_nodes([{
+        "node_id": "n1", "title": "复杂度基础", "node_type": "content",
+        "summary": "复杂度描述算法规模增长趋势。", "key_points": ["时间复杂度"],
+    }])[0]
     plan = {
         "node_id": "n1", "teaching_goal": "理解增长趋势",
         "visual_type": "flow", "visual_structure": ["输入规模", "增长趋势", "复杂度"],
