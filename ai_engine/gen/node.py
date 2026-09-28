@@ -98,6 +98,39 @@ def _plans_brief(plans: Any, nodes: list[dict[str, Any]]) -> str:
     )
 
 
+#: 由大纲确定、讲稿生成器无权改写的键。讲稿模型的输出里也带 node_id / title（它照抄
+#: 输入），整体合并回去等于让它对页面身份说话 —— 模型漏一个标题，页面上就出现 "n3"
+#: 当标题；把封面页报成 content，封面就退回普通内容页。都是老师确认过的信息。
+_SCRIPT_PROTECTED_KEYS = frozenset({
+    "node_id", "title", "node_type", "type", "content", "summary",
+})
+
+
+def merge_script_into_node(node: dict[str, Any], script_data: Any) -> dict[str, Any]:
+    """把讲稿生成结果并回节点，只在讲稿侧**确有内容**时覆盖。
+
+    两个调用点拿到的 dict 形状不同，所以这里用「保护键黑名单」而不是「字段白名单」：
+
+    - ``/api/v1/gen/create`` 的结果已过 ``normalize_stage3_scripts`` 白名单；
+    - ``/api/v1/gen/modify`` 走 ``generate_single``，dict 是模型原样返回，还带着
+      ``mindmap_markdown`` / ``reteach_script`` / ``transition`` —— 这三个前端在读
+      （见 docs §3 A6 的 reteachScript / transitionText），白名单会把它们悄悄丢掉。
+
+    **只增不减**：``None`` / ``""`` / ``[]`` / ``{}`` 一律不覆盖。这条才是关键 ——
+    ``generate_single`` 恒返回全键，模型这次没给分段就是 ``segments: []``，
+    ``{**node, **script_data}`` 会把该页分段清空，预览里的「分段」区块随之消失。
+    """
+    if not isinstance(script_data, dict):
+        return {**node}
+    merged = {**node}
+    for key, value in script_data.items():
+        if key in _SCRIPT_PROTECTED_KEYS:
+            continue
+        if value:
+            merged[key] = value
+    return merged
+
+
 def _safe_estimated_seconds(value: Any) -> int:
     """安全转换 segment 的 estimated_seconds（M1-4B P1/P6）。
 
