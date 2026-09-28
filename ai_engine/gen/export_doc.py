@@ -212,7 +212,7 @@ def _format_normalizer(doc: Document) -> None:
         is_heading = para.style.name.startswith("Heading") or para.style.name == "Title"
         cn_font = FONT_CN_HEADING if is_heading else FONT_CN_BODY
         for run in para.runs:
-            _apply_run_font(run, cn_font=cn_font)
+            _apply_run_font(run, cn_name=cn_font)
 
     # 3. 遍历所有表格单元格Run
     for table in doc.tables:
@@ -220,14 +220,14 @@ def _format_normalizer(doc: Document) -> None:
             for cell in row.cells:
                 for para in cell.paragraphs:
                     for run in para.runs:
-                        _apply_run_font(run, cn_font=FONT_CN_BODY)
+                        _apply_run_font(run, cn_name=FONT_CN_BODY)
 
     # 4. 遍历页眉页脚
     for section in doc.sections:
         for hf in [section.header, section.footer]:
             for para in hf.paragraphs:
                 for run in para.runs:
-                    _apply_run_font(run, cn_font=FONT_CN_BODY)
+                    _apply_run_font(run, cn_name=FONT_CN_BODY)
 
 
 def _set_run(run: Any, text: str | None = None, size: float | None = None, bold: bool = False) -> None:
