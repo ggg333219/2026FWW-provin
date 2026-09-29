@@ -736,4 +736,10 @@ def build_page_spec(node: dict[str, Any], index: int, kind: str | None = None) -
     else:  # content 及其兜底
         spec.blocks.extend(_content_blocks(node))
 
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    if kind != "content" and metadata.get("show_modified_details"):
+        details = normalize_point_details(node)
+        if details:
+            spec.blocks.append(Block(kind="details", role=ROLE_PRIMARY, heading="补充内容", items=details))
+
     return spec

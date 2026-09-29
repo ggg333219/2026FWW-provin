@@ -19,7 +19,7 @@ import { requestJson } from './request'
  *   GET    /coursewares/:id/versions/:vid  读取单版本快照（模块3）
  *   POST   /coursewares/:id/rollback       回滚（A7，克隆式）
  */
-const MODIFY_LLM_TIMEOUT_MS = 120000 // 修改编排含 LLM 意图解析 + 局部生成，给 2 分钟
+const MODIFY_LLM_TIMEOUT_MS = 240000 // 意图解析与局部任务轮询共用一次请求
 
 export const projectModifyApi = {
   /** 新建课件项目 */

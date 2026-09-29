@@ -143,6 +143,7 @@ function nodesForApi() {
     ? generationStore.currentScriptNodes
     : outlineStore.nodes
   return (source || []).map((n) => ({
+    ...n,
     node_id: n.node_id,
     title: n.title,
     summary: n.summary,

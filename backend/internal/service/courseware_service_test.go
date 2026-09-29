@@ -7,14 +7,17 @@ import (
 	"testing"
 )
 
-// ---- fake：只实现 modifyClient 窄接口（ParseModify + GenerateContent）----
+// ---- fake：只实现 modifyClient 窄接口 ----
 
 type fakeModifyAI struct {
-	intent     *ModifyIntent
-	intentErr  error
-	genResp    *GenContentStatusResponse
-	genErr     error
-	lastGenReq *GenContentRequest
+	intent      *ModifyIntent
+	intentErr   error
+	genResp     *GenContentStatusResponse
+	genErr      error
+	lastGenReq  *GenContentRequest
+	statusResp  *GenContentStatusResponse
+	statusErr   error
+	statusCalls int
 }
 
 func (f *fakeModifyAI) ParseModify(_ context.Context, _ ParseModifyRequest) (*ModifyIntent, error) {
@@ -30,6 +33,65 @@ func (f *fakeModifyAI) GenerateContent(_ context.Context, req GenContentRequest)
 		return nil, f.genErr
 	}
 	return f.genResp, nil
+}
+
+func (f *fakeModifyAI) ContentStatus(_ context.Context, _ string) (*GenContentStatusResponse, error) {
+	f.statusCalls++
+	return f.statusResp, f.statusErr
+}
+
+func TestModifyWaitsForGeneratedNodes(t *testing.T) {
+	ai := &fakeModifyAI{
+		intent:     &ModifyIntent{TargetType: "node", TargetIDs: []string{"node_2"}, Action: "expand", Confidence: 0.9},
+		genResp:    &GenContentStatusResponse{ContentID: "content_1", Status: "generating"},
+		statusResp: &GenContentStatusResponse{ContentID: "content_1", Status: "done", Nodes: []TeachingNodeItem{{NodeID: "node_2", Title: "冒泡排序", Summary: "新增生活案例", Script: "新的讲稿"}}},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+	result, err := svc.Modify(context.Background(), p.ProjectID, "第二页增加生活案例", sampleTeachingNodes())
+	if err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if ai.statusCalls != 1 || result.AllNodes[1].Summary != "新增生活案例" {
+		t.Fatalf("应等待完成并应用结果: calls=%d node=%+v", ai.statusCalls, result.AllNodes[1])
+	}
+}
+
+func TestModifyDoesNotSaveEmptyOrFailedGeneration(t *testing.T) {
+	for _, status := range []string{"done", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			ai := &fakeModifyAI{
+				intent:     &ModifyIntent{TargetType: "node", TargetIDs: []string{"node_2"}, Action: "expand", Confidence: 0.9},
+				genResp:    &GenContentStatusResponse{ContentID: "content_1", Status: "generating"},
+				statusResp: &GenContentStatusResponse{ContentID: "content_1", Status: status, Error: "upstream failed"},
+			}
+			svc := newCoursewareTestSvc(ai)
+			p := mustCreateProject(t, svc)
+			if _, err := svc.Modify(context.Background(), p.ProjectID, "第二页增加案例", sampleTeachingNodes()); err == nil {
+				t.Fatal("空结果或失败应返回错误")
+			}
+			versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
+			if len(versions) != 0 {
+				t.Fatalf("失败不应保存版本: %d", len(versions))
+			}
+		})
+	}
+}
+
+func TestModifyExpandRejectsScriptOnlyChange(t *testing.T) {
+	ai := &fakeModifyAI{
+		intent:  &ModifyIntent{TargetType: "node", TargetIDs: []string{"node_2"}, Action: "expand", Confidence: 0.9},
+		genResp: &GenContentStatusResponse{Status: "done", Nodes: []TeachingNodeItem{{NodeID: "node_2", Title: "冒泡排序", Summary: "原理", Script: "只改了讲稿"}}},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+	if _, err := svc.Modify(context.Background(), p.ProjectID, "第二页增加案例", sampleTeachingNodes()); err == nil {
+		t.Fatal("仅修改讲稿不应被标记为 PPT 扩写成功")
+	}
+	versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
+	if len(versions) != 0 {
+		t.Fatalf("可见内容未变不应保存版本: %d", len(versions))
+	}
 }
 
 func sampleTeachingNodes() []TeachingNodeItem {
@@ -160,7 +222,7 @@ func TestModifyPartialCarriesCourseNameAndBoundEvidence(t *testing.T) {
 			TargetType: "node", TargetIDs: []string{"node_2"},
 			Action: "expand", Confidence: 0.9,
 		},
-		genResp: &GenContentStatusResponse{Status: "done"},
+		genResp: &GenContentStatusResponse{Status: "done", Nodes: []TeachingNodeItem{{NodeID: "node_2", Title: "冒泡排序", Summary: "增加证据", Script: "证据讲稿"}}},
 	}
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc) // 项目标题为 "排序算法"
@@ -195,7 +257,7 @@ func TestModifyPartialWithoutBindingsSendsNoEvidence(t *testing.T) {
 			TargetType: "node", TargetIDs: []string{"node_2"},
 			Action: "simplify", Confidence: 0.9,
 		},
-		genResp: &GenContentStatusResponse{Status: "done"},
+		genResp: &GenContentStatusResponse{Status: "done", Nodes: []TeachingNodeItem{{NodeID: "node_2", Title: "冒泡排序", Summary: "精简结果", Script: "精简讲稿"}}},
 	}
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc)

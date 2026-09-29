@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -241,6 +242,7 @@ type ParseModifyResponse struct {
 type modifyClient interface {
 	ParseModify(ctx context.Context, req ParseModifyRequest) (*ModifyIntent, error)
 	GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error)
+	ContentStatus(ctx context.Context, contentID string) (*GenContentStatusResponse, error)
 }
 
 type CoursewareService struct {
@@ -577,7 +579,14 @@ func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, in
 		if err != nil {
 			return nil, fmt.Errorf("局部重生成失败: %w", err)
 		}
+		resp, err = s.waitForPartialContent(ctx, resp)
+		if err != nil {
+			return nil, fmt.Errorf("局部重生成失败: %w", err)
+		}
 		updatedNodes = mergePartialResult(updatedNodes, resp.Nodes, intent.TargetIDs)
+		if intent.Action == "expand" && !hasVisibleTargetChange(nodes, updatedNodes, intent.TargetIDs) {
+			return nil, fmt.Errorf("AI 引擎没有生成可见的课件内容，请重试或明确指定要添加的内容")
+		}
 		modifiedIDs = intent.TargetIDs
 	}
 	if wantsRemoveTeachingText(instruction, intent.Constraints) {
@@ -639,6 +648,69 @@ func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, in
 		ModifiedElementIDs: append([]string(nil), intent.TargetElementIDs...),
 		RiskLevel:          intent.RiskLevel,
 	}, nil
+}
+
+func hasVisibleTargetChange(before, after []TeachingNodeItem, targetIDs []string) bool {
+	targets := make(map[string]bool, len(targetIDs))
+	for _, id := range targetIDs {
+		targets[id] = true
+	}
+	old := make(map[string]TeachingNodeItem, len(before))
+	for _, node := range before {
+		old[node.NodeID] = node
+	}
+	for _, node := range after {
+		if !targets[node.NodeID] {
+			continue
+		}
+		previous, ok := old[node.NodeID]
+		if !ok || node.Title != previous.Title || node.Content != previous.Content || node.Summary != previous.Summary ||
+			!reflect.DeepEqual(node.KeyPoints, previous.KeyPoints) || !reflect.DeepEqual(node.PointDetails, previous.PointDetails) ||
+			!reflect.DeepEqual(node.Questions, previous.Questions) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *CoursewareService) waitForPartialContent(ctx context.Context, resp *GenContentStatusResponse) (*GenContentStatusResponse, error) {
+	if resp == nil {
+		return nil, fmt.Errorf("AI 引擎未返回内容生成任务")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	for {
+		switch resp.Status {
+		case "done":
+			if len(resp.Nodes) == 0 {
+				return nil, fmt.Errorf("AI 引擎完成任务但未返回修改节点")
+			}
+			return resp, nil
+		case "failed":
+			return nil, fmt.Errorf("AI 引擎内容生成失败: %s", resp.Error)
+		case "generating", "pending", "processing":
+			if resp.ContentID == "" {
+				return nil, fmt.Errorf("AI 引擎未返回内容生成任务 ID")
+			}
+		case "":
+			return nil, fmt.Errorf("AI 引擎未返回内容生成状态")
+		default:
+			return nil, fmt.Errorf("AI 引擎返回未知内容生成状态: %s", resp.Status)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("等待 AI 引擎内容生成超时: %w", ctx.Err())
+		case <-time.After(300 * time.Millisecond):
+		}
+		var err error
+		resp, err = s.aiClient.ContentStatus(ctx, resp.ContentID)
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			return nil, fmt.Errorf("AI 引擎未返回内容生成状态")
+		}
+	}
 }
 
 func wantsRemoveTeachingText(instruction string, constraints []string) bool {

@@ -230,6 +230,58 @@ def test_partial_keeps_existing_refs(_stub_rag) -> None:
     assert updated[1]["source_chunk_ids"] == ["chunk_old", "chunk_a"]
 
 
+def test_expanding_cover_exposes_generated_details_in_preview(_stub_rag) -> None:
+    class CoverGenerator:
+        def generate_single(self, node, **_kwargs):
+            return {
+                "script": "用生活场景解释定积分。",
+                "segments": [],
+                "point_details": [{"point": "生活案例", "detail": "用行驶路程说明速度累积。"}],
+            }
+
+    cover = {
+        "node_id": "cover_1",
+        "type": "cover",
+        "title": "高等数学课程封面",
+        "summary": "课程导入",
+        "key_points": ["适用对象：本科一年级"],
+    }
+    updated = run_partial_pipeline(
+        nodes=[cover], target_node_ids=["cover_1"], modify_action="expand",
+        modify_constraints=["增加生活案例"], context_markdown="", course_name="高等数学",
+        generator=CoverGenerator(),
+    )
+
+    from ai_engine.gen.preview import PreviewRenderer
+
+    html = PreviewRenderer().render(updated, "高等数学")
+    assert updated[0]["metadata"]["show_modified_details"] is True
+    assert 'class="point-details"' in html
+    assert "生活案例" in html
+    assert "用行驶路程说明速度累积。" in html
+
+
+def test_expanding_interactive_node_exposes_details_in_preview(_stub_rag) -> None:
+    class DetailGenerator:
+        def generate_single(self, node, **_kwargs):
+            return {"script": "新增案例讲稿", "point_details": [
+                {"point": "生活案例", "detail": "用车速与路程解释定积分。"}
+            ]}
+
+    node = {"node_id": "node_001", "node_type": "interactive", "title": "高等数学课程封面",
+            "key_points": ["课程总时长45分钟"]}
+    updated = run_partial_pipeline(
+        nodes=[node], target_node_ids=["node_001"], modify_action="expand",
+        modify_constraints=["增加生活案例"], context_markdown="", course_name="高等数学",
+        generator=DetailGenerator(),
+    )
+    from ai_engine.gen.preview import PreviewRenderer
+    html = PreviewRenderer().render(updated, "高等数学")
+    assert updated[0]["metadata"]["show_modified_details"] is True
+    assert "生活案例" in html
+    assert "用车速与路程解释定积分。" in html
+
+
 def test_partial_without_retriever_still_regenerates(monkeypatch) -> None:
     """知识库不可用时仍能局部重生成，只是不带参考材料。"""
     monkeypatch.setattr(partial_content, "get_evidence_retriever", lambda: None)

@@ -264,6 +264,10 @@ def run_partial_pipeline(
                     # 起来就是"改了等于没改"。
                     if "point_details" in new_script:
                         updated_node["point_details"] = new_script.get("point_details") or []
+                        if updated_node["point_details"]:
+                            metadata = dict(updated_node.get("metadata") or {})
+                            metadata["show_modified_details"] = True
+                            updated_node["metadata"] = metadata
                     # 引用关系：原有 refs 全部保留，追加本次实际检索到的证据
                     # （去重保序）。否则内容已经改自新证据、引用却还指向旧资料，
                     # 证据追溯会对不上。与 main.py 的 /gen/modify 回填方式一致。
