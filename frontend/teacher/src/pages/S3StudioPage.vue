@@ -562,6 +562,7 @@ import EvidenceSidebar from "../components/teacher/EvidenceSidebar.vue";
 import { useGenerationStore } from "../stores/generationStore";
 import { useOutlineStore } from "../stores/outlineStore";
 import { useInteractiveStore } from "../stores/interactiveStore";
+import { useContentStore } from "../stores/contentStore";
 import { useIntentStore } from "../stores/intentStore";
 import { useMaterialStore, isEvidencePacketUsable } from "../stores/materialStore";
 import { useModifyStore } from "../stores/modifyStore";
@@ -574,6 +575,7 @@ import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline } from "../
 const generationStore = useGenerationStore();
 const outlineStore = useOutlineStore();
 const interactiveStore = useInteractiveStore();
+const contentStore = useContentStore();
 const intentStore = useIntentStore();
 const materialStore = useMaterialStore();
 const modifyStore = useModifyStore();
