@@ -585,6 +585,12 @@ class TestEvidenceSynthesizer(unittest.TestCase):
         self.assertEqual(len(packet.relevant_chunks), 2)
         self.assertEqual(packet.query, "排序算法复杂度对比")
 
+    def test_default_llm_is_bounded_for_latency_sensitive_evidence(self):
+        """默认证据合成客户端不重试，且不会继承过长的全局超时。"""
+        synth = self.EvidenceSynthesizer()
+        self.assertEqual(synth.llm.max_attempts, 1)
+        self.assertLessEqual(synth.llm.timeout, 30)
+
     def test_synthesize_empty(self):
         """空结果不崩溃。"""
         llm = self.LLMClient()

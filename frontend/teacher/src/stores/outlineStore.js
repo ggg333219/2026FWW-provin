@@ -393,10 +393,9 @@ export const useOutlineStore = defineStore('outline', {
       }
     },
 
-    /** 接受 AI 修订结果：先以当前版本提交，成功后再进入后端新版本。 */
+    /** 接受 AI 修订结果：修订接口已将候选保存为新版本，前端直接切换到该版本。 */
     async applyRevision() {
       if (!this.pendingRevision) return
-      const previousNodes = this.nodes
       const revisedNodes = this.pendingRevision.nodes.map((n) => ({
         ...n,
         node_id: n.node_id || makeNodeId(),
@@ -408,17 +407,12 @@ export const useOutlineStore = defineStore('outline', {
       }))
       this.nodes = revisedNodes
       this._reorder()
-      try {
-        // saveVersion 使用当前 outline_version 作为 base_version；后端成功后
-        // 返回并写入真正的新版本号，避免候选 v2 尚未落库就拿 v2 再次保存。
-        const saved = await this.saveVersion()
-        this.pendingRevision = null
-        return saved
-      } catch (err) {
-        this.nodes = previousNodes
-        this._persist()
-        throw err
-      }
+      this.outline_version = Number(this.pendingRevision.outline_version) || this.outline_version + 1
+      this.status = 'draft'
+      this.forked_from_version = 0
+      this.pendingRevision = null
+      this._persist()
+      return { outline_version: this.outline_version, status: this.status, nodes: this.nodes }
     },
 
     /** 放弃 AI 修订结果 */

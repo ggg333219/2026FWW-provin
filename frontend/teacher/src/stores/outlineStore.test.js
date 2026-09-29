@@ -60,6 +60,39 @@ describe('outlineStore 大纲拖拽排序', () => {
       nodes: [expect.objectContaining({ title: '教师已编辑' })],
     }))
   })
+
+  it('应用已落库的 AI 修订候选时直接切换到候选版本，不用旧版本号重复保存', async () => {
+    const revise = vi.spyOn(teacherV1Api.outline, 'revise').mockResolvedValue({
+      data: {
+        outline_version: 2,
+        status: 'draft',
+        nodes: [{
+          node_id: 'node_001',
+          order: 1,
+          title: '修订后标题',
+          summary: '新的摘要',
+          node_type: 'content',
+          estimated_duration_minutes: 8,
+        }],
+        change_summary: ['更新标题'],
+      },
+    })
+    const save = vi.spyOn(teacherV1Api.outline, 'save')
+    const store = useOutlineStore()
+    store.outline_id = 'outline_1'
+    store.outline_version = 1
+    store.nodes = [{ node_id: 'node_001', order: 1, title: '旧标题', summary: '旧摘要' }]
+
+    await store.reviseOutline('更新标题')
+    const applied = await store.applyRevision()
+
+    expect(revise).toHaveBeenCalledWith('outline_1', expect.objectContaining({ base_version: 1 }))
+    expect(save).not.toHaveBeenCalled()
+    expect(store.outline_version).toBe(2)
+    expect(store.nodes[0].title).toBe('修订后标题')
+    expect(store.pendingRevision).toBeNull()
+    expect(applied.outline_version).toBe(2)
+  })
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()

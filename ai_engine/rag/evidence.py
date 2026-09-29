@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from ai_engine.core.llm import LLMClient
+from ai_engine.core.llm import LLMClient, resolve_llm_timeout
 from ai_engine.core.schema import (
     Chunk,
     Citation,
@@ -76,6 +76,10 @@ class EvidenceSynthesizer:
         )
     """
 
+    # 证据融合是 S2 到 S3 的交接点，必须优先保证请求可完成；LLM 超时后
+    # synthesize() 会使用检索材料生成确定性的降级证据包。
+    _DEFAULT_LLM_TIMEOUT_SECONDS = 30
+
     def __init__(
         self,
         llm_client: Optional[LLMClient] = None,
@@ -86,7 +90,11 @@ class EvidenceSynthesizer:
             llm_client: LLM 客户端（None 时自动创建）。
             max_chunk_chars: 传入 LLM 的单个 chunk 内容最大字符数。
         """
-        self.llm = llm_client or LLMClient(temperature=0.1)
+        self.llm = llm_client or LLMClient(
+            temperature=0.1,
+            timeout=min(resolve_llm_timeout(), self._DEFAULT_LLM_TIMEOUT_SECONDS),
+            max_attempts=1,
+        )
         self.max_chunk_chars = max_chunk_chars
 
     # ---- 公开 API ----
