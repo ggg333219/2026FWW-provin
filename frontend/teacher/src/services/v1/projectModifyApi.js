@@ -74,12 +74,12 @@ export const projectModifyApi = {
    * A6 修改编排：自然语言 → 意图解析 → 局部重生成 → 版本快照
    * 响应 data: { modified_nodes, all_nodes, intent, previous_version_no, new_version_no, clarification? }
    */
-  modify: (project_id, instruction, nodes) =>
+  modify: (project_id, instruction, nodes, confirmed = false) =>
     requestJson(`/api/v1/coursewares/${project_id}/modify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       timeoutMs: MODIFY_LLM_TIMEOUT_MS,
-      body: JSON.stringify({ instruction, nodes }),
+      body: JSON.stringify({ instruction, nodes, confirmed }),
     }),
 
   /** 修改记录列表 */
@@ -91,6 +91,12 @@ export const projectModifyApi = {
   /** 版本列表 */
   versions: (project_id) =>
     requestJson(`/api/v1/coursewares/${project_id}/versions`, {
+      method: 'GET',
+    }),
+
+  /** 当前草稿的稳定 PPT 元素快照，供自然语言候选定位使用。 */
+  elements: (project_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/elements`, {
       method: 'GET',
     }),
 

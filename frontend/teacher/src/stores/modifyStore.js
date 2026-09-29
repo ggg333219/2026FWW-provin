@@ -30,6 +30,8 @@ export const useModifyStore = defineStore('modifyPanel', {
     lastIntent: null,
     /** 低置信度追问上下文；下一条教师回复会和原指令合并后再次解析。 */
     pendingClarification: null,
+    pendingConfirmation: null,
+    confirmationReady: false,
     /** 当前版本号（每次成功修改自增） */
     currentVersionNo: 0,
     /** 当前版本由哪个版本修改而来。 */
@@ -99,6 +101,8 @@ export const useModifyStore = defineStore('modifyPanel', {
       this.modifying = false
       this.lastIntent = null
       this.pendingClarification = null
+      this.pendingConfirmation = null
+      this.confirmationReady = false
       this.currentVersionNo = 0
       this.basedOnVersionNo = 0
       this.versionHistory = []
@@ -140,8 +144,10 @@ export const useModifyStore = defineStore('modifyPanel', {
       this._pushMessage('teacher', teacherReply)
       this.inputText = ''
 
+      const confirmed = this.confirmationReady
+      this.confirmationReady = false
       try {
-        const resp = await projectModifyApi.modify(this.projectId, instruction, nodes)
+        const resp = await projectModifyApi.modify(this.projectId, instruction, nodes, confirmed)
         const data = resp.data || resp
 
         // 追问分支：AI 置信度低，返回澄清问题，不执行修改
@@ -157,7 +163,19 @@ export const useModifyStore = defineStore('modifyPanel', {
           return
         }
 
+        if (data.requires_confirmation) {
+          this.pendingConfirmation = {
+            instruction,
+            candidates: Array.isArray(data.candidates) ? data.candidates : [],
+            intent: data.intent || null,
+          }
+          this._pushMessage('ai', '⚠️ 这次修改会影响高风险元素，请确认后继续。', { isConfirmation: true })
+          this._persist()
+          return
+        }
+
         this.pendingClarification = null
+        this.pendingConfirmation = null
 
         // 成功分支：解析结果 + 修改摘要 + 版本标签
         const intent = data.intent || {}
@@ -228,6 +246,13 @@ export const useModifyStore = defineStore('modifyPanel', {
     /** 快捷指令 */
     applyQuickChip(chip) {
       this.inputText = chip.text
+    },
+
+    confirmPending() {
+      if (!this.pendingConfirmation || this.modifying) return
+      this.inputText = this.pendingConfirmation.instruction
+      this.confirmationReady = true
+      return this.sendModify()
     },
 
     retryLast() {

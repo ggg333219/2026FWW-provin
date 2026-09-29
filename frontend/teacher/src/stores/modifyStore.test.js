@@ -75,4 +75,28 @@ describe('modifyStore C6/C7 对话迭代', () => {
     expect(store.inputText).toBe('精简第三页')
     expect(store.error).toBe('')
   })
+
+  it('高风险元素修改先等待确认，确认后才发送 confirmed', async () => {
+    const modify = vi.spyOn(projectModifyApi, 'modify')
+      .mockResolvedValueOnce({ data: {
+        requires_confirmation: true,
+        candidates: [{ page_number: 2, role: 'chart' }],
+      } })
+      .mockResolvedValueOnce({ data: {
+        intent: { action: 'restyle', target_element_ids: ['el_node_2_chart'] },
+        all_nodes: [{ node_id: 'node_2', title: '图表' }],
+        modified_nodes: [{ node_id: 'node_2', title: '图表' }],
+        new_version_no: 1,
+      } })
+    vi.spyOn(projectModifyApi, 'versions').mockResolvedValue({ data: { items: [{ version_no: 1 }] } })
+    const store = useModifyStore()
+    store.bindProject('project_1')
+    store.inputText = '把第二页图表改成柱状图'
+    await store.sendModify([], () => {})
+
+    expect(store.pendingConfirmation).not.toBeNull()
+    await store.confirmPending()
+    expect(modify.mock.calls[1][3]).toBe(true)
+    expect(store.pendingConfirmation).toBeNull()
+  })
 })

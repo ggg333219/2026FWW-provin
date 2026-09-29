@@ -141,6 +141,7 @@ func RegisterNewSkillRoutes(
 		projects.GET("/:project_id/context", coursewareProjectHandler.Context)
 		projects.GET("/:project_id/draft", coursewareProjectHandler.DraftGet)
 		projects.PUT("/:project_id/draft", coursewareProjectHandler.DraftPut)
+		projects.GET("/:project_id/elements", coursewareHandler.Elements)
 		projects.PUT("/:project_id/step", coursewareProjectHandler.StepPut)
 		// A6/A7: 修改对话 + 版本快照 + 回滚（追加到同一路由组）
 		projects.POST("/:project_id/modify", coursewareHandler.Modify)
@@ -164,6 +165,7 @@ func RegisterNewSkillRoutes(
 		projects.PUT("/:project_id/step", coursewareHandler.UpdateStep)
 		projects.PUT("/:project_id/draft", coursewareHandler.SaveDraft)
 		projects.GET("/:project_id/draft", coursewareHandler.GetDraft)
+		projects.GET("/:project_id/elements", coursewareHandler.Elements)
 		projects.POST("/:project_id/modify", coursewareHandler.Modify)
 		projects.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
 		projects.GET("/:project_id/versions", coursewareHandler.Versions)

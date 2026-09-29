@@ -60,16 +60,17 @@ func (coursewareProjectRow) TableName() string { return "courseware_projects" }
 
 // CoursewareVersion —— 版本快照（A6）。
 type CoursewareVersion struct {
-	VersionID        string    `json:"version_id"`
-	ProjectID        string    `json:"project_id"`
-	VersionNo        int       `json:"version_no"`
-	ParentVersionID  string    `json:"parent_version_id,omitempty"`
-	NodesJSON        string    `json:"-"` // 原始 JSON（内部）
-	PresentationJSON string    `json:"-"` // 修改前的 PPT 呈现层快照
-	SnapshotJSON     string    `json:"-"` // 完整快照：节点、样式、页面证据绑定
-	ModifyInstr      string    `json:"modify_instruction"`
-	VersionSummary   string    `json:"version_summary"`
-	CreatedAt        time.Time `json:"created_at"`
+	VersionID          string    `json:"version_id"`
+	ProjectID          string    `json:"project_id"`
+	VersionNo          int       `json:"version_no"`
+	ParentVersionID    string    `json:"parent_version_id,omitempty"`
+	NodesJSON          string    `json:"-"` // 原始 JSON（内部）
+	BeforeSnapshotJSON string    `json:"-"`
+	PresentationJSON   string    `json:"-"` // 修改前的 PPT 呈现层快照
+	SnapshotJSON       string    `json:"-"` // 完整快照：节点、样式、页面证据绑定
+	ModifyInstr        string    `json:"modify_instruction"`
+	VersionSummary     string    `json:"version_summary"`
+	CreatedAt          time.Time `json:"created_at"`
 
 	// 契约 v1.0 模块 1：本次修改命中的页面 + 用户提供的证据 + AI 回写的引用。
 	// 仅在 modify 路径（POST /api/v1/gen/modify / courseware Modify）下被填充；
@@ -85,23 +86,24 @@ type coursewareVersionRow struct {
 	// ID is the legacy physical primary key already present in deployed
 	// courseware_versions. Keep it populated even though the public contract
 	// exposes version_id as the business identifier.
-	ID               string    `gorm:"column:id;size:64;primaryKey"`
-	VersionID        string    `gorm:"column:version_id;size:64"`
-	ProjectID        string    `gorm:"column:project_id;size:64;index"`
-	OwnerID          string    `gorm:"column:owner_id;size:64"`
-	VersionNo        int       `gorm:"column:version_no"`
-	ParentVersionID  string    `gorm:"column:parent_version_id;size:64;index"`
-	NodesJSON        string    `gorm:"column:nodes_snapshot;type:text"`
-	PresentationJSON string    `gorm:"column:presentation_snapshot;type:text"`
-	SnapshotJSON     string    `gorm:"column:snapshot_json;type:text"`
-	ModifyInstr      string    `gorm:"column:modify_instruction;size:1000"`
-	VersionSummary   string    `gorm:"column:version_summary;size:1000"`
-	CreatedAt        time.Time `gorm:"column:created_at"`
-	GenerationID     string    `gorm:"column:generation_id;size:64;index"`
-	PageID           string    `gorm:"column:page_id;size:64"`
-	EvidenceRefs     string    `gorm:"column:evidence_refs;type:text"` // JSON: ["chunk_001", ...]
-	CitationRefs     string    `gorm:"column:citation_refs;type:text"` // JSON: AI 回写
-	EvidenceUsed     string    `gorm:"column:evidence_used;type:text"` // JSON: AI 回写
+	ID                 string    `gorm:"column:id;size:64;primaryKey"`
+	VersionID          string    `gorm:"column:version_id;size:64"`
+	ProjectID          string    `gorm:"column:project_id;size:64;index"`
+	OwnerID            string    `gorm:"column:owner_id;size:64"`
+	VersionNo          int       `gorm:"column:version_no"`
+	ParentVersionID    string    `gorm:"column:parent_version_id;size:64;index"`
+	NodesJSON          string    `gorm:"column:nodes_snapshot;type:text"`
+	BeforeSnapshotJSON string    `gorm:"column:before_snapshot_json;type:text"`
+	PresentationJSON   string    `gorm:"column:presentation_snapshot;type:text"`
+	SnapshotJSON       string    `gorm:"column:snapshot_json;type:text"`
+	ModifyInstr        string    `gorm:"column:modify_instruction;size:1000"`
+	VersionSummary     string    `gorm:"column:version_summary;size:1000"`
+	CreatedAt          time.Time `gorm:"column:created_at"`
+	GenerationID       string    `gorm:"column:generation_id;size:64;index"`
+	PageID             string    `gorm:"column:page_id;size:64"`
+	EvidenceRefs       string    `gorm:"column:evidence_refs;type:text"` // JSON: ["chunk_001", ...]
+	CitationRefs       string    `gorm:"column:citation_refs;type:text"` // JSON: AI 回写
+	EvidenceUsed       string    `gorm:"column:evidence_used;type:text"` // JSON: AI 回写
 }
 
 func (coursewareVersionRow) TableName() string { return "courseware_versions" }
@@ -111,7 +113,7 @@ func (coursewareVersionRow) TableName() string { return "courseware_versions" }
 func versionToRow(v *CoursewareVersion) *coursewareVersionRow {
 	row := &coursewareVersionRow{
 		ID: v.VersionID, VersionID: v.VersionID, ProjectID: v.ProjectID, VersionNo: v.VersionNo,
-		ParentVersionID: v.ParentVersionID, NodesJSON: v.NodesJSON,
+		ParentVersionID: v.ParentVersionID, NodesJSON: v.NodesJSON, BeforeSnapshotJSON: v.BeforeSnapshotJSON,
 		PresentationJSON: v.PresentationJSON, SnapshotJSON: v.SnapshotJSON,
 		ModifyInstr: v.ModifyInstr, VersionSummary: v.VersionSummary, CreatedAt: v.CreatedAt,
 		GenerationID: v.GenerationID, PageID: v.PageID,
@@ -139,7 +141,7 @@ func versionToRow(v *CoursewareVersion) *coursewareVersionRow {
 func rowToVersion(r coursewareVersionRow) *CoursewareVersion {
 	v := &CoursewareVersion{
 		VersionID: r.VersionID, ProjectID: r.ProjectID, VersionNo: r.VersionNo,
-		ParentVersionID: r.ParentVersionID, NodesJSON: r.NodesJSON,
+		ParentVersionID: r.ParentVersionID, NodesJSON: r.NodesJSON, BeforeSnapshotJSON: r.BeforeSnapshotJSON,
 		PresentationJSON: r.PresentationJSON, SnapshotJSON: r.SnapshotJSON,
 		ModifyInstr: r.ModifyInstr, VersionSummary: r.VersionSummary, CreatedAt: r.CreatedAt,
 		GenerationID: r.GenerationID, PageID: r.PageID,
@@ -206,12 +208,16 @@ func (coursewarePageBindingRow) TableName() string { return "courseware_page_bin
 type ModifyIntent struct {
 	TargetType            string            `json:"target_type"` // node | page | global | style
 	TargetIDs             []string          `json:"target_ids"`
+	TargetElementIDs      []string          `json:"target_element_ids"`
 	Action                string            `json:"action"` // simplify|expand|delete|add|reorder|restyle|rewrite
 	SecondaryActions      []string          `json:"secondary_actions"`
 	Constraints           []string          `json:"constraints"`
 	Confidence            float64           `json:"confidence"`
 	ClarificationNeeded   bool              `json:"clarification_needed"`
 	ClarificationQuestion string            `json:"clarification_question"`
+	RiskLevel             string            `json:"risk_level"`
+	ConfirmationRequired  bool              `json:"confirmation_required"`
+	Candidates            []map[string]any  `json:"candidates,omitempty"`
 	Presentation          map[string]string `json:"presentation"`
 }
 
@@ -368,6 +374,41 @@ func (s *CoursewareService) GetDraft(ctx context.Context, projectID string) (str
 	return s.store.GetDraft(ctx, projectID)
 }
 
+// ElementSnapshot returns the normalized element layer from the current
+// project draft. It is the read seam used by the candidate-confirmation UI.
+func (s *CoursewareService) ElementSnapshot(ctx context.Context, projectID string) ([]map[string]any, error) {
+	raw, err := s.store.GetDraft(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	var envelope map[string]any
+	if json.Unmarshal([]byte(raw), &envelope) != nil {
+		return []map[string]any{}, nil
+	}
+	content := envelope["generation"]
+	if content == nil {
+		content = envelope["content"]
+	}
+	contentMap, _ := content.(map[string]any)
+	var rawNodes any = contentMap["nodes"]
+	if rawNodes == nil {
+		rawNodes = envelope["nodes"]
+	}
+	nodesJSON, _ := json.Marshal(rawNodes)
+	var nodes []TeachingNodeItem
+	if json.Unmarshal(nodesJSON, &nodes) != nil {
+		return []map[string]any{}, nil
+	}
+	nodes = ensureElementMetadata(nodes)
+	result := make([]map[string]any, 0)
+	for _, node := range nodes {
+		if elements, ok := node.Metadata["elements"].([]map[string]any); ok {
+			result = append(result, elements...)
+		}
+	}
+	return result, nil
+}
+
 // SavePageBindings 保存页面级证据绑定（upsert 语义：只更新传入的页面，其余页面保持不变）。
 // 返回实际被写入的 page_id 列表。项目不存在返回 ErrProjectNotFound。
 func (s *CoursewareService) SavePageBindings(ctx context.Context, projectID string, bindings []PageEvidenceBinding) ([]string, error) {
@@ -445,18 +486,28 @@ func (s *CoursewareService) targetEvidenceRefs(ctx context.Context, projectID st
 
 // ModifyResult —— modify 响应。
 type ModifyResult struct {
-	ModifiedNodes     []TeachingNodeItem `json:"modified_nodes"`
-	AllNodes          []TeachingNodeItem `json:"all_nodes"`
-	Intent            ModifyIntent       `json:"intent"`
-	PreviousVersionID string             `json:"previous_version_id"`
-	PreviousVersionNo int                `json:"previous_version_no"`
-	NewVersionNo      int                `json:"new_version_no"`
-	Clarification     string             `json:"clarification,omitempty"`
-	Presentation      map[string]string  `json:"presentation,omitempty"`
+	ModifiedNodes        []TeachingNodeItem `json:"modified_nodes"`
+	AllNodes             []TeachingNodeItem `json:"all_nodes"`
+	Intent               ModifyIntent       `json:"intent"`
+	PreviousVersionID    string             `json:"previous_version_id"`
+	PreviousVersionNo    int                `json:"previous_version_no"`
+	NewVersionNo         int                `json:"new_version_no"`
+	Clarification        string             `json:"clarification,omitempty"`
+	Presentation         map[string]string  `json:"presentation,omitempty"`
+	ModifiedElementIDs   []string           `json:"modified_element_ids,omitempty"`
+	RequiresConfirmation bool               `json:"requires_confirmation,omitempty"`
+	RiskLevel            string             `json:"risk_level,omitempty"`
+	Candidates           []map[string]any   `json:"candidates,omitempty"`
 }
 
 // Modify 修改编排：解析意图 → （低置信度则追问）→ 局部生成 → 更新草稿 → 版本快照。
 func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction string, nodes []TeachingNodeItem) (*ModifyResult, error) {
+	return s.ModifyWithOptions(ctx, projectID, instruction, nodes, false)
+}
+
+// ModifyWithOptions adds the explicit confirmation boundary required for
+// destructive, media, structural, and batch element operations.
+func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, instruction string, nodes []TeachingNodeItem, confirmed bool) (*ModifyResult, error) {
 	project, err := s.store.GetProject(ctx, projectID)
 	if err != nil {
 		return nil, err
@@ -464,6 +515,8 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 	if strings.TrimSpace(instruction) == "" {
 		return nil, fmt.Errorf("instruction 不能为空")
 	}
+
+	nodes = ensureElementMetadata(nodes)
 
 	// 1) B5: 解析意图
 	intentPtr, err := s.aiClient.ParseModify(ctx, ParseModifyRequest{
@@ -487,6 +540,16 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 			AllNodes:      nodes,
 			Intent:        intent,
 			Clarification: q,
+			Candidates:    intent.Candidates,
+		}, nil
+	}
+	if intent.ConfirmationRequired && !confirmed {
+		return &ModifyResult{
+			AllNodes:             nodes,
+			Intent:               intent,
+			RequiresConfirmation: true,
+			RiskLevel:            intent.RiskLevel,
+			Candidates:           intent.Candidates,
 		}, nil
 	}
 
@@ -520,24 +583,32 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 	if wantsRemoveTeachingText(instruction, intent.Constraints) {
 		updatedNodes = clearTeachingText(updatedNodes, intent.TargetIDs)
 	}
+	if intent.Action == "restyle" {
+		updatedNodes = applyPresentationToNodes(updatedNodes, intent.Presentation)
+	}
+	updatedNodes = ensureElementMetadata(updatedNodes)
+	updatedNodes = syncElementContent(updatedNodes)
 	// restyle：仅样式层，不改内容；样式字段由 AI 解析后透传给前端。
 
-	// 5) 修改前快照（快照 = 修改前的完整状态）
+	// 5) 保存修改前后完整快照。NodesJSON/SnapshotJSON 表示新版本内容；
+	// BeforeSnapshotJSON 保留修改前状态，供撤销、审计和差异展示使用。
 	prevNo, err := s.store.NextVersionNo(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
-	nodesJSON, _ := json.Marshal(nodes) // 修改前
+	beforeNodesJSON, _ := json.Marshal(nodes)
+	afterNodesJSON, _ := json.Marshal(updatedNodes)
 	snap := &CoursewareVersion{
-		VersionID:        "ver_" + uuid.NewString()[:12],
-		ProjectID:        projectID,
-		VersionNo:        prevNo,
-		NodesJSON:        string(nodesJSON),
-		PresentationJSON: presentationJSON(presentationFromNodes(nodes)),
-		SnapshotJSON:     snapshotJSON(nodes, presentationFromNodes(nodes), nil),
-		ModifyInstr:      instruction,
-		VersionSummary:   instruction,
-		CreatedAt:        time.Now(),
+		VersionID:          "ver_" + uuid.NewString()[:12],
+		ProjectID:          projectID,
+		VersionNo:          prevNo,
+		NodesJSON:          string(afterNodesJSON),
+		BeforeSnapshotJSON: string(beforeNodesJSON),
+		PresentationJSON:   presentationJSON(presentationFromNodes(updatedNodes)),
+		SnapshotJSON:       snapshotJSON(updatedNodes, presentationFromNodes(updatedNodes), nil),
+		ModifyInstr:        instruction,
+		VersionSummary:     instruction,
+		CreatedAt:          time.Now(),
 	}
 	if err := s.store.SaveVersion(ctx, snap); err != nil {
 		return nil, err
@@ -558,13 +629,15 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 	}
 
 	return &ModifyResult{
-		ModifiedNodes:     modifiedNodes,
-		AllNodes:          updatedNodes,
-		Intent:            intent,
-		PreviousVersionID: snap.VersionID,
-		PreviousVersionNo: snap.VersionNo,
-		NewVersionNo:      snap.VersionNo, // 快照即新版本号
-		Presentation:      intent.Presentation,
+		ModifiedNodes:      modifiedNodes,
+		AllNodes:           updatedNodes,
+		Intent:             intent,
+		PreviousVersionID:  snap.VersionID,
+		PreviousVersionNo:  snap.VersionNo,
+		NewVersionNo:       snap.VersionNo, // 快照即新版本号
+		Presentation:       intent.Presentation,
+		ModifiedElementIDs: append([]string(nil), intent.TargetElementIDs...),
+		RiskLevel:          intent.RiskLevel,
 	}, nil
 }
 

@@ -36,6 +36,21 @@ func NewCoursewareHandler(svc *service.CoursewareService) *CoursewareHandler {
 	return &CoursewareHandler{svc: svc}
 }
 
+// requireOwner keeps the standalone in-memory route compatible while making
+// the JWT-protected project routes enforce the domain ownership contract.
+func (h *CoursewareHandler) requireOwner(c *gin.Context, projectID string) bool {
+	ownerID := c.GetString("userID")
+	if ownerID == "" {
+		return true
+	}
+	project, err := h.svc.GetProject(c.Request.Context(), projectID)
+	if err != nil || project.OwnerID != ownerID {
+		h.mapError(c, service.ErrProjectNotFound)
+		return false
+	}
+	return true
+}
+
 // Create POST /api/v1/coursewares —— 新建课件项目。
 func (h *CoursewareHandler) Create(c *gin.Context) {
 	var req struct {
@@ -192,12 +207,30 @@ func (h *CoursewareHandler) GetDraft(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"draft_json": draft}})
 }
 
+// Elements GET /:project_id/elements —— 当前草稿的稳定元素快照。
+func (h *CoursewareHandler) Elements(c *gin.Context) {
+	projectID := c.Param("project_id")
+	if !h.requireOwner(c, projectID) {
+		return
+	}
+	elements, err := h.svc.ElementSnapshot(c.Request.Context(), projectID)
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"elements": elements}})
+}
+
 // Modify POST /:project_id/modify —— A6 修改编排（意图解析 → 局部生成 → 快照）。
 func (h *CoursewareHandler) Modify(c *gin.Context) {
 	projectID := c.Param("project_id")
+	if !h.requireOwner(c, projectID) {
+		return
+	}
 	var req struct {
 		Instruction string                     `json:"instruction"`
 		Nodes       []service.TeachingNodeItem `json:"nodes"`
+		Confirmed   bool                       `json:"confirmed"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
@@ -207,7 +240,7 @@ func (h *CoursewareHandler) Modify(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "instruction 不能为空"})
 		return
 	}
-	result, err := h.svc.Modify(c.Request.Context(), projectID, req.Instruction, req.Nodes)
+	result, err := h.svc.ModifyWithOptions(c.Request.Context(), projectID, req.Instruction, req.Nodes, req.Confirmed)
 	if err != nil {
 		h.mapError(c, err)
 		return
@@ -218,6 +251,9 @@ func (h *CoursewareHandler) Modify(c *gin.Context) {
 // ModifyHistory GET /:project_id/modify-history —— 修改记录列表。
 func (h *CoursewareHandler) ModifyHistory(c *gin.Context) {
 	projectID := c.Param("project_id")
+	if !h.requireOwner(c, projectID) {
+		return
+	}
 	versions, err := h.svc.ModifyHistory(c.Request.Context(), projectID)
 	if err != nil {
 		h.mapError(c, err)
@@ -254,6 +290,9 @@ func (h *CoursewareHandler) ModifyHistory(c *gin.Context) {
 
 // Versions GET /:project_id/versions —— 版本列表（含修改指令摘要）。
 func (h *CoursewareHandler) Versions(c *gin.Context) {
+	if !h.requireOwner(c, c.Param("project_id")) {
+		return
+	}
 	h.ModifyHistory(c) // 同一数据源，字段一致
 }
 
@@ -294,6 +333,9 @@ func (h *CoursewareHandler) CreateVersion(c *gin.Context) {
 
 // VersionDetail GET /:project_id/versions/:version_id —— 获取单版本详情。
 func (h *CoursewareHandler) VersionDetail(c *gin.Context) {
+	if !h.requireOwner(c, c.Param("project_id")) {
+		return
+	}
 	version, err := h.svc.GetVersionByID(c.Request.Context(), c.Param("project_id"), c.Param("version_id"))
 	if err != nil {
 		h.mapError(c, err)
@@ -304,6 +346,7 @@ func (h *CoursewareHandler) VersionDetail(c *gin.Context) {
 
 func (h *CoursewareHandler) versionDetail(v *service.CoursewareVersion) gin.H {
 	var snapshot service.CoursewareVersionSnapshot
+	var beforeNodes []service.TeachingNodeItem
 	if v.SnapshotJSON != "" {
 		_ = json.Unmarshal([]byte(v.SnapshotJSON), &snapshot)
 	}
@@ -312,6 +355,9 @@ func (h *CoursewareHandler) versionDetail(v *service.CoursewareVersion) gin.H {
 	}
 	if len(snapshot.Presentation) == 0 && v.PresentationJSON != "" {
 		_ = json.Unmarshal([]byte(v.PresentationJSON), &snapshot.Presentation)
+	}
+	if v.BeforeSnapshotJSON != "" {
+		_ = json.Unmarshal([]byte(v.BeforeSnapshotJSON), &beforeNodes)
 	}
 	publicSnapshot := service.ContractVersionSnapshot{
 		Outline:      map[string]interface{}{},
@@ -329,7 +375,9 @@ func (h *CoursewareHandler) versionDetail(v *service.CoursewareVersion) gin.H {
 		"version_id": v.VersionID, "project_id": v.ProjectID, "version_no": v.VersionNo,
 		"parent_version_id": v.ParentVersionID, "change_note": v.ModifyInstr,
 		"version_summary": v.VersionSummary, "modify_instruction": v.ModifyInstr, "created_at": v.CreatedAt,
-		"snapshot": publicSnapshot,
+		"snapshot":        publicSnapshot,
+		"before_snapshot": gin.H{"content": beforeNodes},
+		"after_snapshot":  publicSnapshot,
 		// Legacy response fields remain temporarily for existing S3 consumers.
 		"nodes": snapshot.Nodes, "presentation": snapshot.Presentation, "page_bindings": snapshot.PageBindings,
 	}
@@ -338,6 +386,9 @@ func (h *CoursewareHandler) versionDetail(v *service.CoursewareVersion) gin.H {
 // Rollback POST /:project_id/rollback —— A7 回滚（克隆式，不覆盖历史）。
 func (h *CoursewareHandler) Rollback(c *gin.Context) {
 	projectID := c.Param("project_id")
+	if !h.requireOwner(c, projectID) {
+		return
+	}
 	var req struct {
 		TargetVersionID string `json:"target_version_id"`
 		VersionNo       int    `json:"version_no"` // legacy compatibility

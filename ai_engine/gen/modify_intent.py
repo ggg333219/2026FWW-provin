@@ -21,6 +21,7 @@ from typing import Any
 
 from ai_engine.core.config import settings
 from ai_engine.core.llm import LLMClient
+from ai_engine.gen.elements import resolve_element_candidates, build_element_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ def build_modify_intent_schema() -> dict[str, Any]:
             "properties": {
                 "target_type": {"type": "string", "enum": list(TARGET_TYPES)},
                 "target_ids": {"type": "array", "items": {"type": "string"}},
+                "target_element_ids": {"type": "array", "items": {"type": "string"}},
                 "action": {
                     "type": "string",
                     "enum": list(MODIFY_ACTIONS),
@@ -54,6 +56,8 @@ def build_modify_intent_schema() -> dict[str, Any]:
                 "confidence": {"type": "number"},
                 "clarification_needed": {"type": "boolean"},
                 "clarification_question": {"type": "string"},
+                "risk_level": {"type": "string", "enum": ["low", "high"]},
+                "confirmation_required": {"type": "boolean"},
                 "presentation": {
                     "type": "object",
                     "additionalProperties": False,
@@ -70,12 +74,15 @@ def build_modify_intent_schema() -> dict[str, Any]:
             "required": [
                 "target_type",
                 "target_ids",
+                "target_element_ids",
                 "action",
                 "secondary_actions",
                 "constraints",
                 "confidence",
                 "clarification_needed",
                 "clarification_question",
+                "risk_level",
+                "confirmation_required",
                 "presentation",
             ],
         },
@@ -134,6 +141,11 @@ class ModifyIntentParser:
         if not instruction or not instruction.strip():
             return self._clarify("请描述你想要的修改，例如“第三页减少文字”。")
 
+        element_snapshot = build_element_snapshot(nodes or [])
+        candidate_result = resolve_element_candidates(instruction, element_snapshot)
+        if candidate_result["status"] == "ambiguous":
+            return self._clarify_candidates(candidate_result["candidates"])
+
         nodes_brief = json.dumps(
             [
                 {
@@ -142,6 +154,16 @@ class ModifyIntentParser:
                     "summary": n.get("summary", ""),
                     "node_type": n.get("node_type", "content"),
                     "order": n.get("order", i + 1),
+                    "elements": [
+                        {
+                            "element_id": e.get("element_id"),
+                            "element_type": e.get("element_type"),
+                            "role": e.get("role"),
+                            "position": (e.get("geometry") or {}).get("position", ""),
+                            "content_preview": str(e.get("content", ""))[:120],
+                        }
+                        for e in (n.get("metadata") or {}).get("elements", [])
+                    ],
                 }
                 for i, n in enumerate(nodes or [])
             ],
@@ -164,7 +186,7 @@ class ModifyIntentParser:
             logger.warning("[parse_modify] LLM 调用失败: %s", exc)
             return self._clarify("AI 服务暂不可用，请稍后重试或换一种说法。")
 
-        return self._normalize(result, nodes or [])
+        return self._normalize(result, element_snapshot, candidate_result)
 
     # ------------------------------------------------------------------
 
@@ -173,12 +195,16 @@ class ModifyIntentParser:
         return {
             "target_type": "global",
             "target_ids": [],
+            "target_element_ids": [],
             "action": "rewrite",
             "secondary_actions": [],
             "constraints": [],
             "confidence": 0.0,
             "clarification_needed": True,
             "clarification_question": question,
+            "risk_level": "low",
+            "confirmation_required": False,
+            "candidates": [],
             "presentation": {key: "" for key in ("template_id", "palette", "layout", "font_family", "density")},
         }
 
@@ -190,7 +216,19 @@ class ModifyIntentParser:
             return {key: "" for key in keys}
         return {key: str(value.get(key) or "").strip() for key in keys}
 
-    def _normalize(self, result: Any, nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    @staticmethod
+    def _clarify_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+        labels = [
+            f"第{item.get('page_number')}页{item.get('role')}（{item.get('content_preview') or '无文本'}）"
+            for item in candidates[:5]
+        ]
+        return {
+            **ModifyIntentParser._clarify("请明确要修改哪一个元素：" + "、".join(labels)),
+            "candidates": candidates,
+        }
+
+    def _normalize(self, result: Any, nodes: list[dict[str, Any]],
+                   candidate_result: dict[str, Any] | None = None) -> dict[str, Any]:
         """LLM 返回容错归一：非 dict / 枚举外值 / 越界 node_id 收敛到安全值。"""
         if not isinstance(result, dict):
             return self._clarify("指令解析失败，请换一种说法（例如“第三页减少文字”）。")
@@ -207,9 +245,23 @@ class ModifyIntentParser:
             target_type = "style"
 
         valid_ids = {str(n.get("node_id", "")) for n in nodes if n.get("node_id")}
+        element_map = {
+            str(e.get("element_id")): str(e.get("page_id"))
+            for n in nodes
+            for e in (n.get("metadata") or {}).get("elements", [])
+            if e.get("element_id") and e.get("page_id")
+        }
         target_ids = [
             str(t) for t in (result.get("target_ids") or []) if str(t) in valid_ids
         ]
+        target_element_ids = [
+            str(t) for t in (result.get("target_element_ids") or [])
+            if str(t) in element_map
+        ]
+        if not target_element_ids and candidate_result and candidate_result.get("status") == "resolved":
+            target_element_ids = list(candidate_result.get("target_element_ids") or [])
+        if target_element_ids and not target_ids:
+            target_ids = list(dict.fromkeys(element_map[item] for item in target_element_ids if item in element_map))
         # 节点类动作但没定位到合法 id → 需要澄清
         if action in ("simplify", "expand", "delete", "rewrite") and target_type in ("node", "page") and not target_ids:
             return self._clarify("没有定位到要修改的节点，请说明是哪一页（例如“第三页”）。")
@@ -225,15 +277,29 @@ class ModifyIntentParser:
 
         clarification_needed = bool(result.get("clarification_needed")) or confidence < CONFIDENCE_THRESHOLD
         question = str(result.get("clarification_question") or "").strip()
+        risk_level = str(result.get("risk_level") or "low")
+        if risk_level not in {"low", "high"}:
+            risk_level = "low"
+        if action in {"delete", "add", "reorder", "restyle"} or target_element_ids and any(
+            item.get("element_type") in {"image", "chart", "shape"}
+            for item in (candidate_result or {}).get("candidates", [])
+            if item.get("element_id") in target_element_ids
+        ):
+            risk_level = "high"
+        confirmation_required = bool(result.get("confirmation_required")) or risk_level == "high"
 
         return {
             "target_type": target_type,
             "target_ids": target_ids,
+            "target_element_ids": target_element_ids,
             "action": action,
             "secondary_actions": secondary,
             "constraints": constraints,
             "confidence": confidence,
             "clarification_needed": clarification_needed,
             "clarification_question": question,
+            "risk_level": risk_level,
+            "confirmation_required": confirmation_required,
+            "candidates": (candidate_result or {}).get("candidates", []),
             "presentation": self._normalize_presentation(result.get("presentation"), action),
         }

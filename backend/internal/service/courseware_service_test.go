@@ -140,9 +140,9 @@ func TestModifySnapshotPerCall(t *testing.T) {
 	if len(draft.Generation.Nodes) != len(r1.AllNodes) {
 		t.Fatalf("修改后的草稿应保存完整生成节点, 实际 %d", len(draft.Generation.Nodes))
 	}
-	// 首个快照保存的是"修改前"状态
+	// 正式版本保存修改后状态，BeforeSnapshotJSON 保存修改前状态。
 	var snapNodes []TeachingNodeItem
-	_ = json.Unmarshal([]byte(versions[0].NodesJSON), &snapNodes)
+	_ = json.Unmarshal([]byte(versions[0].BeforeSnapshotJSON), &snapNodes)
 	if len(snapNodes) != 3 || snapNodes[1].Script != "原始讲稿2" {
 		t.Fatalf("首个快照应为修改前状态, 实际 %+v", snapNodes)
 	}
@@ -231,6 +231,41 @@ func TestModifyClarification(t *testing.T) {
 	versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
 	if len(versions) != 0 {
 		t.Fatalf("追问时不应产生快照, 实际 %d", len(versions))
+	}
+}
+
+func TestModifyRequiresConfirmationForHighRiskElementAction(t *testing.T) {
+	ai := &fakeModifyAI{intent: &ModifyIntent{
+		TargetType: "node", TargetIDs: []string{"node_2"},
+		TargetElementIDs: []string{"el_node_2_chart"}, Action: "restyle",
+		RiskLevel: "high", ConfirmationRequired: true, Confidence: 0.95,
+	}}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+
+	result, err := svc.ModifyWithOptions(context.Background(), p.ProjectID, "把第二页图表改成柱状图", sampleTeachingNodes(), false)
+	if err != nil {
+		t.Fatalf("ModifyWithOptions: %v", err)
+	}
+	if !result.RequiresConfirmation || result.RiskLevel != "high" {
+		t.Fatalf("高风险元素修改应先确认: %+v", result)
+	}
+	versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
+	if len(versions) != 0 {
+		t.Fatalf("确认前不应产生版本, 实际 %d", len(versions))
+	}
+}
+
+func TestEnsureElementMetadataKeepsStableIDs(t *testing.T) {
+	nodes := ensureElementMetadata(sampleTeachingNodes())
+	first := nodes[1].Metadata["elements"].([]map[string]any)
+	if first[0]["element_id"] != "el_node_2_title" {
+		t.Fatalf("标题元素 ID 不稳定: %#v", first[0])
+	}
+	nodes = ensureElementMetadata(nodes)
+	second := nodes[1].Metadata["elements"].([]map[string]any)
+	if second[0]["element_id"] != first[0]["element_id"] {
+		t.Fatalf("重复归一化改变元素 ID")
 	}
 }
 
@@ -329,7 +364,7 @@ func TestRollbackClonesVersion(t *testing.T) {
 		}
 	}
 
-	// 回滚到 v1 → 生成 v4，内容 = v1 的修改前状态（原始 nodes）
+	// 回滚到 v1 → 生成 v4，内容 = v1 的正式版本状态
 	rb, err := svc.Rollback(context.Background(), p.ProjectID, 1)
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
@@ -337,7 +372,7 @@ func TestRollbackClonesVersion(t *testing.T) {
 	if rb.NewVersionNo != 4 {
 		t.Fatalf("回滚应生成 v4, 实际 %d", rb.NewVersionNo)
 	}
-	if len(rb.Nodes) != 3 || rb.Nodes[1].Script != "原始讲稿2" {
+	if len(rb.Nodes) != 3 || rb.Nodes[1].Script != "v2 内容" {
 		t.Fatalf("回滚内容应为 v1 状态, 实际 %+v", rb.Nodes)
 	}
 	// v1/v2/v3 仍可查
