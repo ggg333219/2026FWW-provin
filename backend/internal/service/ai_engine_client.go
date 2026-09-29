@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const outlineRequestTimeout = 120 * time.Second
+
 // AIEngine 定义所有向后端 AI Engine 的调用契约。
 // 旧接口继续保持向后兼容，新 Skill 接口按功能域分组。
 type AIEngine interface {
@@ -563,8 +565,9 @@ type OutlineGenerateRequest struct {
 
 // OutlineGenerateResponse —— POST /gen/outline 响应（Python 返回裸 {"nodes": [...], "used_fallback": ...}）。
 type OutlineGenerateResponse struct {
-	Nodes        []OutlineNode `json:"nodes"`
-	UsedFallback bool          `json:"used_fallback,omitempty"`
+	Nodes          []OutlineNode `json:"nodes"`
+	UsedFallback   bool          `json:"used_fallback,omitempty"`
+	FallbackReason string        `json:"fallback_reason,omitempty"`
 }
 
 // OutlineReviseAIRequest —— POST /gen/outline/revise 请求（Python GenOutlineReviseRequest 镜像）。
@@ -1155,7 +1158,7 @@ func (c *aiEngineClient) GenerationCreate(ctx context.Context, req GenerationCre
 
 func (c *aiEngineClient) GenerateOutline(ctx context.Context, req OutlineGenerateRequest) (*OutlineGenerateResponse, error) {
 	var result OutlineGenerateResponse
-	if err := c.postJSON(ctx, "/gen/outline", req, &result); err != nil {
+	if err := c.postJSONWithTimeout(ctx, "/gen/outline", req, &result, outlineRequestTimeout); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -1163,7 +1166,7 @@ func (c *aiEngineClient) GenerateOutline(ctx context.Context, req OutlineGenerat
 
 func (c *aiEngineClient) ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error) {
 	var result OutlineReviseAIResponse
-	if err := c.postJSON(ctx, "/gen/outline/revise", req, &result); err != nil {
+	if err := c.postJSONWithTimeout(ctx, "/gen/outline/revise", req, &result, outlineRequestTimeout); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -1337,6 +1340,10 @@ func (c *aiEngineClient) ExportDownloadURL(jobID, extension string) string {
 }
 
 func (c *aiEngineClient) postJSON(ctx context.Context, path string, reqBody any, out any) error {
+	return c.postJSONWithTimeout(ctx, path, reqBody, out, 0)
+}
+
+func (c *aiEngineClient) postJSONWithTimeout(ctx context.Context, path string, reqBody any, out any, timeout time.Duration) error {
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("序列化请求失败: %w", err)
@@ -1348,7 +1355,13 @@ func (c *aiEngineClient) postJSON(ctx context.Context, path string, reqBody any,
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.client.Do(req)
+	client := c.client
+	if timeout > 0 {
+		clientCopy := *c.client
+		clientCopy.Timeout = timeout
+		client = &clientCopy
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("调用AI引擎失败: %w", err)
 	}

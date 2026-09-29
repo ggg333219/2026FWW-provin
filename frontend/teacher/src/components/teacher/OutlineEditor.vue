@@ -57,6 +57,10 @@
       {{ outlineStore.confirmError || outlineStore.reviseError || outlineStore.error }}
     </div>
 
+    <div v-if="outlineStore.fallbackNotice" class="fallback-notice" role="status" aria-live="polite">
+      {{ outlineStore.fallbackNotice }}
+    </div>
+
     <!-- 节点编辑器 -->
     <div class="nodes-list">
       <TransitionGroup name="node-list">
@@ -820,6 +824,16 @@ function handleCancelRevision() {
   outline: none;
 }
 .duration-input:disabled { background: #f8fbf9; }
+.fallback-notice {
+  margin: 10px 0;
+  padding: 10px 12px;
+  color: #704b0b;
+  background: #fff8e7;
+  border: 1px solid #e8c978;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
 .node-delete-btn {
   background: none;
   border: none;

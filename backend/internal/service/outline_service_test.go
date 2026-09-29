@@ -3,7 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // ---- fake AIEngine：仅实现大纲两个方法，其余留空（测试只走 OutlineService）----
@@ -33,6 +36,51 @@ func sampleNodes() []OutlineNode {
 	return []OutlineNode{
 		{NodeID: "node_001", Order: 1, Title: "引言", Summary: "课程导入", NodeType: OutlineNodeTypeContent, KeyPoints: []string{"背景"}, EstimatedDurationMin: 5},
 		{NodeID: "node_002", Order: 2, Title: "主算法", Summary: "核心讲解", NodeType: OutlineNodeTypeSection, KeyPoints: []string{"原理"}, EstimatedDurationMin: 20},
+	}
+}
+
+func TestOutlineRequestsUseExtendedTimeoutWithoutChangingOtherCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(80 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"nodes":[]}`))
+	}))
+	defer server.Close()
+
+	client := NewAIEngineClient(server.URL, 20*time.Millisecond).(*aiEngineClient)
+	if _, err := client.GenerateOutline(context.Background(), OutlineGenerateRequest{}); err != nil {
+		t.Fatalf("大纲请求未使用专用等待时间: %v", err)
+	}
+	var response map[string]any
+	if err := client.postJSON(context.Background(), "/other", map[string]any{}, &response); err == nil {
+		t.Fatal("普通 AI 请求不应继承大纲专用等待时间")
+	}
+}
+
+func TestOutlineFallbackMetadataPersistenceRoundTrip(t *testing.T) {
+	original := &Outline{
+		OutlineID: "outline_fallback", OutlineVersion: 1,
+		UsedFallback: true, FallbackReason: "timeout", Nodes: sampleNodes(),
+	}
+	row, err := marshalOutlineRow(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := unmarshalOutlineRow(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restored.UsedFallback || restored.FallbackReason != "timeout" {
+		t.Fatalf("回退元数据未在持久化序列化中保留: %+v", restored)
+	}
+}
+
+func TestNormalizeOutlineFallbackReasonOnlyReturnsSafeCategories(t *testing.T) {
+	if got := normalizeOutlineFallbackReason(true, "timeout: secret detail"); got != "model_error" {
+		t.Fatalf("不安全的回退原因未归一: %q", got)
+	}
+	if got := normalizeOutlineFallbackReason(false, "timeout"); got != "" {
+		t.Fatalf("AI 成功结果不应带回退原因: %q", got)
 	}
 }
 
@@ -265,6 +313,12 @@ func TestCreateOutlineSessionRequired(t *testing.T) {
 	_, err := svc.CreateOutline(context.Background(), OutlineGenerateRequest{})
 	if err == nil {
 		t.Fatal("session_id 为空应报错")
+	}
+}
+
+func TestOutlineEngineTimeoutBudget(t *testing.T) {
+	if outlineRequestTimeout != 120*time.Second {
+		t.Fatalf("outline engine timeout = %s, want 120s", outlineRequestTimeout)
 	}
 }
 

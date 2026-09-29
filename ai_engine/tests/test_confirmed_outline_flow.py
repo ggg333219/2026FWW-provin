@@ -118,6 +118,40 @@ def test_outline_revision_preserves_existing_node_ids():
     assert result["change_summary"]
 
 
+def test_generate_outline_returns_fallback_status(monkeypatch):
+    class FakeBuilder:
+        def build(self, intent, evidence_packet):
+            return {
+                "nodes": [{"node_id": "node_001", "title": "本地兜底"}],
+                "used_fallback": True,
+                "fallback_reason": "timeout",
+            }
+
+    monkeypatch.setattr(main_module, "OutlineBuilder", FakeBuilder)
+    response = client.post("/gen/outline", json={"intent": {"topic": "排序"}})
+
+    assert response.status_code == 200
+    assert response.json()["used_fallback"] is True
+    assert response.json()["fallback_reason"] == "timeout"
+    assert response.json()["nodes"][0]["title"] == "本地兜底"
+
+
+def test_generate_outline_success_does_not_claim_fallback(monkeypatch):
+    class FakeBuilder:
+        def build(self, intent, evidence_packet):
+            return {
+                "nodes": [{"node_id": "node_001", "title": "AI 大纲"}],
+                "used_fallback": False,
+            }
+
+    monkeypatch.setattr(main_module, "OutlineBuilder", FakeBuilder)
+    response = client.post("/gen/outline", json={"intent": {"topic": "排序"}})
+
+    assert response.status_code == 200
+    assert response.json()["used_fallback"] is False
+    assert "fallback_reason" not in response.json()
+
+
 def test_gen_finalize_creates_snapshot_from_confirmed_content():
     """测试 /api/v1/gen/finalize 从确认的内容节点创建版本快照（PPT 生成步骤）。"""
     resp = client.post("/api/v1/gen/finalize", json={

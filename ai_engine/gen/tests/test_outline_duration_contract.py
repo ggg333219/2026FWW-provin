@@ -14,6 +14,7 @@
 
 import math
 import unittest
+from unittest.mock import patch
 
 from ai_engine.schema import (
     DEFAULT_NODE_DURATION_MINUTES,
@@ -314,6 +315,8 @@ class TestOutlineBuilderDurationEndToEnd(unittest.TestCase):
             {"topic": "主题", "knowledge_points": ["概念", "应用"], "duration_minutes": 20}
         )
         self._assert_go_contract(result["nodes"], expected_count=2)
+        self.assertTrue(result["used_fallback"])
+        self.assertEqual(result["fallback_reason"], "empty_model_response")
         self.assertEqual(
             sum(n["estimated_duration_minutes"] for n in result["nodes"]), 20
         )
@@ -325,7 +328,34 @@ class TestOutlineBuilderDurationEndToEnd(unittest.TestCase):
         self.mock.chat_with_schema = boom
         result = self.builder.build({"topic": "主题", "knowledge_points": ["点1"]})
         self.assertTrue(result["used_fallback"])
+        self.assertEqual(result["fallback_reason"], "model_error")
         self._assert_go_contract(result["nodes"])
+
+    def test_timeout_fallback_has_safe_reason_category(self):
+        def timeout(*_args, **_kwargs):
+            raise TimeoutError("provider timed out with internal detail")
+
+        self.mock.chat_with_schema = timeout
+        result = self.builder.build({"topic": "主题", "knowledge_points": ["点1"]})
+
+        self.assertTrue(result["used_fallback"])
+        self.assertEqual(result["fallback_reason"], "timeout")
+        self.assertNotIn("internal detail", result["fallback_reason"])
+
+    def test_outline_llm_timeout_is_capped_at_90_seconds(self):
+        with patch("ai_engine.gen.outline.resolve_llm_timeout", return_value=120):
+            llm = OutlineBuilder()._get_llm()
+
+        self.assertEqual(llm.timeout, 90)
+        self.assertEqual(llm.max_attempts, 1)
+        self.assertTrue(llm.disable_sdk_retries)
+        self.assertTrue(llm.stop_schema_fallback_on_error)
+
+    def test_outline_respects_an_explicitly_lower_timeout(self):
+        with patch("ai_engine.gen.outline.resolve_llm_timeout", return_value=15):
+            llm = OutlineBuilder()._get_llm()
+
+        self.assertEqual(llm.timeout, 15)
 
     def test_build_from_markdown_satisfies_contract(self):
         self.mock.set_json_response(

@@ -8,6 +8,58 @@ describe('outlineStore 大纲拖拽排序', () => {
     setActivePinia(createPinia())
     vi.stubGlobal('window', { localStorage: { setItem: vi.fn(), getItem: vi.fn(), removeItem: vi.fn() } })
   })
+
+  it('保留 AI 回退状态并将其写入本地恢复快照', () => {
+    const setItem = vi.fn()
+    vi.stubGlobal('window', { localStorage: { setItem, getItem: vi.fn(), removeItem: vi.fn() } })
+    const store = useOutlineStore()
+
+    store._applyOutlineData({
+      outline_id: 'outline_fallback',
+      used_fallback: true,
+      fallback_reason: 'timeout',
+      nodes: [{ node_id: 'node_001', title: '本地兜底节点' }],
+    })
+    store._persist()
+
+    expect(store.usedFallback).toBe(true)
+    expect(store.fallbackReason).toBe('timeout')
+    expect(store.fallbackNotice).toContain('AI 请求超时')
+    expect(store.fallbackNotice).toContain('最初使用本地兜底生成')
+    expect(store.fallbackNotice).toContain('继续手动编辑')
+    expect(JSON.parse(setItem.mock.calls.at(-1)[1])).toMatchObject({
+      used_fallback: true,
+      fallback_reason: 'timeout',
+    })
+  })
+
+  it('AI 成功大纲不显示回退提示，兜底大纲仍可编辑并保存', async () => {
+    const save = vi.spyOn(teacherV1Api.outline, 'save').mockResolvedValue({
+      data: { outline_version: 2, status: 'draft' },
+    })
+    const store = useOutlineStore()
+    store._applyOutlineData({
+      outline_id: 'outline_generated',
+      used_fallback: false,
+      nodes: [{ node_id: 'node_001', title: 'AI 生成节点', summary: '摘要' }],
+    })
+    expect(store.fallbackNotice).toBe('')
+
+    store._applyOutlineData({
+      outline_id: 'outline_fallback',
+      used_fallback: true,
+      fallback_reason: 'timeout',
+      nodes: [{ node_id: 'node_001', title: '兜底节点', summary: '摘要' }],
+    })
+    store.updateNode('node_001', { title: '教师已编辑' })
+    await store.saveVersion()
+
+    expect(store.nodes[0].title).toBe('教师已编辑')
+    expect(store.canEdit).toBe(true)
+    expect(save).toHaveBeenCalledWith('outline_fallback', expect.objectContaining({
+      nodes: [expect.objectContaining({ title: '教师已编辑' })],
+    }))
+  })
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()

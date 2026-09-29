@@ -211,6 +211,8 @@ class LLMClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         max_attempts: Optional[int] = None,
+        disable_sdk_retries: bool = False,
+        stop_schema_fallback_on_error: bool = False,
     ):
         self.model = model or settings.MODEL
         self.temperature = temperature if temperature is not None else settings.TEMPERATURE
@@ -220,6 +222,8 @@ class LLMClient:
         # 重试收紧：显式传入 max_attempts（如批量降级路径传 1 = 不重试）优先，
         # None 时每次调用按 LLM_RETRY_MAX_ATTEMPTS 环境变量 / 默认 2 解析
         self.max_attempts = int(max_attempts) if max_attempts and int(max_attempts) > 0 else None
+        self.disable_sdk_retries = disable_sdk_retries
+        self.stop_schema_fallback_on_error = stop_schema_fallback_on_error
         self._api_key = api_key
         self._base_url = base_url
 
@@ -474,6 +478,8 @@ class LLMClient:
                 logger.warning(
                     "[chat_with_schema] 级别 %s 调用异常，降级到下一级: %s", level_name, exc,
                 )
+                if self.stop_schema_fallback_on_error:
+                    break
                 continue
 
             if response.used_fallback:
@@ -483,6 +489,11 @@ class LLMClient:
                     "[chat_with_schema] 级别 %s 请求失败（重试耗尽或不可重试错误），降级到下一级: %s",
                     level_name, response.fallback_reason,
                 )
+                # A different JSON encoding cannot repair a slow or unavailable
+                # provider. Stop the format fallback chain and let the caller use
+                # its deterministic fallback instead of repeating long requests.
+                if self.stop_schema_fallback_on_error:
+                    break
                 continue
 
             try:
@@ -495,6 +506,8 @@ class LLMClient:
                 logger.warning(
                     "[chat_with_schema] 级别 %s 返回内容无法解析为 JSON，降级到下一级", level_name,
                 )
+                if self.stop_schema_fallback_on_error:
+                    break
 
         raise RuntimeError(
             "chat_with_schema 三级降级链全部失败: " + " | ".join(failures)
@@ -583,11 +596,14 @@ class LLMClient:
         """
         from openai import OpenAI
 
-        client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            timeout=self.timeout,
-        )
+        client_options = {
+            "api_key": self.api_key,
+            "base_url": self.base_url,
+            "timeout": self.timeout,
+        }
+        if self.disable_sdk_retries:
+            client_options["max_retries"] = 0
+        client = OpenAI(**client_options)
         return client.chat.completions.create(
             model=actual_model,
             messages=messages,

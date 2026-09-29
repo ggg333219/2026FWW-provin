@@ -72,21 +72,21 @@ describe('大纲接口超时配置', () => {
     return delays
   }
 
-  it('create 使用远高于默认 10s 的超时（LLM 路径实测可达 15s+）', async () => {
+  it('create 使用 150s 超时，长于 Go 大纲等待上限', async () => {
     const delays = captureTimeoutDelays()
     globalThis.fetch = stallingFetch()
 
     await teacherOutlineApi.create({ session_id: 's1' }).catch(() => {})
 
-    expect(delays.some((ms) => ms > 60000)).toBe(true)
+    expect(delays).toContain(150000)
   })
 
-  it('revise 同样使用长超时，不回落默认 10s', async () => {
+  it('revise 同样使用 150s 超时，长于 Go 大纲等待上限', async () => {
     const delays = captureTimeoutDelays()
     globalThis.fetch = stallingFetch()
 
     await teacherOutlineApi.revise('outline_1', { message: '删掉总结节点' }).catch(() => {})
 
-    expect(delays.some((ms) => ms > 60000)).toBe(true)
+    expect(delays).toContain(150000)
   })
 })

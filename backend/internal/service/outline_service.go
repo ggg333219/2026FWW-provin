@@ -34,37 +34,39 @@ const (
 // OutlineNode 节点类型常量。
 // 并集：大纲语义（规范 §2.1，前端使用） + 引擎渲染枚举（Python schema.py VALID_NODE_TYPES）。
 const (
-	OutlineNodeTypeContent    = "content"
-	OutlineNodeTypeSection    = "section"
-	OutlineNodeTypeQuiz       = "quiz"
+	OutlineNodeTypeContent     = "content"
+	OutlineNodeTypeSection     = "section"
+	OutlineNodeTypeQuiz        = "quiz"
 	OutlineNodeTypeInteractive = "interactive"
-	OutlineNodeTypeSummary    = "summary"
+	OutlineNodeTypeSummary     = "summary"
 	// 引擎渲染枚举（Python normalize_stage2_nodes 产出，大纲草稿可能携带）
-	OutlineNodeTypeSlide  = "slide"
-	OutlineNodeTypeCover  = "cover"
+	OutlineNodeTypeSlide   = "slide"
+	OutlineNodeTypeCover   = "cover"
 	OutlineNodeTypeDivider = "divider"
 )
 
 // Outline 领域实体 —— outline_id + outline_version 唯一确定一份大纲内容（规范 §6）。
 type Outline struct {
-	OutlineID    string        `json:"outline_id"`
-	OutlineVersion int         `json:"outline_version"`
-	SessionID    string        `json:"session_id"`
-	IntentID     string        `json:"intent_id"`
-	Title        string        `json:"title"`
-	Status       string        `json:"status"` // draft | confirmed | superseded
-	Nodes        []OutlineNode `json:"nodes"`
-	CreatedAt    time.Time     `json:"created_at"`
-	UpdatedAt    time.Time     `json:"updated_at"`
-	ConfirmedAt  *time.Time    `json:"confirmed_at,omitempty"`
+	OutlineID      string        `json:"outline_id"`
+	OutlineVersion int           `json:"outline_version"`
+	SessionID      string        `json:"session_id"`
+	IntentID       string        `json:"intent_id"`
+	Title          string        `json:"title"`
+	Status         string        `json:"status"` // draft | confirmed | superseded
+	Nodes          []OutlineNode `json:"nodes"`
+	UsedFallback   bool          `json:"used_fallback"`
+	FallbackReason string        `json:"fallback_reason,omitempty"`
+	CreatedAt      time.Time     `json:"created_at"`
+	UpdatedAt      time.Time     `json:"updated_at"`
+	ConfirmedAt    *time.Time    `json:"confirmed_at,omitempty"`
 }
 
 // 哨兵错误 —— generation_handler.go:43 通过 errors.Is(err, service.ErrOutlineNotFound) 判 404。
 var (
-	ErrOutlineNotFound       = errors.New("大纲不存在")
+	ErrOutlineNotFound        = errors.New("大纲不存在")
 	ErrOutlineVersionConflict = errors.New("大纲版本冲突")
-	ErrOutlineNotConfirmed   = errors.New("大纲尚未确认")
-	ErrInvalidOutline        = errors.New("大纲结构校验失败")
+	ErrOutlineNotConfirmed    = errors.New("大纲尚未确认")
+	ErrInvalidOutline         = errors.New("大纲结构校验失败")
 )
 
 // =============================================================================
@@ -92,8 +94,8 @@ type OutlineStore interface {
 // ---- memOutlineStore：进程内存实现（S1 standalone 降级，重启即失）----
 
 type memOutlineStore struct {
-	mu      sync.RWMutex
-	byID    map[string][]*Outline // outline_id -> 按 version 升序的版本链
+	mu   sync.RWMutex
+	byID map[string][]*Outline // outline_id -> 按 version 升序的版本链
 }
 
 func newMemOutlineStore() *memOutlineStore {
@@ -227,6 +229,8 @@ type outlineVersionRow struct {
 	Title          string     `gorm:"column:title;size:500"`
 	Status         string     `gorm:"column:status;size:20;index"`
 	NodesJSON      string     `gorm:"column:nodes_json;type:text"`
+	UsedFallback   bool       `gorm:"column:used_fallback;default:false"`
+	FallbackReason string     `gorm:"column:fallback_reason;size:40"`
 	CreatedAt      time.Time  `gorm:"column:created_at"`
 	UpdatedAt      time.Time  `gorm:"column:updated_at"`
 	ConfirmedAt    *time.Time `gorm:"column:confirmed_at"`
@@ -396,6 +400,8 @@ func marshalOutlineRow(o *Outline) (*outlineVersionRow, error) {
 		Title:          o.Title,
 		Status:         o.Status,
 		NodesJSON:      string(nodesJSON),
+		UsedFallback:   o.UsedFallback,
+		FallbackReason: o.FallbackReason,
 		CreatedAt:      o.CreatedAt,
 		UpdatedAt:      o.UpdatedAt,
 		ConfirmedAt:    o.ConfirmedAt,
@@ -410,6 +416,8 @@ func unmarshalOutlineRow(row *outlineVersionRow) (*Outline, error) {
 		IntentID:       row.IntentID,
 		Title:          row.Title,
 		Status:         row.Status,
+		UsedFallback:   row.UsedFallback,
+		FallbackReason: row.FallbackReason,
 		CreatedAt:      row.CreatedAt,
 		UpdatedAt:      row.UpdatedAt,
 		ConfirmedAt:    row.ConfirmedAt,
@@ -487,6 +495,8 @@ func (s *OutlineService) CreateOutline(ctx context.Context, req OutlineGenerateR
 		Title:          title,
 		Status:         OutlineStatusDraft,
 		Nodes:          nodes,
+		UsedFallback:   resp.UsedFallback,
+		FallbackReason: normalizeOutlineFallbackReason(resp.UsedFallback, resp.FallbackReason),
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -531,6 +541,8 @@ func (s *OutlineService) SaveOutlineVersion(ctx context.Context, outlineID strin
 		Title:          current.Title,
 		Status:         OutlineStatusDraft, // 修改后重新进入草稿态，可再次确认
 		Nodes:          normalizeOutlineNodes(nodes),
+		UsedFallback:   current.UsedFallback,
+		FallbackReason: current.FallbackReason,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -583,6 +595,8 @@ func (s *OutlineService) ReviseOutline(ctx context.Context, outlineID string, me
 		Title:          base.Title,
 		Status:         OutlineStatusDraft,
 		Nodes:          nodes,
+		UsedFallback:   base.UsedFallback,
+		FallbackReason: base.FallbackReason,
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
 	}
@@ -671,6 +685,18 @@ func validateOutlineDraft(nodes []OutlineNode) error {
 		}
 	}
 	return nil
+}
+
+func normalizeOutlineFallbackReason(usedFallback bool, reason string) string {
+	if !usedFallback {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "timeout", "invalid_model_response", "empty_model_response", "model_error":
+		return strings.ToLower(strings.TrimSpace(reason))
+	default:
+		return "model_error"
+	}
 }
 
 // validateOutlineNodes —— 确认严格校验（Confirm 用，规范 §3.5）：

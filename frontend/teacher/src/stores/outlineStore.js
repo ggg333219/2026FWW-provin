@@ -71,6 +71,8 @@ export const useOutlineStore = defineStore('outline', {
     status: 'draft', // draft | confirming | confirmed | superseded
     title: '',
     confirmed_at: null,
+    usedFallback: false,
+    fallbackReason: '',
     /** 从历史课件版本恢复时记录来源大纲版本；首次保存会基于服务端最新版本创建新分支。 */
     forked_from_version: 0,
 
@@ -117,6 +119,18 @@ export const useOutlineStore = defineStore('outline', {
     /** 是否有互动节点 */
     hasInteractive: (state) =>
       state.nodes.some((n) => n.node_type === 'interactive' || n.interactive_plan?.enabled),
+
+    fallbackNotice: (state) => {
+      if (!state.usedFallback) return ''
+      const reasons = {
+        timeout: 'AI 请求超时',
+        invalid_model_response: 'AI 返回内容无效',
+        empty_model_response: 'AI 未返回有效节点',
+        model_error: 'AI 服务暂时不可用',
+      }
+      const reason = reasons[state.fallbackReason] || 'AI 未能生成大纲'
+      return `${reason}，本大纲最初使用本地兜底生成，可能未由 AI 生成完整内容。请检查 AI 服务配置，或继续手动编辑并确认此大纲。`
+    },
 
     /** 获取指定节点 */
     getNode: (state) => (nodeId) => state.nodes.find((n) => n.node_id === nodeId),
@@ -196,6 +210,8 @@ export const useOutlineStore = defineStore('outline', {
         this.status = cache.status || 'draft'
         this.title = cache.title || ''
         this.confirmed_at = cache.confirmed_at || null
+        this.usedFallback = Boolean(cache.used_fallback)
+        this.fallbackReason = cache.fallback_reason || ''
         this.forked_from_version = Number(cache.forked_from_version || 0)
         this.nodes = Array.isArray(cache.nodes) ? cache.nodes : []
         this.session_id = cache.session_id || ''
@@ -479,6 +495,8 @@ export const useOutlineStore = defineStore('outline', {
       this.status = data.status || 'draft'
       this.title = data.title || ''
       this.confirmed_at = data.confirmed_at || null
+      this.usedFallback = Boolean(data.used_fallback)
+      this.fallbackReason = data.fallback_reason || ''
       this.forked_from_version = Number(data.forked_from_version || 0)
       this.nodes = (data.nodes || []).map((n) => ({
         node_id: n.node_id || makeNodeId(),
@@ -542,6 +560,8 @@ export const useOutlineStore = defineStore('outline', {
             status: this.status,
             title: this.title,
             confirmed_at: this.confirmed_at,
+            used_fallback: this.usedFallback,
+            fallback_reason: this.fallbackReason,
             forked_from_version: this.forked_from_version,
             nodes: this.nodes,
             session_id: this.session_id,
@@ -560,6 +580,8 @@ export const useOutlineStore = defineStore('outline', {
       this.status = 'draft'
       this.title = ''
       this.confirmed_at = null
+      this.usedFallback = false
+      this.fallbackReason = ''
       this.forked_from_version = 0
       this.nodes = []
       this.session_id = ''
