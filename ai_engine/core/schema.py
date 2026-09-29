@@ -446,6 +446,35 @@ class TeachingNode(BaseModel):
     """
 
     # -------------------------------------------------------------------------
+    # 教学内容表达字段（教学表达规划器链路，见 gen/teaching_plan.py）
+    #
+    # 与 script 字段同理：字段只增不删。本类未声明 extra 策略，吃 pydantic 默认的
+    # extra='ignore' —— 未在此声明的键会在 model_validate 时被静默丢弃，且丢弃点不在
+    # 一处：main.py 的 task.nodes（→ /gen/status 响应）、GenerationVersion 快照落盘、
+    # Redis 恢复、以及 Go 侧 TeachingNodeItem 镜像。新增字段务必四处同步。
+    # -------------------------------------------------------------------------
+    point_details: list[dict[str, Any]] = Field(default_factory=list)
+    """
+    要点展开：[{point, detail}]，由讲稿 LLM 产出（schema.normalize_point_details）。
+    预览与导出都据此渲染右下正文面板。
+    """
+    figure: dict[str, Any] = Field(default_factory=dict)
+    """
+    程序化图示，形状由 gen/page_spec.normalize_figure 定义：
+    flow / compare / cycle / hierarchy / chart / matrix。空 dict 表示本页不出图。
+    """
+    key_conclusion: str = ""
+    """
+    本页大字结论，长度上限 gen/page_spec.MAX_CONCLUSION_CHARS。
+    非空时在「图示 → 正文 → 结论」的顺序里插入 conclusion 区块。
+    """
+    teaching_plan: dict[str, Any] = Field(default_factory=dict)
+    """
+    教学表达规划器对**这一页**的决策（gen/teaching_plan.py）。
+    规划是加分项：空 dict 表示这页没有规划，下游一律「缺失即降级」。
+    """
+
+    # -------------------------------------------------------------------------
     # 排版元数字段（对齐主流开源 AI-PPT 标准化规范）
     # -------------------------------------------------------------------------
     layout_hint: Optional[str] = None
@@ -714,6 +743,9 @@ class ExportRequest(BaseModel):
     format: ExportFormat = ExportFormat.PPTX
     version: Optional[int] = 0
     courseware_title: str = ""
+    # S4 项目版本导出时，Go 端的项目快照是权威数据源；允许直接传入
+    # 当前版本节点，避免依赖 AI Engine 进程本地的旧版本目录。
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ExportStatusResponse(BaseModel):

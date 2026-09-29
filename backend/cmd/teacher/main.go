@@ -140,7 +140,12 @@ func main() {
 	coursewareProjectHandler := handler.NewCoursewareProjectHandler(service.NewCoursewareProjectService(db))
 	// A6/A7: 修改对话 + 版本快照 + 回滚
 	if err := service.AutoMigrateCourseware(db); err != nil {
-		applogger.Warn("courseware 表迁移失败", zap.Error(err))
+		// 不致命，但要显眼：AutoMigrate 一旦报错就整体中断，缺的表/列不会补，
+		// 服务却照常起来，直到 S3 修改对话落版本快照时才以 SQLSTATE 42703 暴露。
+		applogger.Error("courseware 表迁移失败，模块1 的版本快照/页面绑定可能不可用",
+			zap.Error(err),
+			zap.String("hint", "确认 courseware_versions 等表结构与 internal/service/courseware_service.go 的模型一致"),
+		)
 	}
 	coursewareService := service.NewCoursewareServiceWithDB(aiClient, db)
 	// 把 coursewareService 透传给 genHandler：让 POST /api/v1/gen/modify 在
@@ -216,6 +221,8 @@ func newBaseEngine(mode string) *gin.Engine {
 func runS1Standalone(mode string, preferredPort int, runtimeDir string, aiClient service.AIEngine) {
 	r := newBaseEngine(mode)
 	convHandler := handler.NewConversationHandler(aiClient)
+	parseHandler := handler.NewParseHandler(aiClient)
+	knowledgeHandler := handler.NewKnowledgeHandler(aiClient)
 	outlineService := service.NewOutlineService(aiClient)
 	outlineHandler := handler.NewOutlineHandler(outlineService)
 	coursewareService := service.NewCoursewareService(aiClient)
@@ -259,6 +266,26 @@ func runS1Standalone(mode string, preferredPort int, runtimeDir string, aiClient
 	{
 		intent.POST("/extract", convHandler.ExtractIntent)
 		intent.POST("/confirm", convHandler.ConfirmIntent)
+	}
+
+	// S2/KB 同样不依赖 PostgreSQL 或 MinIO：解析结果与向量索引由 AI Engine
+	// 管理。轻量模式必须保留这些路由，否则 S1→S3 自动检索会固定 404，
+	// 前端只能错误降级成无资料生成。
+	parse := r.Group("/api/v1/parse")
+	{
+		parse.POST("/upload", parseHandler.Upload)
+		parse.POST("/process", parseHandler.ProcessFile)
+		parse.GET("/status/:task_id", parseHandler.ParseStatus)
+		parse.POST("/video", parseHandler.ProcessVideo)
+	}
+	rag := r.Group("/api/v1/rag")
+	{
+		rag.POST("/search", knowledgeHandler.Search)
+		rag.POST("/evidence", knowledgeHandler.Evidence)
+	}
+	knowledge := r.Group("/api/v1/knowledge")
+	{
+		knowledge.POST("/upload", knowledgeHandler.Upload)
 	}
 
 	outlines := r.Group("/api/v1/outlines")

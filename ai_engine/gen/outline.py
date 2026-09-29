@@ -35,6 +35,107 @@ class OutlineConfig:
     max_nodes: int = 20  # 节点上限
 
 
+_INTERACTIVE_ADD_WORDS = ("互动", "投票", "选择题", "测验", "问答", "练习", "讨论", "抢答")
+_ADD_WORDS = ("增加", "添加", "新增", "加入", "插入", "补充")
+
+
+def _is_interactive_add_request(message: str) -> bool:
+    """Detect the narrow, high-confidence add-interactive operation."""
+    text = str(message or "").strip()
+    return any(word in text for word in _ADD_WORDS) and any(
+        word in text for word in _INTERACTIVE_ADD_WORDS
+    )
+
+
+def _interactive_kind(message: str) -> tuple[str, int, bool]:
+    text = str(message or "")
+    if "投票" in text:
+        return "poll", 1, False
+    if "闪卡" in text:
+        return "flashcard", 0, False
+    if "游戏" in text or "抢答" in text:
+        return "game", 1, False
+    return "quiz", 2, True
+
+
+def _find_interactive_insert_index(nodes: list[dict[str, Any]], message: str) -> int:
+    """Return the insertion index without asking the LLM to reorder old nodes."""
+    text = str(message or "")
+    target_index = None
+    for index, node in enumerate(nodes):
+        title = str(node.get("title") or "").strip()
+        if title and title in text:
+            target_index = index
+            break
+    if target_index is None:
+        matched = re.search(r"第\s*(\d+)\s*(?:页|个节点|节点)", text)
+        if matched:
+            number = int(matched.group(1))
+            if 1 <= number <= len(nodes):
+                target_index = number - 1
+    if target_index is None:
+        return len(nodes)
+    if "之前" in text or "前面" in text or "前插" in text:
+        return target_index
+    return target_index + 1
+
+
+def _build_interactive_add_revision(nodes: list[dict[str, Any]], message: str) -> dict[str, Any]:
+    """Apply an add-interactive request deterministically.
+
+    Existing nodes are copied without allowing the LLM to reinterpret their
+    types. Only the new node receives an interactive plan.
+    """
+    original = [dict(node or {}) for node in nodes]
+    insert_at = _find_interactive_insert_index(original, message)
+    kind, question_count, auto_grading = _interactive_kind(message)
+    target = original[insert_at - 1] if insert_at > 0 and insert_at <= len(original) else None
+    target_title = str((target or {}).get("title") or "").strip()
+    if "投票" in message:
+        title = "课堂投票互动"
+    elif "选择题" in message or "测验" in message:
+        title = "课堂选择题互动"
+    elif "讨论" in message:
+        title = "课堂讨论互动"
+    else:
+        title = "课堂互动环节"
+    if target_title:
+        title = f"{title}：{target_title}"
+
+    used_ids = {str(node.get("node_id") or "") for node in original}
+    serial = len(original) + 1
+    node_id = f"node_{serial:03d}"
+    while node_id in used_ids:
+        serial += 1
+        node_id = f"node_{serial:03d}"
+    new_node = {
+        "node_id": node_id,
+        "title": title,
+        "summary": "通过课堂互动检验学生对核心知识点的理解，并收集即时反馈。",
+        "node_type": "interactive",
+        "type": "interactive",
+        "key_points": ["检验核心知识点理解", "引导学生参与课堂互动"],
+        "core_points": ["检验核心知识点理解", "引导学生参与课堂互动"],
+        "questions": [],
+        "interactive_questions": [],
+        "interactive_plan": {
+            "enabled": True,
+            "kind": kind,
+            "duration_minutes": 5,
+            "question_count": question_count,
+            "auto_grading": auto_grading,
+            "delivery": "html5_link",
+        },
+        "estimated_duration_minutes": 5,
+        "source_chunk_ids": [],
+    }
+    revised = original[:insert_at] + [new_node] + original[insert_at:]
+    return {
+        "nodes": to_outline_contract_nodes(revised),
+        "change_summary": [f"已新增{title}，原有节点保持不变"],
+    }
+
+
 class OutlineBuilder:
     """从教师意图 + 证据包构建课件大纲与节点树"""
 
@@ -92,9 +193,14 @@ class OutlineBuilder:
 
     def revise(self, nodes: list[dict[str, Any]], message: str) -> dict[str, Any]:
         """按教师指令生成修订候选；既有节点 ID 由服务边界强制保持稳定。"""
+        if _is_interactive_add_request(message):
+            return _build_interactive_add_revision(nodes, message)
         system_prompt = (
             "你是教学大纲修改助手。只修改教师指令涉及的内容，输出完整 nodes 数组；"
-            "不得生成讲稿正文。尽量保持节点顺序和 node_id。"
+            "不得生成讲稿正文。除非教师明确要求，否则必须逐字保留已有节点的 node_id、"
+            "title、summary、node_type、key_points 和顺序；新增节点不得改变已有节点类型。"
+            "若教师要求新增互动环节，只允许新增一个 node_type=interactive 的节点，"
+            "并为其填写 interactive_plan，不能把原有节点改成 interactive。"
             "每个节点必须输出 estimated_duration_minutes（单位分钟，必须是大于 0 的数字）；"
             "教师未要求调整时长的节点，沿用输入中的原时长。"
         )

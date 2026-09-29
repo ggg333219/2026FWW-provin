@@ -38,6 +38,7 @@ from ai_engine.core.schema import (
 )
 
 from .chunker import DocumentChunker
+from .noise_filter import drop_noise_chunks, strip_noise_lines
 from .embed import EmbeddingService
 from .store import InMemoryVectorStore
 from .store_pgvector import PGVectorStore
@@ -362,6 +363,15 @@ def _process_file(file_url: str) -> list[Chunk]:
     if not text:
         return []
 
+    # 噪声行剥离放在切分之前：试卷页眉（班级__ 姓名__ 学号__）、答题横线、
+    # 独立页码这类内容若留到切分后处理，会既自成垃圾切片，又挂在正常切片开头
+    # 污染嵌入向量。剥离后再切，噪声不再占用窗口预算，切片反而更少更干净。
+    text, stats = strip_noise_lines(text)
+    if not text.strip():
+        print(f"[KB-Upload] {path.name} — 剥离 {stats.lines_removed}/{stats.lines_total} "
+              "行后无有效内容，跳过")
+        return []
+
     source_type_map = {
         ".pdf": SourceType.PDF,
         ".pptx": SourceType.PPTX,
@@ -372,11 +382,14 @@ def _process_file(file_url: str) -> list[Chunk]:
     }
     source_type = source_type_map.get(suffix, SourceType.TEXT)
 
-    return _chunker.chunk_text(
+    chunks = _chunker.chunk_text(
         text=text,
         source_ref=path.name,
         source_type=source_type,
     )
+    chunks, stats.chunks_dropped = drop_noise_chunks(chunks)
+    print(f"[KB-Upload] {path.name} — 入库 {len(chunks)} 块；{stats}")
+    return chunks
 
 
 def _read_file_content(path, suffix: str) -> str:

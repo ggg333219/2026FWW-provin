@@ -318,6 +318,7 @@ async function handleRollback() {
     generationStore.setNodes(nodes)
     await persistRollbackDraft({
       nodes,
+      outline: targetDetail?.outline,
       pageBindings: data.page_bindings || targetDetail?.pageBindings || [],
       presentation: data.presentation || targetDetail?.presentation || {},
     })
@@ -357,7 +358,13 @@ async function handleSubmitModify() {
 
 function handleStartExport(format) {
   if (!versionStore.genId) return
-  versionStore.startExport(versionStore.genId, format, versionStore.currentVersionDetail?.version || null, courseTitle.value)
+  versionStore.startExport(
+    versionStore.genId,
+    format,
+    versionStore.currentVersionDetail?.version || null,
+    courseTitle.value,
+    versionStore.currentVersionDetail?.nodes || [],
+  )
 }
 
 async function handleContinueFromLocked() {
@@ -374,6 +381,7 @@ async function handleContinueFromLocked() {
   generationStore.setNodes(restoredNodes)
   await persistRollbackDraft({
     nodes: restoredNodes,
+    outline: versionStore.currentVersionDetail?.outline,
     pageBindings: data.page_bindings || versionStore.currentVersionDetail?.pageBindings || [],
     presentation: data.presentation || versionStore.currentVersionDetail?.presentation || {},
   })
@@ -381,11 +389,18 @@ async function handleContinueFromLocked() {
   router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: version, phase: 'outline' } })
 }
 
-async function persistRollbackDraft({ nodes, pageBindings, presentation }) {
+async function persistRollbackDraft({ nodes, outline, pageBindings, presentation }) {
   if (!projectStore.projectId) return
   const current = projectStore.draft && typeof projectStore.draft === 'object' ? projectStore.draft : {}
   const restored = {
     ...current,
+    outline: outline && typeof outline === 'object' ? {
+      ...outline,
+      status: 'draft',
+      confirmed_at: null,
+      forked_from_version: Number(outline.outline_version || 0),
+      editable_after_rollback: true,
+    } : current.outline,
     generation: {
       ...(current.generation || {}),
       generation_id: versionStore.genId,

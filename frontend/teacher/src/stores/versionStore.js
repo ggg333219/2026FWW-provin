@@ -28,6 +28,11 @@ function snapshotNodes(data = {}) {
   return [];
 }
 
+function snapshotOutline(data = {}) {
+  const outline = data.snapshot?.outline
+  return outline && typeof outline === 'object' && !Array.isArray(outline) ? outline : null
+}
+
 /** 后端/Mock 返回相对下载路径时补齐 API_BASE，保证跨端口可下载；blob/data 保持原样 */
 function normalizeDownloadUrl(url) {
   if (!url) return "";
@@ -187,6 +192,7 @@ export const useVersionStore = defineStore("version", {
           version: data.version_no,
           id: data.version_id,
           nodes: snapshotNodes(data),
+          outline: snapshotOutline(data),
           pageBindings: data.page_bindings || data.snapshot?.page_bindings || [],
           presentation: data.presentation || data.snapshot?.style || {},
           summary: data.version_summary || data.change_note || "",
@@ -372,14 +378,14 @@ export const useVersionStore = defineStore("version", {
     // ================================================================
     // 导出
     // ================================================================
-    async startExport(genId, format = "pptx", version = null, coursewareTitle = "") {
+    async startExport(genId, format = "pptx", version = null, coursewareTitle = "", nodes = []) {
       if (!genId) return;
       this.exportStatus = "pending";
       this.exportFormat = format;
       this.exportError = "";
       try {
         // 统一兼容 {code,message,data} 信封（Mock）与裸响应（FastAPI 网关）
-        const response = await teacherV1Api.version.exportCreate(genId, format, version, coursewareTitle);
+        const response = await teacherV1Api.version.exportCreate(genId, format, version, coursewareTitle, nodes);
         const job = response?.data || response || {};
         this.exportJobId = job.job_id || "";
         this.exportStatus = job.status === "done" ? "done" : "pending";

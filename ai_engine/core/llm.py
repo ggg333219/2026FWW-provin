@@ -539,11 +539,12 @@ class LLMClient:
             等长的 list[list[float]]。
         """
         import os
-
-        embedding_model = model or (os.getenv("AI_EMBEDDING_MODEL") or "text-embedding-v3").strip()
-        default_dim = 1024
+        import logging
+        logger = logging.getLogger(__name__)
+        embedding_model = model or (os.getenv("AI_EMBEDDING_MODEL") or "local-bge-small-zh").strip()
+        default_dim = 512
         try:
-            default_dim = int(os.getenv("AI_EMBEDDING_DIM", "1024"))
+            default_dim = int(os.getenv("AI_EMBEDDING_DIM", "512"))
         except (TypeError, ValueError):
             pass
         embedding_dim = dim or default_dim
@@ -551,28 +552,20 @@ class LLMClient:
         if not texts:
             return []
 
-        # Mock 模式 / 无 API key → 零向量回退
-        if settings.is_mock or not self.api_key:
+        if settings.is_mock:
             return [[0.0] * embedding_dim for _ in range(len(texts))]
 
+        global _local_embedder
         try:
-            from openai import OpenAI
-
-            client = OpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                timeout=self.timeout,
-            )
-
-            response = client.embeddings.create(
-                model=embedding_model,
-                input=texts,
-            )
-
-            sorted_data = sorted(response.data, key=lambda d: d.index)
-            return [list(d.embedding) for d in sorted_data]
-
-        except Exception:
+            if '_local_embedder' not in globals():
+                from sentence_transformers import SentenceTransformer
+                logger.info("加载本地嵌入模型 BGE-small-zh...")
+                _local_embedder = SentenceTransformer("BAAI/bge-small-zh-v1.5", device="cpu")
+                logger.info("本地嵌入模型加载完成")
+            vecs = _local_embedder.encode(texts, normalize_embeddings=True)
+            return [list(v) for v in vecs]
+        except Exception as e:
+            logger.error(f"本地嵌入失败: {e}")
             return [[0.0] * embedding_dim for _ in range(len(texts))]
 
     # ---- 内部实现 ----

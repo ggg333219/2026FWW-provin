@@ -38,6 +38,12 @@ export const useModifyStore = defineStore('modifyPanel', {
     versionHistory: [],
     /** 本次修改的节点（C7 高亮用；2s 后清除） */
     recentlyModifiedIds: [],
+    /**
+     * 教师当前选中的页面（node_id）。
+     * 对话里说「这页」时靠它定位 —— 模型只看到标题和摘要，猜不出「这页」是哪页。
+     * 为空表示未选中，此时完全按指令里的页号/标题定位（与加这个字段之前一致）。
+     */
+    activeNodeId: '',
     /** 撤销栈：可回滚的版本号 */
     undoStack: [],
     /** 重做栈 */
@@ -66,10 +72,16 @@ export const useModifyStore = defineStore('modifyPanel', {
         ? `当前 v${state.currentVersionNo} · 基于 v${state.basedOnVersionNo} 修改`
         : `当前 v${state.currentVersionNo}`
     },
-    /** 快捷指令 chips（C6） */
+    /**
+     * 快捷指令 chips（C6）。
+     *
+     * 前两条说的是「这页」，与选中页配套：指令里带指示代词，引擎才会用界面选中页
+     * 覆盖模型的猜测（见 ai_engine/gen/modify_intent.py 的 _resolve_active_target）。
+     * 「调整顺序」不在此列 —— 交换位置要两个页号，套用一个选中页只会改错。
+     */
     quickChips: () => [
-      { label: '精简这页', text: '精简当前选中页面的内容，减少文字量' },
-      { label: '增加案例', text: '为当前内容增加一个生活案例' },
+      { label: '精简这页', text: '精简这页的内容，减少文字量' },
+      { label: '增加案例', text: '为这页增加一个生活案例' },
       { label: '换个风格', text: '整体风格换成更简洁的商务风' },
       { label: '调整顺序', text: '把当前页面和下一页交换顺序' },
     ],
@@ -88,6 +100,8 @@ export const useModifyStore = defineStore('modifyPanel', {
     bindProject(projectId) {
       const newId = projectId || ''
       const projectChanged = this.projectId !== newId
+      // 换项目 → 上一份课件的选中页在这里没有意义
+      if (projectChanged) this.activeNodeId = ''
       this.projectId = newId
       // 1) projectId 变化或为空 → 必清空内存里的对话与版本栈
       if (projectChanged || !this.projectId) {
@@ -197,6 +211,7 @@ export const useModifyStore = defineStore('modifyPanel', {
       this.basedOnVersionNo = 0
       this.versionHistory = []
       this.recentlyModifiedIds = []
+      this.activeNodeId = ''
       this.undoStack = []
       this.redoStack = []
       this.error = ''
@@ -207,6 +222,11 @@ export const useModifyStore = defineStore('modifyPanel', {
       // 注意：不主动 DELETE 后端对话；后端按 project_id 隔离，留着让用户切回时能恢复。
       // 若业务上要求"新建课件丢弃全部历史"，由调用方在 createProject 前显式
       // projectModifyApi.clearAIMessages(oldProjectId) 处理。
+    },
+
+    /** 选中某一页（预览页列表 / 面板下拉都可改它）。 */
+    setActiveNode(nodeId) {
+      this.activeNodeId = nodeId || ''
     },
 
     _pushMessage(role, text, extra = {}) {
@@ -315,7 +335,9 @@ export const useModifyStore = defineStore('modifyPanel', {
       this.inputText = ''
 
       try {
-        const resp = await projectModifyApi.modify(this.projectId, instruction, nodes)
+        const resp = await projectModifyApi.modify(this.projectId, instruction, nodes, {
+          activeNodeId: this.activeNodeId,
+        })
         const data = resp.data || resp
 
         // 追问分支：AI 置信度低，返回澄清问题，不执行修改
@@ -373,6 +395,8 @@ export const useModifyStore = defineStore('modifyPanel', {
           this.recentlyModifiedIds = (intent.target_ids || []).slice()
         }
         if (this.recentlyModifiedIds.length) {
+          // 改完把选中页跟到刚改的那页：「再改改刚才那页」不必重新点一次。
+          this.activeNodeId = this.recentlyModifiedIds[0]
           setTimeout(() => { this.recentlyModifiedIds = [] }, 2000)
         }
 

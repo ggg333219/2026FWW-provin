@@ -71,6 +71,8 @@ export const useOutlineStore = defineStore('outline', {
     status: 'draft', // draft | confirming | confirmed | superseded
     title: '',
     confirmed_at: null,
+    /** 从历史课件版本恢复时记录来源大纲版本；首次保存会基于服务端最新版本创建新分支。 */
+    forked_from_version: 0,
 
     /** 节点树 */
     nodes: [],
@@ -194,6 +196,7 @@ export const useOutlineStore = defineStore('outline', {
         this.status = cache.status || 'draft'
         this.title = cache.title || ''
         this.confirmed_at = cache.confirmed_at || null
+        this.forked_from_version = Number(cache.forked_from_version || 0)
         this.nodes = Array.isArray(cache.nodes) ? cache.nodes : []
         this.session_id = cache.session_id || ''
         this.intent_id = cache.intent_id || ''
@@ -297,12 +300,20 @@ export const useOutlineStore = defineStore('outline', {
       this.loading = true
       this.error = ''
       try {
+        let baseVersion = this.outline_version
+        if (this.forked_from_version > 0) {
+          const latestResp = await teacherV1Api.outline.get(this.outline_id, {})
+          const latest = latestResp?.data || latestResp || {}
+          baseVersion = Number(latest.outline_version || baseVersion)
+        }
         const resp = await teacherV1Api.outline.save(this.outline_id, {
-          base_version: this.outline_version,
+          base_version: baseVersion,
           nodes: this.nodes
         })
         const data = resp?.data || resp || {}
         this.outline_version = data.outline_version || this.outline_version + 1
+        this.status = data.status || 'draft'
+        this.forked_from_version = 0
         this._persist()
         return data
       } catch (err) {
@@ -325,16 +336,32 @@ export const useOutlineStore = defineStore('outline', {
      * auto_apply=false（默认）：返回待确认修订结果
      */
     async reviseOutline(message) {
-      if (!this.outline_id) return
+      if (!this.outline_id) {
+        const error = new Error('当前大纲尚未保存，无法发起 AI 修订，请先保存大纲后重试')
+        this.reviseError = error.message
+        throw error
+      }
       this.reviseLoading = true
       this.reviseError = ''
       this.pendingRevision = null
       try {
-        const resp = await teacherV1Api.outline.revise(this.outline_id, {
-          message,
-          base_version: this.outline_version,
-          auto_apply: false
-        })
+        let resp
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            resp = await teacherV1Api.outline.revise(this.outline_id, {
+              message,
+              base_version: this.outline_version,
+              auto_apply: false
+            })
+            break
+          } catch (err) {
+            const isVersionConflict = err?.httpStatus === 409 || err?.status === 409 || err?.code === 409
+            if (!isVersionConflict || attempt > 0) throw err
+            // 其他页面/标签页可能已经产生了新版本。同步服务端最新版本，
+            // 再用同一条教师指令重试一次，避免用户看到可恢复的 409。
+            await this.loadOutline(this.outline_id)
+          }
+        }
         const data = resp?.data || resp || {}
         this.pendingRevision = {
           outline_version: data.outline_version || this.outline_version + 1,
@@ -371,6 +398,7 @@ export const useOutlineStore = defineStore('outline', {
     /** 放弃 AI 修订结果 */
     discardRevision() {
       this.pendingRevision = null
+      this.reviseError = ''
     },
 
     // ------------------------------------------------------------------
@@ -413,6 +441,7 @@ export const useOutlineStore = defineStore('outline', {
       this.loading = true
       this.confirmError = ''
       try {
+        if (this.forked_from_version > 0) await this.saveVersion()
         const resp = await teacherV1Api.outline.confirm(this.outline_id, {
           outline_version: this.outline_version
         })
@@ -440,6 +469,7 @@ export const useOutlineStore = defineStore('outline', {
       this.status = data.status || 'draft'
       this.title = data.title || ''
       this.confirmed_at = data.confirmed_at || null
+      this.forked_from_version = Number(data.forked_from_version || 0)
       this.nodes = (data.nodes || []).map((n) => ({
         node_id: n.node_id || makeNodeId(),
         order: Number(n.order) || 1,
@@ -454,6 +484,27 @@ export const useOutlineStore = defineStore('outline', {
       }))
       this.session_id = data.session_id || ''
       this.intent_id = data.intent_id || ''
+    },
+
+    /** 将历史版本中的大纲恢复为新的可编辑分支，不修改历史大纲版本。 */
+    restoreEditableSnapshot(data = {}) {
+      const sourceVersion = Number(data.outline_version || 0)
+      this._applyOutlineData({
+        ...data,
+        status: 'draft',
+        confirmed_at: null,
+        forked_from_version: sourceVersion,
+      })
+      this.status = 'draft'
+      this.confirmed_at = null
+      this.forked_from_version = sourceVersion
+      this._persist()
+    },
+
+    bindEvidenceRefs(ids = []) {
+      const refs = [...new Set((Array.isArray(ids) ? ids : []).filter(Boolean))]
+      this.nodes = this.nodes.map((node) => ({ ...node, source_chunk_ids: refs }))
+      this._persist()
     },
 
     /** 重新编号 order（1 开始连续） */
@@ -481,6 +532,7 @@ export const useOutlineStore = defineStore('outline', {
             status: this.status,
             title: this.title,
             confirmed_at: this.confirmed_at,
+            forked_from_version: this.forked_from_version,
             nodes: this.nodes,
             session_id: this.session_id,
             intent_id: this.intent_id
@@ -498,6 +550,7 @@ export const useOutlineStore = defineStore('outline', {
       this.status = 'draft'
       this.title = ''
       this.confirmed_at = null
+      this.forked_from_version = 0
       this.nodes = []
       this.session_id = ''
       this.intent_id = ''

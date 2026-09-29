@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .commands import EditCommand, CommandType
+from .node import merge_script_into_node
 
 
 @dataclass
@@ -91,8 +92,15 @@ class NodePatcher:
                     try:
                         new_node = regenerate_fn(node_id, node)
                         if new_node:
-                            nodes[nodes.index(node)] = new_node
-                            node = new_node
+                            # 合并而非整体替换：regenerate_fn（generate_single）只返回
+                            # script / segments / point_details 等少数几个 key，直接替换
+                            # 会冲掉 type / node_type / key_points / summary / figure /
+                            # teaching_plan —— 幻灯片会当场退化成"没有要点、没有图示"。
+                            # 合并规则见 node.merge_script_into_node：保护大纲字段，
+                            # 且**只增不减**（模型这次没给分段，不能把已有的分段清空）。
+                            merged_node = merge_script_into_node(node, new_node)
+                            nodes[nodes.index(node)] = merged_node
+                            node = merged_node
                     except Exception as e:
                         return {"error": f"重生成节点 {node_id} 失败: {e}"}
                 return {

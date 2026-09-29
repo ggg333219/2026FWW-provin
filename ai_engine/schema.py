@@ -62,12 +62,49 @@ def build_stage2_node_tree_schema() -> dict[str, Any]:
                             # normalize_stage2_nodes / assign_node_durations 完成。
                             # 保持可选以兼容旧 LLM 响应。
                             "estimated_duration_minutes": {"type": "number"},
+                            "interactive_plan": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "enabled": {"type": "boolean"},
+                                    "kind": {"type": "string", "enum": ["quiz", "flashcard", "poll", "game"]},
+                                    "duration_minutes": {"type": "number"},
+                                    "question_count": {"type": "integer"},
+                                    "auto_grading": {"type": "boolean"},
+                                    "delivery": {"type": "string", "enum": ["html5_link", "ppt_native", "standalone_html"]},
+                                },
+                                "required": ["enabled", "kind", "duration_minutes", "delivery"],
+                            },
                         },
                         "required": ["node_id", "title", "node_type"],
                     },
                 }
             },
             "required": ["nodes"],
+        },
+    }
+
+
+def _point_details_schema() -> dict[str, Any]:
+    """内容页「要点展开」的 JSON Schema 片段（两个 stage3 schema 共用，避免漂移）。
+
+    每个要点配 1~2 句展开，是内容页正文的主角：`key_points` 只有标题，学生看到的是
+    「相邻元素两两比较」；`point_details` 才回答「所以呢」。
+
+    **刻意不放进 `required`** —— 模型漏给时页面上少一块展开即可；一旦写进 required，
+    某次 schema 校验失败会让整批讲稿退兜底（`generate_all` 的 except 分支），代价远
+    大于少一块展开。与既有的 `difficulty` / `knowledge_card` 同一处置。
+    """
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "point": {"type": "string"},
+                "detail": {"type": "string"},
+            },
+            "required": ["point", "detail"],
         },
     }
 
@@ -89,6 +126,7 @@ def build_stage3_script_schema() -> dict[str, Any]:
                             "node_id": {"type": "string"},
                             "title": {"type": "string"},
                             "script": {"type": "string"},
+                            "point_details": _point_details_schema(),
                             "segments": {
                                 "type": "array",
                                 "items": {
@@ -129,6 +167,7 @@ def build_enhanced_script_schema() -> dict[str, Any]:
                             "node_id": {"type": "string"},
                             "title": {"type": "string"},
                             "script": {"type": "string"},
+                            "point_details": _point_details_schema(),
                             "segments": {
                                 "type": "array",
                                 "items": {
@@ -386,6 +425,8 @@ def normalize_stage3_scripts(scripts: list[dict[str, Any]] | None, valid_node_id
                 "questions": normalize_text_list(questions_raw) or normalize_text_list(interactive_raw),
                 "interactive_questions": normalize_text_list(interactive_raw) or normalize_text_list(questions_raw),
                 "segments": segments,
+                # 内容页「要点展开」的正文来源。缺失时页面上少一块，不会变形。
+                "point_details": normalize_point_details((item or {}).get("point_details")),
                 "layout_hint": _normalize_optional_text((item or {}).get("layout_hint")),
                 "font_size_hint": _normalize_optional_text((item or {}).get("font_size_hint")),
                 "text_alignment": _normalize_optional_text((item or {}).get("text_alignment")),
@@ -747,6 +788,59 @@ def normalize_text_list(value: Any) -> list[str]:
         elif item is not None:
             result.append(str(item).strip())
     return result
+
+
+def normalize_point_details(value: Any) -> list[dict[str, str]]:
+    """把 point_details 归一成 [{"point", "detail"}]。
+
+    这是内容页「要点展开」的正文来源 —— 由 S3（讲稿阶段）为每个要点写 1~2 句展开。
+    局部修改走 gen/partial_content.py 的 revise_slide 契约把它连同 summary 一起重写，
+    改动才会落在幻灯片上；只重写 script / segments 是看不见的（它们渲染在折叠的讲稿区）。
+
+    放在 schema.py 而不是 gen/page_spec.py，是因为 schema.py 不依赖任何 ai_engine
+    子模块，是唯一不会引起循环导入的共享位置（gen/__init__ → node → schema）。
+    口径与原实现一致：任一字段为空的条目直接丢弃；`point` 缺失时用 `detail` 兜底，
+    避免出现只有标题没有展开的空壳。
+    """
+    if not isinstance(value, (list, tuple)):
+        return []
+    result: list[dict[str, str]] = []
+    for raw in value:
+        item = raw if isinstance(raw, dict) else {"detail": raw}
+        point = str(item.get("point") or item.get("title") or "").strip()
+        detail = str(item.get("detail") or item.get("text") or "").strip()
+        if not point and not detail:
+            continue
+        result.append({"point": point or detail, "detail": detail})
+    return result
+
+
+def _normalize_interactive_plan(value: Any) -> dict[str, Any] | None:
+    """Normalize the optional outline-level interactive plan contract."""
+    if not isinstance(value, dict):
+        return None
+    kind = str(value.get("kind") or "quiz").strip().lower()
+    if kind not in {"quiz", "flashcard", "poll", "game"}:
+        kind = "quiz"
+    delivery = str(value.get("delivery") or "html5_link").strip().lower()
+    if delivery not in {"html5_link", "ppt_native", "standalone_html"}:
+        delivery = "html5_link"
+    try:
+        duration = max(1, round(float(value.get("duration_minutes") or 5)))
+    except (TypeError, ValueError):
+        duration = 5
+    try:
+        question_count = max(0, int(value.get("question_count") or 0))
+    except (TypeError, ValueError):
+        question_count = 0
+    return {
+        "enabled": bool(value.get("enabled", True)),
+        "kind": kind,
+        "duration_minutes": duration,
+        "question_count": question_count,
+        "auto_grading": bool(value.get("auto_grading", kind == "quiz")),
+        "delivery": delivery,
+    }
 
 
 def _to_string_list(value: Any) -> list[str]:

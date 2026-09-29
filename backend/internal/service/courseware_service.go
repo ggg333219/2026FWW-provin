@@ -83,8 +83,13 @@ type CoursewareVersion struct {
 }
 
 type coursewareVersionRow struct {
-	VersionID        string    `gorm:"column:version_id;size:64;primaryKey"`
+	// ID is the legacy physical primary key already present in deployed
+	// courseware_versions. Keep it populated even though the public contract
+	// exposes version_id as the business identifier.
+	ID               string    `gorm:"column:id;size:64;primaryKey"`
+	VersionID        string    `gorm:"column:version_id;size:64"`
 	ProjectID        string    `gorm:"column:project_id;size:64;index"`
+	OwnerID          string    `gorm:"column:owner_id;size:64"`
 	VersionNo        int       `gorm:"column:version_no"`
 	ParentVersionID  string    `gorm:"column:parent_version_id;size:64;index"`
 	NodesJSON        string    `gorm:"column:nodes_snapshot;type:text"`
@@ -106,7 +111,7 @@ func (coursewareVersionRow) TableName() string { return "courseware_versions" }
 // 返回的行指针可直接 Create。
 func versionToRow(v *CoursewareVersion) *coursewareVersionRow {
 	row := &coursewareVersionRow{
-		VersionID: v.VersionID, ProjectID: v.ProjectID, VersionNo: v.VersionNo,
+		ID: v.VersionID, VersionID: v.VersionID, ProjectID: v.ProjectID, VersionNo: v.VersionNo,
 		ParentVersionID: v.ParentVersionID, NodesJSON: v.NodesJSON,
 		PresentationJSON: v.PresentationJSON, SnapshotJSON: v.SnapshotJSON,
 		ModifyInstr: v.ModifyInstr, VersionSummary: v.VersionSummary, CreatedAt: v.CreatedAt,
@@ -206,10 +211,10 @@ func (coursewarePageBindingRow) TableName() string { return "courseware_page_bin
 
 // AIMessageItem —— C6 对话气泡的服务端表示，与前端 modifyStore._pushMessage 对齐。
 type AIMessageItem struct {
-	MessageID       string        `json:"message_id"`        // 前端生成（msg_<ts>_<rand>）
-	Role            string        `json:"role"`              // "teacher" | "ai"
+	MessageID       string        `json:"message_id"` // 前端生成（msg_<ts>_<rand>）
+	Role            string        `json:"role"`       // "teacher" | "ai"
 	Text            string        `json:"text"`
-	Intent          *ModifyIntent `json:"intent,omitempty"`  // role=ai 时挂在意图
+	Intent          *ModifyIntent `json:"intent,omitempty"` // role=ai 时挂在意图
 	IsClarification bool          `json:"is_clarification,omitempty"`
 	IsSummary       bool          `json:"is_summary,omitempty"`
 	IsError         bool          `json:"is_error,omitempty"`
@@ -318,6 +323,9 @@ type ParseModifyRequest struct {
 	ProjectID   string             `json:"project_id"`
 	Instruction string             `json:"instruction"`
 	Nodes       []TeachingNodeItem `json:"nodes"`
+	// ActiveNodeID 是教师界面上当前选中的页面。老师说「这页」时靠它定位，
+	// 不让模型从标题里猜；为空表示未选中，行为与加这个字段之前一致。
+	ActiveNodeID string `json:"active_node_id,omitempty"`
 }
 
 type ParseModifyResponse struct {
@@ -329,10 +337,14 @@ type ParseModifyResponse struct {
 // =============================================================================
 
 // modifyClient —— CoursewareService 实际依赖的 AI 能力窄接口。
-// 只调用意图解析与局部内容生成两个端点；窄接口便于测试注入桩。
+// 只调用意图解析、局部内容生成与内容状态查询三个端点；窄接口便于测试注入桩。
+//
+// ContentStatus 不是可选项：/gen/content 是异步任务，GenerateContent 返回时
+// nodes 恒为空，结果只能靠轮询取回（见 waitContentResult）。
 type modifyClient interface {
 	ParseModify(ctx context.Context, req ParseModifyRequest) (*ModifyIntent, error)
 	GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error)
+	ContentStatus(ctx context.Context, contentID string) (*GenContentStatusResponse, error)
 }
 
 type CoursewareService struct {
@@ -542,6 +554,37 @@ func (s *CoursewareService) ClearAIMessages(ctx context.Context, projectID strin
 	return s.store.ClearAIMessages(ctx, projectID)
 }
 
+// targetEvidenceRefs 收集目标页在页面级绑定里的证据 chunk_id（契约 v1.0 模块1）。
+//
+// 绑定以 page_id 为 key，而 S3 的页面即节点（page_001 ↔ node_001），
+// 因此直接按 target id 取。未绑定的目标返回 nil。
+// 绑定表读不到时同样返回 nil —— 证据是增强项，不该让局部修改整体失败。
+func (s *CoursewareService) targetEvidenceRefs(ctx context.Context, projectID string, targetIDs []string) []string {
+	if len(targetIDs) == 0 {
+		return nil
+	}
+	bindings, err := s.store.GetPageBindings(ctx, projectID)
+	if err != nil {
+		return nil
+	}
+	var refs []string
+	seen := make(map[string]bool, len(targetIDs))
+	for _, id := range targetIDs {
+		binding, ok := bindings[id]
+		if !ok {
+			continue
+		}
+		for _, ref := range binding.EvidenceRefs {
+			if ref == "" || seen[ref] {
+				continue
+			}
+			seen[ref] = true
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
 // ---- A6: 修改编排 + 版本快照 ----
 
 // ModifyResult —— modify 响应。
@@ -557,8 +600,12 @@ type ModifyResult struct {
 }
 
 // Modify 修改编排：解析意图 → （低置信度则追问）→ 局部生成 → 更新草稿 → 版本快照。
-func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction string, nodes []TeachingNodeItem) (*ModifyResult, error) {
-	if _, err := s.store.GetProject(ctx, projectID); err != nil {
+//
+// activeNodeID 是教师界面当前选中的页面，透传给意图解析器用于解析「这页」这类
+// 指示代词；传空串即退回「按指令里的页号/标题定位」的原有行为。
+func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction string, nodes []TeachingNodeItem, activeNodeID string) (*ModifyResult, error) {
+	project, err := s.store.GetProject(ctx, projectID)
+	if err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(instruction) == "" {
@@ -567,9 +614,10 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 
 	// 1) B5: 解析意图
 	intentPtr, err := s.aiClient.ParseModify(ctx, ParseModifyRequest{
-		ProjectID:   projectID,
-		Instruction: instruction,
-		Nodes:       nodes,
+		ProjectID:    projectID,
+		Instruction:  instruction,
+		Nodes:        nodes,
+		ActiveNodeID: activeNodeID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("意图解析失败: %w", err)
@@ -599,18 +647,32 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 	// 4) 内容类动作（simplify/expand/rewrite）→ B6 局部重生成
 	switch intent.Action {
 	case "simplify", "expand", "rewrite":
+		// CourseName 与 EvidenceRefs 都必须显式带上：Python 侧靠它们决定
+		// 「基于哪份材料改」。此前只传 nodes，局部修改等于凭空重写，
+		// 与 S3 大纲/内容生成走 RAG 的行为不一致。
 		resp, err := s.aiClient.GenerateContent(ctx, GenContentRequest{
 			Nodes:             updatedNodes,
 			Mode:              "partial",
+			CourseName:        project.Title,
 			TargetNodeIDs:     intent.TargetIDs,
 			ModifyAction:      intent.Action,
 			ModifyConstraints: intent.Constraints,
+			EvidenceRefs:      s.targetEvidenceRefs(ctx, projectID, intent.TargetIDs),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("局部重生成失败: %w", err)
 		}
-		updatedNodes = mergePartialResult(updatedNodes, resp.Nodes, intent.TargetIDs)
+		// /gen/content 是**异步任务**：引擎起一个后台线程就立刻返回，首个响应里的
+		// nodes 恒为空。必须轮询到任务结束再取结果 —— 详见 waitContentResult。
+		partial, err := s.waitContentResult(ctx, resp)
+		if err != nil {
+			return nil, err
+		}
+		updatedNodes = mergePartialResult(updatedNodes, partial, intent.TargetIDs)
 		modifiedIDs = intent.TargetIDs
+	}
+	if wantsRemoveTeachingText(instruction, intent.Constraints) {
+		updatedNodes = clearTeachingText(updatedNodes, intent.TargetIDs)
 	}
 	// restyle：仅样式层，不改内容；样式字段由 AI 解析后透传给前端。
 
@@ -635,9 +697,9 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 		return nil, err
 	}
 
-	// 6) 更新草稿
-	draftJSON, _ := json.Marshal(updatedNodes)
-	_ = s.store.SaveDraft(ctx, projectID, string(draftJSON))
+	// 6) 更新草稿。保留项目草稿的其它上下文，只替换 generation.nodes；
+	// 直接把节点数组写入 draft 会导致 S3 刷新时无法恢复生成内容、意图和呈现配置。
+	_ = s.saveGenerationDraft(ctx, projectID, updatedNodes)
 	_ = s.store.UpdateProjectStatus(ctx, projectID, "done")
 
 	var modifiedNodes []TeachingNodeItem
@@ -658,6 +720,63 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 		NewVersionNo:      snap.VersionNo, // 快照即新版本号
 		Presentation:      intent.Presentation,
 	}, nil
+}
+
+func wantsRemoveTeachingText(instruction string, constraints []string) bool {
+	text := strings.ToLower(strings.Join(append([]string{instruction}, constraints...), " "))
+	for _, phrase := range []string{
+		"去掉讲授文本", "删除讲授文本", "移除讲授文本", "不要讲授文本", "隐藏讲授文本",
+		"去除讲稿", "删除讲稿", "移除讲稿", "不要讲稿", "隐藏讲稿",
+	} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func clearTeachingText(nodes []TeachingNodeItem, targetIDs []string) []TeachingNodeItem {
+	targetSet := make(map[string]struct{}, len(targetIDs))
+	for _, id := range targetIDs {
+		targetSet[id] = struct{}{}
+	}
+	cleared := make([]TeachingNodeItem, len(nodes))
+	copy(cleared, nodes)
+	for i := range cleared {
+		if len(targetSet) == 0 {
+			cleared[i].Script = ""
+			cleared[i].Segments = nil
+			continue
+		}
+		if _, ok := targetSet[cleared[i].NodeID]; ok {
+			cleared[i].Script = ""
+			cleared[i].Segments = nil
+		}
+	}
+	return cleared
+}
+
+func (s *CoursewareService) saveGenerationDraft(ctx context.Context, projectID string, nodes []TeachingNodeItem) error {
+	draft := map[string]interface{}{}
+	if raw, err := s.store.GetDraft(ctx, projectID); err == nil && strings.TrimSpace(raw) != "" {
+		var existing map[string]interface{}
+		if json.Unmarshal([]byte(raw), &existing) == nil && existing != nil {
+			draft = existing
+		}
+	}
+
+	generation := map[string]interface{}{}
+	if existing, ok := draft["generation"].(map[string]interface{}); ok {
+		generation = existing
+	}
+	generation["nodes"] = nodes
+	draft["generation"] = generation
+
+	encoded, err := json.Marshal(draft)
+	if err != nil {
+		return err
+	}
+	return s.store.SaveDraft(ctx, projectID, string(encoded))
 }
 
 func presentationJSON(p map[string]string) string {
@@ -757,6 +876,94 @@ func renumberNodes(nodes []TeachingNodeItem) []TeachingNodeItem {
 		}
 	}
 	return nodes
+}
+
+// ---- 局部内容生成的轮询参数 ----
+//
+// 用 var 而非 const：测试里要能把它们调小，否则一个用例要真等 90 秒。
+var (
+	contentPollInterval = 500 * time.Millisecond
+	// 90s 是刻意留出的余量：前端的 MODIFY_LLM_TIMEOUT_MS 是 120s，
+	// 前面还有一次 parse_modify 的往返与落快照的开销。宁可我们这边先超时、
+	// 给出一句能看懂的错，也不要让 axios 直接 abort 成一句无头无尾的网络错误。
+	contentPollBudget = 90 * time.Second
+)
+
+// waitContentResult 等待 /gen/content 的**异步任务**跑完并取回节点。
+//
+// 这是「局部修改从接入起就没真正生效过」的根因所在：/gen/content 起一个后台线程
+// 就立刻返回（main.py 的 generate_content），首个响应里的 nodes **恒为空**。
+// 调用方若直接把 resp.Nodes 交给 mergePartialResult，而后者开头就是
+// `if len(partial) == 0 { return base }` —— 于是原样返回旧节点，可 modifiedIDs
+// 照样被填成 target_ids，上层便报「已更新」，而返回给前端的内容一个字节都没变，
+// 预览渲染出来自然一模一样。ContentStatus 这个轮询接口一直都在，
+// 但此前只有 S3 讲稿进度页在用，修改路径从来没调用过。
+//
+// 失败一律返回 error 而不是静默退回旧节点：报「已更新」却什么都没改，
+// 比直接报错更难排查。
+func (s *CoursewareService) waitContentResult(
+	ctx context.Context, first *GenContentStatusResponse,
+) ([]TeachingNodeItem, error) {
+	if first == nil {
+		return nil, fmt.Errorf("局部重生成失败: 引擎未返回任务信息")
+	}
+	// 引擎若哪天改成同步返回，这里直接放行，不必再改一遍。
+	if len(first.Nodes) > 0 {
+		return first.Nodes, nil
+	}
+	if first.ContentID == "" {
+		return nil, fmt.Errorf("局部重生成失败: 引擎未返回 content_id，无法取回结果")
+	}
+
+	deadline := time.Now().Add(contentPollBudget)
+	ticker := time.NewTicker(contentPollInterval)
+	defer ticker.Stop()
+
+	// 最后一次查询的错误要留着 —— 全是网络错误时，那句错比「超时」有用得多。
+	var lastErr error
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("局部重生成已取消: %w", ctx.Err())
+		case <-ticker.C:
+		}
+
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return nil, fmt.Errorf("局部重生成超时（状态查询持续失败）: %w", lastErr)
+			}
+			return nil, fmt.Errorf(
+				"局部重生成超时（%s 内未完成），请稍后在版本管理中查看任务结果", contentPollBudget,
+			)
+		}
+
+		status, err := s.aiClient.ContentStatus(ctx, first.ContentID)
+		if err != nil {
+			// 单次查询失败不当场放弃：任务在引擎侧照跑，抖动过去还能拿到结果。
+			lastErr = err
+			continue
+		}
+		lastErr = nil
+
+		if len(status.Nodes) > 0 {
+			return status.Nodes, nil
+		}
+
+		switch strings.ToLower(strings.TrimSpace(status.Status)) {
+		case "done", "completed", "success":
+			// 任务自称完成却没有节点 —— 引擎侧出了问题，别拿旧内容糊弄过去。
+			if status.Error != "" {
+				return nil, fmt.Errorf("局部重生成失败: %s", status.Error)
+			}
+			return nil, fmt.Errorf("局部重生成失败: 任务已完成但未返回任何节点")
+		case "failed", "error":
+			if status.Error != "" {
+				return nil, fmt.Errorf("局部重生成失败: %s", status.Error)
+			}
+			return nil, fmt.Errorf("局部重生成失败: 引擎返回状态 %s", status.Status)
+		}
+		// pending / generating / 其它：继续等。
+	}
 }
 
 // mergePartialResult —— B6 异步任务完成前可能只有部分节点；以局部结果覆盖目标节点。
@@ -1587,7 +1794,13 @@ func (g *gormCoursewareStore) NextVersionNo(ctx context.Context, projectID strin
 }
 
 func (g *gormCoursewareStore) SaveVersion(ctx context.Context, v *CoursewareVersion) error {
-	return g.db.WithContext(ctx).Create(versionToRow(v)).Error
+	row := versionToRow(v)
+	var project coursewareProjectRow
+	if err := g.db.WithContext(ctx).Select("owner_id").Where("id = ?", v.ProjectID).First(&project).Error; err != nil {
+		return err
+	}
+	row.OwnerID = project.OwnerID
+	return g.db.WithContext(ctx).Create(row).Error
 }
 
 func (g *gormCoursewareStore) GetVersion(ctx context.Context, projectID string, versionNo int) (*CoursewareVersion, error) {

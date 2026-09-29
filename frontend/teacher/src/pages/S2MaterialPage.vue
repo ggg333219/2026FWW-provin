@@ -4,7 +4,7 @@
       <div class="page-header">
         <div>
           <h2>资料与证据中心</h2>
-          <p>独立管理资料上传、解析、知识库检索与证据绑定；可随时返回生成工作台。</p>
+          <p>保留资料上传与解析；系统会依据 S1 教学意图自动检索，并把证据包绑定到整份 PPT 草稿。</p>
         </div>
         <div class="page-header-right">
           <button v-if="isMockModeActive" class="mock-exit-btn" @click="exitMockMode">
@@ -23,7 +23,7 @@
       <!-- 独立路由入口：复用 S2 资料中心工作台（与 Workspace 内嵌 tab 同一组件，路由/内嵌统一） -->
       <S2MaterialWorkspace />
 
-      <!-- 下一步：S2 → S3，和顶部步骤导航保持同一正式创建路径。 -->
+      <!-- S2 是可选补充入口；主流程已改为 S1 → S3。 -->
       <div class="next-step-bar">
         <button class="next-step-btn" @click="requestContinue">
           下一步：进入 S3 生成 →
@@ -31,7 +31,7 @@
         <div v-if="showNoEvidenceConfirm" class="continue-confirm" role="alert">
           <div>
             <strong>当前还没有绑定可用证据</strong>
-            <p>可以返回上方上传并检索资料，也可以明确选择无资料生成。后者将仅依据 S1 教学意图生成，内容依据和引用会更少。</p>
+            <p>可以继续上传资料，系统会自动重新检索；也可以明确选择无资料生成。后者将仅依据 S1 教学意图生成。</p>
           </div>
           <div class="continue-actions">
             <button class="secondary-btn" @click="showNoEvidenceConfirm = false">继续补充资料</button>

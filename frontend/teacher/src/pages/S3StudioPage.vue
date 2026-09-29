@@ -49,6 +49,20 @@
         <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }">返回补充资料</router-link>
       </div>
 
+      <div v-if="evidenceBootstrapState === 'error' && requiresAutomaticEvidence" class="evidence-gate" role="alert">
+        <div>
+          <strong>自动检索尚未完成，已暂停生成大纲</strong>
+          <span>{{ evidenceBootstrapError || '暂未检索到可绑定的证据，请重试或补充资料。' }}</span>
+        </div>
+        <div class="evidence-gate-actions">
+          <button :disabled="materialStore.searching" @click="retryAutomaticEvidence">
+            {{ materialStore.searching ? '正在检索…' : '重新自动检索' }}
+          </button>
+          <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }">上传补充资料</router-link>
+          <button class="plain" @click="continueWithIntentOnly">仅按 S1 意图生成</button>
+        </div>
+      </div>
+
       <div v-if="baseVersion > 0" class="version-branch-banner" role="status">
         <strong>当前基于 v{{ baseVersion }} 编辑</strong>
         <span>保存后将生成 v{{ baseVersion + 1 }}，原版本不会被覆盖。</span>
@@ -99,12 +113,14 @@
         @selection-change="handleEvidenceSelection"
       />
       <!-- C6: AI 修改对话面板（右侧浮动；projectId 绑定后显示） -->
-      <ModifyPanel class="s3-ai-panel" @style-request="handleStyleRequest" />
+      <ModifyPanel class="s3-ai-panel" @style-request="handleStyleRequest" @applied="handleModifyApplied" />
       <div v-if="currentPhase === 'outline'" class="phase-panel">
         <OutlineEditor
           :session-id="intentStore.sessionId"
           :intent-id="intentStore.intentId"
           :intent-summary="intentStore.intentSummary"
+          :evidence-packet="selectedEvidencePacket"
+          :ready="outlineReady"
           :auto-restore="true"
           @confirm-complete="handleOutlineConfirmed"
           @outline-created="handleOutlineCreated"
@@ -188,12 +204,19 @@
               新窗口打开
             </button>
           </div>
+          <!--
+            走 srcdoc 而不是 data: URL：srcdoc 继承父源，父页面才拿得到 contentDocument，
+            局部修改后可以只把变了的页原地换掉（见 utils/previewPatch.js）。
+            sandbox 保持 allow-same-origin，去掉它这条链路就断了。
+          -->
           <iframe
-            v-if="previewFrameSrc"
-            :src="previewFrameSrc"
+            v-if="previewSrcDoc"
+            ref="previewFrameEl"
+            :srcdoc="previewSrcDoc"
             class="preview-frame"
             sandbox="allow-scripts allow-same-origin"
             title="课件预览"
+            @load="previewFrameReady = true"
           ></iframe>
           <div v-else class="preview-placeholder">
             预览将在生成完成后自动加载
@@ -253,7 +276,16 @@
             v-for="page in generationPages"
             :key="page.page_id"
             class="page-item"
-            :class="[`page-status-${page.status}`, { 'page-modified': modifyStore.recentlyModifiedIds.includes(page.node_id) }]"
+            :class="[`page-status-${page.status}`, {
+              'page-modified': modifyStore.recentlyModifiedIds.includes(page.node_id),
+              'page-active': isActivePage(page),
+            }]"
+            role="button"
+            tabindex="0"
+            :aria-pressed="isActivePage(page)"
+            @click="selectPage(page)"
+            @keydown.enter.prevent="selectPage(page)"
+            @keydown.space.prevent="selectPage(page)"
           >
             <div class="page-item-left">
               <span class="page-order">第 {{ page.page_order }} 页</span>
@@ -372,12 +404,14 @@ import { useGenerationStore } from "../stores/generationStore";
 import { useOutlineStore } from "../stores/outlineStore";
 import { useInteractiveStore } from "../stores/interactiveStore";
 import { useIntentStore } from "../stores/intentStore";
-import { useMaterialStore } from "../stores/materialStore";
+import { useMaterialStore, isEvidencePacketUsable } from "../stores/materialStore";
 import { useModifyStore } from "../stores/modifyStore";
 import { useCoursewareProjectStore } from "../stores/coursewareProjectStore";
 import { teacherV1Api } from "../services/v1";
 import { projectModifyApi } from "../services/v1/projectModifyApi";
 import { API_BASE, AI_API_BASE } from "../config/api";
+import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline } from "../utils/intentEvidence";
+import { patchPreview, PATCH_MODE } from "../utils/previewPatch";
 
 const generationStore = useGenerationStore();
 const outlineStore = useOutlineStore();
@@ -396,7 +430,25 @@ const generateMode = ref("page_incremental");
 const genError = ref("");
 const generationPages = ref([]);
 const regeneratingPageId = ref("");
-const previewFrameSrc = ref("");
+const previewFrameEl = ref(null);
+/** iframe 当前承载的文档。补丁成功时不更新它 —— 更新了 Vue 就会重设 srcdoc，等于整份重载。 */
+const previewSrcDoc = ref("");
+/** iframe 里的文档已经加载完，contentDocument 可用。 */
+const previewFrameReady = ref(false);
+const activePageLabel = computed(() => {
+  const nodeId = modifyStore.activeNodeId;
+  if (!nodeId) return "";
+  const index = generationPages.value.findIndex((page) => page.node_id === nodeId);
+  if (index < 0) return "";
+  const page = generationPages.value[index];
+  const title = page.title || page.node_title || "";
+  return `第 ${page.page_order || index + 1} 页${title ? ` · ${title}` : ""}`;
+});
+const isActivePage = (page) => !!page?.node_id && page.node_id === modifyStore.activeNodeId;
+const selectPage = (page) => {
+  // 再点一次取消选中 —— 取消后指令里的显式页号（「第三页」）仍然照常生效
+  modifyStore.setActiveNode(isActivePage(page) ? "" : page.node_id);
+};
 const templateId = ref("default");
 const palette = ref("classic");
 const layoutMode = ref("balanced");
@@ -412,9 +464,21 @@ const baseVersion = ref(Number(route.query.base_version || 0));
 const interactivePreviewUrl = ref("");
 const interactivePreviewTitle = ref("");
 const initializing = ref(true);
+const outlineReady = ref(false);
+const evidenceBootstrapState = ref("idle");
+const evidenceBootstrapError = ref("");
+const requiresAutomaticEvidence = computed(() => String(route.query.auto_evidence || "") === "1");
 
 const asyncActivity = computed(() => {
-  if (modifyStore.modifying) return { title: "AI 正在修改课件", detail: "正在理解指令并局部更新相关页面，完成后会自动刷新预览。" };
+  if (modifyStore.modifying) {
+    // 说得出是哪一页，老师就知道自己刚才那句点中了没有，不必等结果回来
+    return {
+      title: "AI 正在修改课件",
+      detail: activePageLabel.value
+        ? `正在修改${activePageLabel.value}，完成后预览里只有这一页会更新。`
+        : "正在理解指令并局部更新相关页面，完成后会自动刷新预览。",
+    };
+  }
   if (materialStore.searching) return { title: "正在检索资料与证据", detail: "正在从知识库筛选并融合可追溯引用。" };
   if (generationStore.isGenerating) return { title: "正在生成课件内容", detail: generationStore.generateStageText || "AI 正在逐页生成，请保持当前页面打开。", progress: generationStore.generateProgress || 0 };
   if (interactiveStore.loading) return { title: "正在生成互动内容", detail: "正在构建可预览的 HTML5 互动资源。" };
@@ -425,6 +489,7 @@ const asyncActivity = computed(() => {
 const evidenceId = (item, index) => String(item?.chunk_id || item?.id || `evidence-${index}`);
 const selectedEvidencePacket = computed(() => {
   if (!evidencePacket.value) return null;
+  if (!evidenceSelectionInitialized.value) return evidencePacket.value;
   const selected = new Set(selectedEvidenceIds.value);
   const filter = (items = []) => items.filter((item, index) => selected.has(evidenceId(item, index)));
   return {
@@ -466,6 +531,7 @@ const interactiveNodes = computed(() =>
 onMounted(async () => {
 	try {
 	let restoredGenerationNodes = false;
+	let restoredProjectOutline = false;
   // 恢复 S1 会话/意图（刷新或直接进入 S3 时 store 内存为空，
   // 不恢复会导致 sessionId 缺失 → AI 生成大纲被 "缺少 session_id" 拦截）
   intentStore.initialize();
@@ -489,14 +555,33 @@ onMounted(async () => {
     // 和"左侧资料绑定打开 PPT 不显示"。loadLatestContext 内部会先 bindProject
     // 把内存对话清空，再用响应填回 version_no / pageBindings。
     await modifyStore.loadLatestContext(projectStore.projectId);
+    // loadLatestContext 只播下最新一条版本摘要，完整时间线仍要单独拉。
+    await modifyStore.loadVersionHistory();
+    // 刷新或直接打开 S3 时以后端草稿为准，不能只依赖页面跳转留下的本地缓存。
+    await projectStore.resume(projectStore.projectId).catch(() => {});
     await projectStore.updateStep("s3_studio").catch(() => {});
-    // 统一恢复入口已把后端 draft 放入 session；优先恢复项目快照，避免误用另一份课件的全局缓存。
+    // 后端草稿优先；只有后端没有可用草稿时才回退到统一恢复入口留下的本地缓存。
     try {
-      const rawDraft = window.localStorage.getItem("fuww_courseware_resume_draft");
-      const savedDraft = rawDraft ? JSON.parse(rawDraft) : null;
+      const backendDraft = projectStore.draft;
+      let savedDraft = backendDraft;
+      if (typeof savedDraft === "string") {
+        try { savedDraft = JSON.parse(savedDraft) || null; } catch { savedDraft = null; }
+      }
+      // 兼容旧版后端曾直接保存的节点数组，避免历史课件刷新后变成空白。
+      if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
+      if (!savedDraft || typeof savedDraft !== "object" || (!savedDraft.outline && !savedDraft.generation)) {
+        const rawDraft = window.localStorage.getItem("fuww_courseware_resume_draft");
+        savedDraft = rawDraft ? JSON.parse(rawDraft) : null;
+        if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
+      }
       if (savedDraft?.outline?.outline_id) {
-        outlineStore._applyOutlineData(savedDraft.outline);
+        if (savedDraft.outline.editable_after_rollback || route.query.from_rollback_version) {
+          outlineStore.restoreEditableSnapshot(savedDraft.outline);
+        } else {
+          outlineStore._applyOutlineData(savedDraft.outline);
+        }
         outlineStore._persist();
+        restoredProjectOutline = true;
       }
       if (savedDraft?.generation) {
         if (savedDraft.generation.generation_id) generationStore.setLastGenId(savedDraft.generation.generation_id);
@@ -531,7 +616,11 @@ onMounted(async () => {
     } catch {}
   }
   // 尝试从 localStorage 恢复大纲
-  const restored = outlineStore.restore();
+  const restored = restoredProjectOutline ? true : outlineStore.restore();
+  if (!restoredProjectOutline && restored && outlineStore.session_id && intentStore.sessionId
+      && outlineStore.session_id !== intentStore.sessionId) {
+    outlineStore.reset();
+  }
   if (!restoredGenerationNodes && restored && outlineStore.isConfirmed) {
     currentPhase.value = "generating";
   }
@@ -543,7 +632,17 @@ onMounted(async () => {
     // 覆盖当前课件的恢复结果。
     if (!restoredGenerationNodes) await loadGenerationStatus();
   }
+  if (restoredGenerationNodes) {
+    // 草稿中的节点是 AI 修订后的权威内容，刷新时用 inline 节点重建预览，
+    // 避免旧 generation/version 快照覆盖最新修改。
+    await generationStore.renderCoursewarePreview(
+      outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
+      { genId: "" },
+    ).catch(() => {});
+  }
   if (route.query.phase === "outline") currentPhase.value = "outline";
+  const evidenceReady = await ensureAutomaticEvidence();
+  outlineReady.value = evidenceReady || !requiresAutomaticEvidence.value;
   } finally {
     initializing.value = false;
   }
@@ -613,9 +712,32 @@ watch(() => modifyStore.pageBindings, (bindings) => {
   if (!projectStore.projectId) return
   applyPageBindingsToUI(bindings)
 })
-watch(() => generationStore.previewHtml, (html) => {
-  previewFrameSrc.value = html ? `data:text/html;charset=utf-8,${encodeURIComponent(html)}` : "";
-});
+/**
+ * 把新渲染的预览交给 iframe。
+ *
+ * 首次（或上一次走了整份重设）时设 `srcdoc`；之后按 `data-node-id` 只换变了的页，
+ * 滚动位置、其余页与展开的讲稿都不动。补丁不适用时 `patchPreview` 自己返回
+ * `'srcdoc'`，这里退回整份重设 —— 与改造前行为一致，只是慢一点，不会白屏。
+ */
+function applyPreviewHtml(html) {
+  if (!html) {
+    previewSrcDoc.value = "";
+    previewFrameReady.value = false;
+    return;
+  }
+  const iframe = previewFrameEl.value;
+  if (!iframe || !previewFrameReady.value) {
+    previewSrcDoc.value = html;
+    return;
+  }
+  const { mode } = patchPreview(iframe, html);
+  if (mode === PATCH_MODE.SRCDOC) {
+    previewFrameReady.value = false;
+    previewSrcDoc.value = html;
+  }
+}
+
+watch(() => generationStore.previewHtml, applyPreviewHtml);
 onBeforeUnmount(() => { projectStore.saveNow(draftSnapshot()).catch(() => {}); });
 onBeforeRouteLeave(async () => { await projectStore.saveNow(draftSnapshot()).catch(() => {}); });
 
@@ -632,6 +754,10 @@ function statusLabel(status) {
 
 // 大纲创建完成
 function handleOutlineCreated({ outline_id, outline_version }) {
+  // OutlineBuilder 已使用整份证据包生成结构；创建完成后再把引用 ID
+  // 落到每个大纲节点，保证后续内容生成和版本快照都保留绑定关系。
+  bindEvidenceToWholeDraft();
+  projectStore.scheduleSave(draftSnapshot(), 0);
   console.log(
     "[S3StudioPage] 大纲创建完成:",
     outline_id,
@@ -642,6 +768,21 @@ function handleOutlineCreated({ outline_id, outline_version }) {
 // 大纲确认完成，进入生成阶段
 function handleOutlineConfirmed() {
   currentPhase.value = "generating";
+}
+
+// AI 修订成功后立即刷新右侧 PPT 预览，并把最新节点写入项目草稿。
+async function handleModifyApplied({ allNodes = [] } = {}) {
+  // 即使当前内存中没有 generation 节点，也以修改接口返回的完整节点树恢复预览。
+  if (!generationStore.currentScriptNodes?.length && Array.isArray(allNodes) && allNodes.length) {
+    generationStore.setNodes(allNodes)
+  }
+  if (generationStore.currentScriptNodes?.length) {
+    await generationStore.renderCoursewarePreview(
+      outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
+      { genId: "" },
+    );
+  }
+  await projectStore.saveNow(draftSnapshot());
 }
 
 // 开始生成内容
@@ -689,16 +830,15 @@ async function handleStartGeneration() {
 
     // 加载生成状态（页面列表）
     await loadGenerationStatus();
+    bindEvidenceToWholeDraft();
 
-    // 渲染预览
+    // 渲染预览 —— renderCoursewarePreview 写 generationStore.previewHtml，
+    // 由上面的 watcher 统一交给 iframe（首次设 srcdoc，之后只补变了的页）。
     generationStore.setGenerateProgress(92, "正在加载预览");
-    const html = await generationStore.renderCoursewarePreview(
+    await generationStore.renderCoursewarePreview(
       outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
       { genId },
     );
-    if (html) {
-      previewFrameSrc.value = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
-    }
 
     generationStore.setGenerateProgress(100, "生成完成");
   } catch (err) {
@@ -878,11 +1018,106 @@ async function handleEvidenceSearch(query) {
     context: { intent: intentStore.intentSummary || {}, project_id: projectStore.projectId },
   });
   if (packet) {
-    // 新一轮检索默认勾选新证据；后续用户取消勾选时再由受控状态持久化。
-    evidenceSelectionInitialized.value = false;
-    evidencePacket.value = packet;
+    adoptEvidencePacket(packet);
     projectStore.scheduleSave(draftSnapshot(), 0);
   }
+}
+
+function adoptEvidencePacket(packet) {
+  evidencePacket.value = packet;
+  selectedEvidenceIds.value = evidenceIds(packet);
+  evidenceSelectionInitialized.value = true;
+  evidenceScope.value = { scope: "draft", nodeId: "" };
+  generationMode.value = isEvidencePacketUsable(packet) ? "with_evidence" : "without_evidence";
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(`fuww_s2_generation_mode:${intentStore.sessionId}`, generationMode.value);
+  }
+  bindEvidenceToWholeDraft();
+}
+
+function bindEvidenceToWholeDraft() {
+  const refs = evidenceIds(selectedEvidencePacket.value);
+  if (!refs.length) return;
+  outlineStore.bindEvidenceRefs(refs);
+  if (generationStore.currentScriptNodes?.length) {
+    generationStore.setNodes(generationStore.currentScriptNodes.map((node) => ({
+      ...node,
+      citation_refs: refs,
+      source_chunk_ids: refs,
+      metadata: {
+        ...(node.metadata || {}),
+        evidence_scope: "draft",
+        evidence_auto_bound: true,
+        evidence_bound_by: "s1_intent_auto_search",
+      },
+    })));
+  }
+}
+
+function discardPlaceholderOutline() {
+  if (isPlaceholderOutline(outlineStore.nodes)) outlineStore.reset();
+}
+
+async function ensureAutomaticEvidence() {
+  if (isEvidencePacketUsable(evidencePacket.value)) {
+    adoptEvidencePacket(evidencePacket.value);
+    discardPlaceholderOutline();
+    projectStore.scheduleSave(draftSnapshot(), 0);
+    evidenceBootstrapState.value = "ready";
+    evidenceBootstrapError.value = "";
+    return true;
+  }
+  const query = buildIntentEvidenceQuery(intentStore.intentSummary || {});
+  if (!query) {
+    evidenceBootstrapState.value = "error";
+    evidenceBootstrapError.value = "S1 教学意图不完整，无法构造自动检索条件。";
+    return false;
+  }
+  evidenceBootstrapState.value = "loading";
+  evidenceBootstrapError.value = "";
+  try {
+    const packet = await materialStore.generateEvidence({
+      query,
+      context: {
+        intent: intentStore.intentSummary || {},
+        project_id: projectStore.projectId,
+        binding_scope: "draft",
+        auto_bind: true,
+      },
+    });
+    if (isEvidencePacketUsable(packet)) {
+      adoptEvidencePacket(packet);
+      discardPlaceholderOutline();
+      evidenceBootstrapState.value = "ready";
+      await projectStore.saveNow(draftSnapshot()).catch(() => {});
+      return true;
+    }
+    evidenceBootstrapState.value = "error";
+    evidenceBootstrapError.value = materialStore.error || "知识库暂未返回可用证据。";
+    return false;
+  } catch (error) {
+    evidenceBootstrapState.value = "error";
+    evidenceBootstrapError.value = error?.message || "自动检索失败，请重试。";
+    return false;
+  }
+}
+
+async function retryAutomaticEvidence() {
+  const ready = await ensureAutomaticEvidence();
+  if (ready) outlineReady.value = true;
+}
+
+function continueWithIntentOnly() {
+  generationMode.value = "without_evidence";
+  evidenceBootstrapState.value = "skipped";
+  evidenceBootstrapError.value = "";
+  // 明确由教师选择无资料生成时，仍只使用结构化 S1 意图，不能读取旧版 S2 Markdown。
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem("fuww_s2_markdown");
+    window.localStorage.setItem(`fuww_s2_generation_mode:${intentStore.sessionId}`, generationMode.value);
+  }
+  discardPlaceholderOutline();
+  outlineReady.value = true;
 }
 
 function handleEvidenceSelection(ids) {
@@ -1088,6 +1323,15 @@ function handleError(msg) {
   font-weight: 700;
   text-decoration: none;
 }
+
+.evidence-gate { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:0 0 16px; padding:16px 18px; border:1px solid #e5b66d; border-radius:14px; background:#fff8ea; color:#714d18; }
+.evidence-gate>div:first-child { display:flex; flex-direction:column; gap:5px; }
+.evidence-gate strong { font-size:14px; }
+.evidence-gate span { font-size:12px; color:#8b6b3d; }
+.evidence-gate-actions { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+.evidence-gate-actions button,.evidence-gate-actions a { padding:8px 12px; border:1px solid #ba8437; border-radius:9px; background:#8f5f20; color:#fff; font:600 12px/1.2 inherit; text-decoration:none; cursor:pointer; }
+.evidence-gate-actions button:disabled { opacity:.55; cursor:not-allowed; }
+.evidence-gate-actions .plain { background:#fff; color:#77501c; }
 .version-branch-banner {
   display: flex;
   align-items: center;
@@ -1357,6 +1601,16 @@ function handleError(msg) {
   background: #fff;
   border: 1.5px solid #e2ece6;
   border-radius: 10px;
+  cursor: pointer;
+}
+.page-item:focus-visible {
+  outline: 2px solid #4a90d9;
+  outline-offset: 2px;
+}
+/* 选中页 = 对话里「这页」的所指，所以用比 hover 更实的左边条标出来 */
+.page-item.page-active {
+  border-color: #4a90d9;
+  box-shadow: inset 3px 0 0 #4a90d9;
 }
 .page-item.page-modified {
   border-color: #24a36f;

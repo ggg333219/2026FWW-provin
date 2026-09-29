@@ -1,5 +1,9 @@
 from datetime import datetime
 import sys
+# 必须模块级导入：函数内写 `import logging` 会让 logging 成为**该函数的局部名**
+# （编译期决定），于是同一函数中更早的 logging 引用抛 UnboundLocalError 而非
+# NameError —— 那种情况下顶层的 import 也救不了，降级日志本身会把链路带崩。
+import logging
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +31,8 @@ from ai_engine.reconstructor import LessonReconstructor, ReconstructionConfig
 from ai_engine.recommendation.service import router as recommendation_router
 from ai_engine.gen.outline import OutlineBuilder, OutlineConfig
 from ai_engine.gen.modify_intent import ModifyIntentParser
-from ai_engine.gen.node import NodeGenerator, NodeGenConfig
+from ai_engine.gen.evidence_binding import bind_evidence_to_draft_nodes
+from ai_engine.gen.node import NodeGenerator, NodeGenConfig, merge_script_into_node
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
 from ai_engine.gen.preview import PreviewRenderer
@@ -617,6 +622,7 @@ class ParseModifyRequest(BaseModel):
     project_id: str = ""
     instruction: str
     nodes: list[dict[str, Any]] = Field(default_factory=list)
+    active_node_id: str = ""  # 教师界面当前选中的页面；「这页」靠它定位
 
 
 _modify_intent_parser: ModifyIntentParser | None = None
@@ -665,6 +671,9 @@ class ModifyRequest(BaseModel):
     commands: list[dict[str, Any]]  # 结构化命令列表
     regenerate: bool = False
     course_name: str | None = None
+    page_id: str | None = None
+    evidence_refs: list[str] = Field(default_factory=list)
+    user_instruction: str = ""
 
 
 class InteractiveRequest(BaseModel):
@@ -727,6 +736,17 @@ class GenContentRequest(BaseModel):
     """[B6] 修改动作：simplify/expand/rewrite/restyle 等"""
     modify_constraints: list[str] = Field(default_factory=list)
     """[B6] 教师修改约束"""
+    evidence_refs: list[str] = Field(default_factory=list)
+    """[契约 v1.0 模块1] 页面级绑定的证据 chunk_id 列表。
+    与 /gen/modify 的 evidence_refs 同义：只允许引用这些 chunk 的原文。
+    Go 端 Modify 从 courseware_page_bindings 取目标节点的绑定后透传。"""
+    intent: dict[str, Any] = Field(default_factory=dict)
+    """教学意图摘要（IntentSummary：topic / style / target_student /
+    key_difficulties / expected_outcomes …）。
+
+    这是「教学意图 → 核心知识点 → 怎么教 → 页面」这条链路里，意图第一次真正抵达
+    表达决策层。**缺席是合法输入**：规划器会退化为只从节点自身推断表达形式，
+    不报错、不缺页。"""
 
 
 class GenContentStatusResponse(BaseModel):
@@ -815,6 +835,117 @@ async def generate_content(req: GenContentRequest):
     )
 
 
+def _plan_deck_safe(intent: Any, nodes: list[dict], evidence: str) -> dict[str, dict]:
+    """规划整份课件的教学表达；任何失败都退回「没有规划」，绝不拖垮内容生成。
+
+    规划是**加分项**：拿不到 plan 时，节点上就没有 teaching_plan / figure /
+    key_conclusion，预览退化成改动前的样子 —— 这比整个内容生成失败好得多。
+    """
+    try:
+        from ai_engine.gen.teaching_plan import plan_deck
+        return plan_deck(intent, nodes, evidence=evidence)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "[Content Pipeline] 教学表达规划失败，本批不挂规划：%s", exc
+        )
+        return {}
+
+
+def _attach_teaching_plan(node: dict[str, Any], plan: Any, *, replace: bool = False) -> dict[str, Any]:
+    """把规划器对**这一页**的决策挂到节点上。
+
+    teaching_plan / figure / key_conclusion 都由这里落盘，而不是让讲稿 LLM 回显 ——
+    plan_to_figure 是纯机械映射，表达决策只在规划阶段发生一次；让模型复述一遍，只
+    会在「抄漏了」时制造图示与规划不一致，没有任何好处。
+
+    figure / key_conclusion 只有内容页会消费（page_spec._content_blocks），挂在封面
+    / 测验页上不会改变它们的渲染，所以这里不做页型判断。
+
+    空 dict 与 None 同等对待：它一条决策都没有。挂上去会让下游看到"这页规划过"
+    （`"teaching_plan" in node` 为真）却读不到任何内容，比缺席更难排查。
+
+    ``replace=True`` 用于**局部修改**：这一页的正文刚被重写过，旧的图示/结论描述的
+    是旧内容，规划说没有就真的删掉 —— 否则幻灯片上留着一张与新正文对不上的图。
+    默认 False 是新建路径的语义（节点本来是干净的，只挂不删）。
+    """
+    if not isinstance(plan, dict) or not plan:
+        # 规划失败/为空时**保留**原有规划：拿不到新决策不等于旧决策错了，
+        # 让一次 LLM 调用失败把整页的图示和结论抹掉，比留着旧的更糟。
+        return node
+    from ai_engine.gen.teaching_plan import plan_to_figure
+
+    merged = {**node, "teaching_plan": plan}
+    conclusion = str(plan.get("key_conclusion") or "").strip()
+    figure = plan_to_figure(plan)
+    for key, value in (("key_conclusion", conclusion), ("figure", figure)):
+        if value:
+            merged[key] = value
+        elif replace:
+            merged.pop(key, None)
+    return merged
+
+
+def _plan_node_safe(intent: Any, node: dict[str, Any], evidence: str) -> dict[str, Any]:
+    """只重规划一页（局部修改路径）；任何失败都退回「没有规划」。
+
+    与 :func:`_plan_deck_safe` 同一退化策略：规划是加分项。返回空 dict 时
+    :func:`_attach_teaching_plan` 会保留该页原有规划，不会把页面改坏。
+    """
+    try:
+        from ai_engine.gen.teaching_plan import plan_node
+        return plan_node(intent, node, evidence=evidence)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "[Modify] 单页教学表达规划失败，保留原有规划：%s", exc
+        )
+        return {}
+
+
+def _modify_target_ids(req: Any, parse_result: Any) -> set[str]:
+    """本次修改真正落在哪些节点上。
+
+    ``page_id`` 优先（单页编辑显式指定），否则取命令里带 node_id 的那些。证据回填与
+    单页重规划都按同一份集合取数 —— 两处各算一次，迟早会算出两个不同的答案。
+    """
+    if req.page_id:
+        return {str(req.page_id)}
+    return {
+        str(command.params.get("node_id"))
+        for command in parse_result.commands
+        if command.params.get("node_id")
+    }
+
+
+#: 交给规划器的参考材料长度上限。规划只需要「不得编造材料中不存在的知识点」这一层
+#: 依据，不需要读全文；塞进整份原文只会把节点树挤出模型窗口。
+_PLAN_EVIDENCE_LIMIT = 2000
+
+
+def _evidence_brief(evidence: Any) -> str:
+    """把 S3 的证据包压成规划器可用的参考材料。
+
+    ``/api/v1/gen/create`` 拿到的是 EvidencePacket 的 dict（``/gen/content`` 拿的是
+    chunk 引用列表，走 ``_load_page_evidence``），其中 ``synthesized_context`` 已是 LLM
+    浓缩过的上下文，正是规划需要的粒度；为空时退回拼接相关 chunk 正文。
+    """
+    if not isinstance(evidence, dict):
+        return ""
+    parts: list[str] = []
+    synthesized = str(evidence.get("synthesized_context") or "").strip()
+    if synthesized:
+        parts.append(synthesized)
+    else:
+        for chunk in evidence.get("relevant_chunks") or []:
+            if not isinstance(chunk, dict):
+                continue
+            text = str(chunk.get("content") or "").strip()
+            if text:
+                parts.append(text)
+            if sum(len(part) for part in parts) >= _PLAN_EVIDENCE_LIMIT:
+                break
+    return "\n\n".join(parts)[:_PLAN_EVIDENCE_LIMIT]
+
+
 def _run_content_pipeline(content_id: str, req: GenContentRequest):
     """后台内容生成管道：逐节点生成讲稿（同步，daemon 线程）
 
@@ -829,17 +960,39 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
     try:
         # ---- B6: 局部重生成分支 ----
         if req.target_node_ids and req.mode == "partial":
-            from gen.partial_content import run_partial_pipeline
+            from ai_engine.gen.partial_content import CONTENT_ACTIONS, run_partial_pipeline
             generator = NodeGenerator()
+            # 页面级绑定证据（契约 v1.0 模块1）：教师显式绑到这些页上的 chunk
+            # 优先级高于课件级 context_markdown，放在前面一起作为参考材料。
+            bound_evidence, _bound_used = _load_page_evidence(req.evidence_refs)
+            partial_context = "\n\n".join(
+                part for part in (bound_evidence.strip(), (req.context_markdown or "").strip()) if part
+            )
             updated_nodes = run_partial_pipeline(
                 nodes=req.nodes,
                 target_node_ids=req.target_node_ids,
                 modify_action=req.modify_action or "rewrite",
                 modify_constraints=req.modify_constraints,
-                context_markdown=req.context_markdown,
+                context_markdown=partial_context,
                 course_name=req.course_name,
                 generator=generator,
             )
+
+            # 单页重规划：这一页的正文刚被重写过，「该怎么教」的决策也得跟着换 ——
+            # 与 /gen/modify 同一条理由（完整的说明在那里）：最新的正文配着上一版的
+            # 图示与大字结论，幻灯片上就是一张与新内容对不上的图，而 figure /
+            # key_conclusion 只由规划器落盘，讲稿模型无权改写。
+            # 只碰目标页，且用 plan_node 逐页决策 —— 老师正在改这一页，它出图是对
+            # 这次编辑的回应，不走整份课件的出图配额。
+            if (req.modify_action or "rewrite") in CONTENT_ACTIONS:
+                target_ids = {str(nid) for nid in req.target_node_ids}
+                updated_nodes = [
+                    _attach_teaching_plan(
+                        node, _plan_node_safe(req.intent, node, partial_context), replace=True
+                    ) if str(node.get("node_id")) in target_ids else node
+                    for node in updated_nodes
+                ]
+
             with _content_tasks_lock:
                 task = _content_tasks.get(content_id)
                 if task:
@@ -857,6 +1010,29 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         total = len(nodes)
         completed = []
         errors = []
+
+        # 教学表达规划：一次规划整份课件。「这一页该不该出图」只有在全局节奏里才判断
+        # 得准（连着三页都是流程图，第四页就该换一种表达），所以不逐节点调。
+        # 规划失败不阻断生成 —— 见 _plan_deck_safe。
+        bound_evidence, _bound_used = _load_page_evidence(req.evidence_refs)
+        plan_evidence = "\n\n".join(
+            part for part in (bound_evidence.strip(), (req.context_markdown or "").strip()) if part
+        )
+        plans = _plan_deck_safe(req.intent, nodes, plan_evidence)
+
+        # 增强批量生成原本写在循环体内：对 N 个节点会把**整批**讲稿生成 N 次，
+        # 最坏延迟与 token 费用都放大 N 倍。提到循环外只算一次；失败则退回逐节点
+        # 单生成（下面的 script_data is None 分支），行为不劣于改动前。
+        enhanced_scripts: list[dict] = []
+        if req.enhanced:
+            try:
+                enhanced_scripts = generator.generate_enhanced(
+                    nodes, req.context_markdown, req.course_name
+                ).get("scripts", []) or []
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger(__name__).warning(
+                    "[Content Pipeline] 批量增强生成失败，退回逐节点生成：%s", exc
+                )
 
         for idx, node in enumerate(nodes):
             try:
@@ -881,15 +1057,30 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                         ),
                     }
                 elif req.enhanced:
-                    result = generator.generate_enhanced(nodes, req.context_markdown, req.course_name)
                     script_data = next(
-                        (s for s in result.get("scripts", []) if s.get("node_id") == node.get("node_id")),
-                        {"script": "", "segments": []},
+                        (s for s in enhanced_scripts if s.get("node_id") == node.get("node_id")),
+                        None,
                     )
+                    # 批量结果里没有这一页时逐节点补生成。此前这里既没赋值 merged、
+                    # 也没兜住缺页：首个节点走增强分支会 UnboundLocalError，之后每个
+                    # 节点都会把**上一页**的 merged 再 append 一次，页数直接翻倍。
+                    if script_data is None:
+                        script_data = generator.generate_single(
+                            node, req.course_name,
+                            context_markdown=req.context_markdown,
+                            teaching_plan=plans.get(str(node.get("node_id") or "")),
+                        )
+                    merged = {**node, **script_data}
                 else:
-                    script_data = generator.generate_single(node, req.course_name)
+                    script_data = generator.generate_single(
+                        node, req.course_name,
+                        context_markdown=req.context_markdown,
+                        teaching_plan=plans.get(str(node.get("node_id") or "")),
+                    )
 
                     merged = {**node, **script_data}
+
+                merged = _attach_teaching_plan(merged, plans.get(str(node.get("node_id") or "")))
                 completed.append(merged)
                 task["completed_nodes"] = idx + 1
                 task["nodes"] = list(completed)
@@ -898,7 +1089,6 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                 _persist_content_task_sync(content_id, task)
 
             except Exception as node_err:
-                import logging
                 logging.getLogger(__name__).warning(
                     "[Content Pipeline] node %s error: %s", node.get("node_id"), str(node_err)
                 )
@@ -921,7 +1111,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         _persist_content_task_sync(content_id, task)
 
     except Exception as e:
-        import logging, traceback
+        import traceback
         logging.getLogger(__name__).error(
             "[Content Pipeline ERROR] content_id=%s error=%s\n%s",
             content_id, str(e), traceback.format_exc()
@@ -1144,6 +1334,8 @@ async def render_preview(req: PreviewRequest):
             if snapshot.summary and snapshot.summary not in ("", "课件预览", "初始版本", f"版本 {version_number}"):
                 course_name = snapshot.summary
 
+        # 预览必须走 PreviewRenderer：它是唯一读取 metadata.presentation
+        # （配色/字体/密度）的渲染器，且内部已自行润色（见 preview.py render()）。
         html_content = renderer.render(nodes, course_name)
         return {
             "html": html_content,
@@ -1156,6 +1348,30 @@ async def render_preview(req: PreviewRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"预览渲染失败: {str(e)}")
+
+
+def _load_page_evidence(evidence_refs: list[str] | None) -> tuple[str, list[str]]:
+    """Load only explicitly bound chunks for page-scoped regeneration."""
+    if not evidence_refs:
+        return "", []
+    from importlib import import_module
+
+    store = import_module("ai_engine.rag.router")._store
+    blocks: list[str] = []
+    used: list[str] = []
+    for raw_ref in evidence_refs:
+        ref = str(raw_ref or "").strip()
+        if not ref or ref in used:
+            continue
+        chunk = store.get_chunk(ref)
+        content = str(getattr(chunk, "content", "") or "").strip() if chunk else ""
+        if not content:
+            continue
+        used.append(ref)
+        blocks.append(f"[{ref}] {content}")
+    if not blocks:
+        return "", []
+    return "仅依据以下已绑定证据修改，不得引用其他资料：\n" + "\n\n".join(blocks), used
 
 
 @app.post("/api/v1/gen/modify")
@@ -1174,6 +1390,11 @@ async def modify_nodes(req: ModifyRequest):
     # 新增：内容修改场景下 generation_id 以 "content_" 开头，从 _content_tasks 加载。
     nodes = req.nodes
     is_content_task = False
+    # 版本级元数据要跟着新版本一起走：里面存着 create 时落盘的教学意图，
+    # 重规划单页（见下方 Stage 局部重规划）要读它；save_snapshot 时也要原样带过去，
+    # 不带的话改第二次就查不到 intent 了。
+    snapshot_metadata: dict[str, Any] = {}
+    intent: Any = {}
     if not nodes and req.generation_id:
         if req.generation_id.startswith("content_"):
             # 从内容任务加载节点（支持内容修改）
@@ -1183,6 +1404,8 @@ async def modify_nodes(req: ModifyRequest):
                 raise HTTPException(status_code=404, detail="内容任务不存在")
             nodes = content_task.get("nodes", [])
             is_content_task = True
+            snapshot_metadata = dict(content_task.get("metadata") or {})
+            intent = snapshot_metadata.get("intent") or {}
             if not nodes:
                 raise HTTPException(status_code=400, detail="内容任务无节点数据")
         else:
@@ -1191,8 +1414,19 @@ async def modify_nodes(req: ModifyRequest):
             if not snapshot:
                 raise HTTPException(status_code=404, detail="版本不存在")
             nodes = [node.model_dump() if hasattr(node, "model_dump") else node for node in snapshot.nodes_snapshot]
+            snapshot_metadata = dict(snapshot.metadata or {})
+            intent = snapshot_metadata.get("intent") or {}
     if not nodes:
         raise HTTPException(status_code=400, detail="nodes 或 generation_id 至少提供一个")
+
+    if not snapshot_metadata and req.generation_id and not is_content_task:
+        # nodes 是内联提交（Studio 直接提交当前节点树）时，上面那一段没读快照，
+        # 但下面 save_snapshot 照样要写新版本 —— 不补读就会把教学意图连同
+        # outline_id 一起抹成 {}，改第二次就再也查不到 intent 了。
+        latest = get_version_manager().load_version(req.generation_id)
+        if latest:
+            snapshot_metadata = dict(latest.metadata or {})
+            intent = snapshot_metadata.get("intent") or {}
 
     # 解析命令
     parse_result = parser.parse(req.commands)
@@ -1210,11 +1444,56 @@ async def modify_nodes(req: ModifyRequest):
 
     # 执行修补
     generator = NodeGenerator(NodeGenConfig()) if req.regenerate else None
-    regenerate_fn = (lambda nid, node: generator.generate_single(node, req.course_name)) if generator else None
+    evidence_context, evidence_used = _load_page_evidence(req.evidence_refs)
+
+    def regenerate_node(nid, node):
+        if not generator:
+            return node
+        applies_to_page = not req.page_id or str(nid) == str(req.page_id)
+        parts = []
+        if applies_to_page and req.user_instruction.strip():
+            parts.append(req.user_instruction.strip())
+        if applies_to_page and evidence_context:
+            parts.append(evidence_context)
+        return generator.generate_single(
+            node,
+            req.course_name,
+            extra_instruction="\n\n".join(parts),
+        )
+
+    regenerate_fn = regenerate_node if generator else None
     try:
         result = await asyncio.to_thread(patcher.apply, nodes, parse_result.commands, regenerate_fn)
     except Exception as e:
         raise _llm_endpoint_error(e, "修改命令执行失败")
+
+    # 把本次实际使用的绑定证据写回目标页；不让请求中的缺失 chunk 伪装成引用。
+    if evidence_used and not result.errors:
+        target_ids = _modify_target_ids(req, parse_result)
+        for node in result.nodes:
+            if target_ids and str(node.get("node_id")) not in target_ids:
+                continue
+            refs = list(dict.fromkeys([*(node.get("source_chunk_ids") or []), *evidence_used]))
+            node["source_chunk_ids"] = refs
+            node["citation_refs"] = list(refs)
+
+    # 局部重规划：正文刚被重写过，这一页「该怎么教」的决策也得跟着换 —— 否则会出现
+    # 最新的正文配着上一版的图示与大字结论（老师改完第 2 页，图和结论还停在旧内容上）。
+    # 只碰目标页：「其他页一字未动」是这条路径的契约。
+    #
+    # 用 plan_node 而非 plan_deck：逐页决策是这一页的事。这也意味着这里**不走**整份
+    # 课件的出图配额（见 plan_node 的注释）—— 老师正在改这一页，它出图是对这次编辑的
+    # 回应，不是"每页都硬塞一张图"那种自嗨。
+    if req.regenerate and generator and not result.errors:
+        target_ids = _modify_target_ids(req, parse_result)
+        replanned: list[dict[str, Any]] = []
+        for node in result.nodes:
+            if str(node.get("node_id")) in target_ids:
+                plan = _plan_node_safe(intent, node, evidence_context)
+                # replace=True：重规划说这页不该出图/不该有结论时，把旧的删掉
+                node = _attach_teaching_plan(node, plan, replace=True)
+            replanned.append(node)
+        result.nodes = replanned
 
     # 保存修改结果
     version_number = None
@@ -1230,6 +1509,9 @@ async def modify_nodes(req: ModifyRequest):
             generation_id=req.generation_id,
             nodes=result.nodes,
             summary="编辑修改",
+            # 元数据跟着新版本走。不传的话 save_snapshot 会落一个 {}，
+            # 教学意图在这个版本上就断了。
+            metadata=snapshot_metadata,
         )
         version_number = version.version_number
 
@@ -1255,6 +1537,9 @@ async def modify_nodes(req: ModifyRequest):
         "changes": result.changes,
         "errors": result.errors,
         "version_number": version_number,
+        "page_id": req.page_id,
+        "citation_refs": evidence_used,
+        "evidence_used": evidence_used,
     }
 
 
@@ -1578,7 +1863,6 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
                     )
                     evidence_dict = synthesized.model_dump() if hasattr(synthesized, "model_dump") else dict(synthesized)
             except Exception as e:
-                import logging
                 logging.getLogger(__name__).warning(
                     "[S3 Evidence] 自动证据获取失败，改为无证据生成: session_id=%s, error=%s",
                     req.session_id, str(e)
@@ -1613,8 +1897,18 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         # generation pipeline must validate only the internal TeachingNode
         # enum, so normalize both confirmed and legacy paths at one boundary.
         nodes = normalize_generation_nodes(nodes)
+        # S1→S3 自动检索绑定的是整份 PPT 草稿。必须在 AI 任务与版本快照
+        # 层写入引用，不能只依赖前端渲染后补字段，否则刷新/回滚会丢绑定。
+        nodes = bind_evidence_to_draft_nodes(nodes, evidence_dict)
         task.nodes = [TeachingNode.model_validate(node) for node in nodes]
         task.progress_pct = 50.0
+
+        # Stage 3.5: 教学表达规划 —— 先决定"每一页该怎么教"，再写讲稿。
+        #
+        # 这是老师端真正在走的链路（/api/v1/gen/create），与 /gen/content 那条链路共用
+        # 同一套规划器。规划结果不在这里落盘，而是随写稿结果一起经 _attach_teaching_plan
+        # 挂到节点上（见下方合并段）—— 表达决策只发生一次，不让模型复述。
+        plans = _plan_deck_safe(req.intent, nodes, _evidence_brief(evidence_dict))
 
         # Stage 4: 讲稿生成（增强版）
         # 有 markdown 时用 LessonGenerator（已验证 LLM 路径正确），无 markdown 时降级为 NodeGenerator
@@ -1646,23 +1940,26 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             scripts_dict = {"scripts": scripts_list}
         else:
             generator = NodeGenerator()
-            scripts_dict = generator.generate_all(nodes, "", course_name)
+            scripts_dict = generator.generate_all(nodes, "", course_name, plans=plans)
             scripts_list = scripts_dict.get("scripts", [])
             node_ids = {n["node_id"] for n in nodes}
         task.progress_pct = 80.0
 
-        # 合并节点
+        # 合并节点：讲稿结果并回节点，再挂上本页的教学表达规划。
+        #
+        # 这里以前只挑 script / segments 两个键，其余一律丢弃 —— point_details 由
+        # _run_batch_generation 产出、也已通过 schema.normalize_stage3_scripts 的白名单，
+        # 却唯独栽在这一步，于是"要点展开"永远到不了预览与导出。
         merged_nodes = []
         for node in nodes:
             script_data = next(
                 (s for s in scripts_list if s.get("node_id") == node.get("node_id")),
                 {"script": "", "segments": []},
             )
-            merged = {**node}
-            if isinstance(script_data, dict):
-                merged["script"] = script_data.get("script", "")
-                merged["segments"] = script_data.get("segments", [])
-            merged_nodes.append(merged)
+            merged = merge_script_into_node(node, script_data)
+            merged_nodes.append(
+                _attach_teaching_plan(merged, plans.get(str(node.get("node_id") or "")))
+            )
         task.nodes = merged_nodes
 
         # Stage 5: 内容自适应校验（标注超长节点字号/分页提示）
@@ -1687,6 +1984,10 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             metadata={
                 "outline_id": req.outline_id,
                 "outline_version": req.outline_version,
+                # 教学意图随快照落盘：/api/v1/gen/modify 重规划单页时要读回来，
+                # 否则「改一页」这条路径上的规划看不见教学主题/风格/对象，
+                # 与整份课件的意图脱节。见 modify_nodes 里的 intent 取数。
+                "intent": req.intent.model_dump(),
             },
         )
 
@@ -1700,7 +2001,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         _persist_task_sync(task)
 
     except Exception as e:
-        import logging, traceback
+        import traceback
         logging.getLogger(__name__).error(
             "[Pipeline ERROR] gen_id=%s task_id=%s error=%s\n%s",
             getattr(task, 'generation_id', '?'), task_id, str(e), traceback.format_exc()
@@ -1830,14 +2131,20 @@ async def export_create(gen_id: str, req: ExportRequest):
     """
     job_id = f"exp_{uuid.uuid4().hex[:12]}"
 
-    # 按用户选中的版本导出；version<=0 时才回退最新版本。
-    vm = get_version_manager()
     requested_version = int(req.version or 0)
-    selected = vm.load_version(gen_id, requested_version) if requested_version > 0 else vm.load_version(gen_id)
-    if not selected:
-        raise HTTPException(status_code=404, detail="版本不存在")
-    nodes = selected.nodes_snapshot
-    selected_version = selected.version_number
+    # S4 项目版本以 Go/PostgreSQL 的快照为权威来源。传入 nodes 时直接
+    # 导出该快照，避免 AI Engine 重启或跨存储后找不到同名 generation 版本。
+    if req.nodes:
+        nodes = req.nodes
+        selected_version = requested_version if requested_version > 0 else 1
+    else:
+        # 兼容旧调用：按 generation_id 从 AI Engine 版本存储加载。
+        vm = get_version_manager()
+        selected = vm.load_version(gen_id, requested_version) if requested_version > 0 else vm.load_version(gen_id)
+        if not selected:
+            raise HTTPException(status_code=404, detail="版本不存在")
+        nodes = selected.nodes_snapshot
+        selected_version = selected.version_number
     courseware_title = (req.courseware_title or "课件").strip() or "课件"
 
     # 创建导出任务
@@ -2135,7 +2442,9 @@ async def ai_parse_modify(req: ParseModifyRequest):
     """
     try:
         parser = get_modify_intent_parser()
-        result = await asyncio.to_thread(parser.parse, req.instruction, req.nodes)
+        result = await asyncio.to_thread(
+            parser.parse, req.instruction, req.nodes, req.active_node_id
+        )
         return result
     except Exception as e:
         raise _llm_endpoint_error(e, "修改指令解析失败")

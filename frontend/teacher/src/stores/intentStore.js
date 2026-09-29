@@ -149,7 +149,7 @@ export const useIntentStore = defineStore('intent', {
         this.completionPct = Number(result.completion_pct || this.completionPct)
         this.messages.push({
           role: 'assistant',
-          content: '方案已确认并建立意图档案。下一步可以上传教材、课件、图片或视频，我会把资料与这份教学意图自动对齐。'
+          content: '方案已确认并建立意图档案。即将进入课件工作台，系统会依据这份意图自动检索知识库并绑定整份课件；资料上传仍可随时补充。'
         })
         if (typeof window !== 'undefined') {
           window.localStorage.setItem(CONFIRMED_INTENT_KEY, JSON.stringify(this.intentSummary))

@@ -53,8 +53,8 @@
     </div>
 
     <!-- 错误提示 -->
-    <div v-if="outlineStore.error || outlineStore.confirmError" class="error-bar" role="alert">
-      {{ outlineStore.confirmError || outlineStore.error }}
+    <div v-if="outlineStore.error || outlineStore.confirmError || outlineStore.reviseError" class="error-bar" role="alert">
+      {{ outlineStore.confirmError || outlineStore.reviseError || outlineStore.error }}
     </div>
 
     <!-- 节点编辑器 -->
@@ -264,6 +264,7 @@
       :loading="revisingDialogLoading"
       :change-summary="outlineStore.changeSummary"
       :pending-nodes="outlineStore.pendingRevision?.nodes || []"
+      :error-message="outlineStore.reviseError"
       @apply="handleApplyRevision"
       @cancel="handleCancelRevision"
     />
@@ -301,7 +302,11 @@ const props = defineProps({
   /** 教学意图摘要（用于创建大纲） */
   intentSummary: { type: Object, default: null },
   /** 是否自动尝试从 localStorage 恢复大纲 */
-  autoRestore: { type: Boolean, default: true }
+  autoRestore: { type: Boolean, default: true },
+  /** S1 意图自动检索形成的整份课件证据包 */
+  evidencePacket: { type: Object, default: null },
+  /** 等待父级完成自动检索后再创建大纲，避免先生成后补证据 */
+  ready: { type: Boolean, default: true }
 })
 
 const emit = defineEmits(['confirm-complete', 'outline-created', 'error'])
@@ -330,9 +335,9 @@ if (props.autoRestore) {
 
 // 若无大纲且有 intent，自动创建
 watch(
-  () => [outlineStore.outline_id, outlineStore.nodes.length],
-  ([oid, nc]) => {
-    if (!oid && nc === 0 && props.intentSummary) {
+  () => [outlineStore.outline_id, outlineStore.nodes.length, props.ready],
+  ([oid, nc, ready]) => {
+    if (ready && !oid && nc === 0 && props.intentSummary) {
       handleGenerateOutline()
     }
   },
@@ -345,17 +350,28 @@ async function handleGenerateOutline() {
     return
   }
   try {
-    // 尝试从 localStorage 读取证据包
-    let evidence = null
+    // 优先使用父级按 S1 意图自动检索的证据包，兼容旧版 S2 localStorage 交接。
+    let evidence = props.evidencePacket || null
     try {
-      const raw = window.localStorage.getItem(`fuww_s2_evidence_packet:${props.sessionId}`)
-      if (raw) evidence = JSON.parse(raw)
+      if (!evidence) {
+        const raw = window.localStorage.getItem(`fuww_s2_evidence_packet:${props.sessionId}`)
+        if (raw) evidence = JSON.parse(raw)
+      }
     } catch {}
-    // 尝试从 localStorage 读取 markdown 内容
+    // S1→S3 新主流程必须以结构化意图为主。旧版全局 Markdown 缓存可能属于
+    // 另一份课件，或只有“未提供正文”的占位文本；仅在完全没有 S1 意图时兼容读取。
     let markdown = ''
     try {
-      const m = window.localStorage.getItem('fuww_s2_markdown')
-      if (m) markdown = m
+      const intent = props.intentSummary || {}
+      const hasIntent = Boolean(
+        String(intent.topic || intent.title || '').trim()
+        || (Array.isArray(intent.knowledge_points) && intent.knowledge_points.length)
+        || (Array.isArray(intent.key_points) && intent.key_points.length)
+      )
+      if (!hasIntent) {
+        const m = window.localStorage.getItem('fuww_s2_markdown')
+        if (m) markdown = m
+      }
     } catch {}
 
     await outlineStore.createOutline({
@@ -454,7 +470,6 @@ async function handleSendRevise() {
     await outlineStore.reviseOutline(msg)
   } catch (err) {
     emit('error', err?.message || 'AI 修订失败')
-    showReviseDialog.value = false
   } finally {
     revisingDialogLoading.value = false
   }
