@@ -110,12 +110,12 @@ AI_BASE_URL=http://127.0.0.1:8000
 
 如果你更习惯 YAML，也可以只改 backend/config/config.local.yaml。
 
-1. 启动前端示例（学生端）
+1. 启动教师端前端
 
 ```bash
-cd frontend/student
+cd frontend/teacher
 npm install
-npm run serve
+npm run dev
 ```
 
 ## 测试环境

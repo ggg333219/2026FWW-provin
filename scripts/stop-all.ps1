@@ -55,11 +55,9 @@ if (Test-Path $pidFile) {
     Write-Host "PID file not found: $pidFile. No background PIDs to stop."
 }
 
-Stop-ProcessesMatchingCommandLine -Pattern "npm run serve" -Description "student frontend"
 Stop-ProcessesMatchingCommandLine -Pattern "vite --host" -Description "teacher frontend"
 Stop-ProcessesMatchingCommandLine -Pattern "conda run -n fuww_ai python ai_engine/main.py" -Description "AI engine"
 Stop-ProcessesMatchingCommandLine -Pattern "go run ./api/main.go" -Description "backend"
-Stop-ProcessesMatchingCommandLine -Pattern "go run ./cmd/student/main.go" -Description "student backend"
 Stop-ProcessesMatchingCommandLine -Pattern "go run ./cmd/teacher/main.go" -Description "teacher backend"
 
 function Invoke-DockerCompose {

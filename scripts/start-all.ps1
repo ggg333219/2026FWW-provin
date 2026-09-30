@@ -1,6 +1,5 @@
 param(
-    [switch]$SkipDocker,
-    [switch]$SkipStudent
+    [switch]$SkipDocker
 )
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -119,29 +118,6 @@ function Test-EndpointReady {
     return $false
 }
 
-function Get-StudentFrontendUrlFromLog {
-    param(
-        [Parameter(Mandatory)][string]$LogPath
-    )
-
-    if (-not (Test-Path $LogPath)) { return $null }
-
-    try {
-        $tail = Get-Content -Path $LogPath -Tail 200 -ErrorAction Stop
-    } catch {
-        return $null
-    }
-
-    foreach ($line in $tail) {
-        $m = [regex]::Match($line, 'http://localhost:(\d+)\s*/?')
-        if ($m.Success) {
-            return "http://localhost:$($m.Groups[1].Value)"
-        }
-    }
-
-    return $null
-}
-
 function Start-Background {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -238,9 +214,9 @@ function Ensure-NodeDependencies {
 
     $nodeModules = Join-Path $WorkingDirectory 'node_modules'
     $binDir = Join-Path $nodeModules '.bin'
-    $cliServiceBin = Join-Path $binDir 'vue-cli-service'
-    $cliServiceBinCmd = Join-Path $binDir 'vue-cli-service.cmd'
-    $depsLookHealthy = (Test-Path $nodeModules) -and (Test-Path $binDir) -and ((Test-Path $cliServiceBin) -or (Test-Path $cliServiceBinCmd))
+    $viteBin = Join-Path $binDir 'vite'
+    $viteBinCmd = Join-Path $binDir 'vite.cmd'
+    $depsLookHealthy = (Test-Path $nodeModules) -and (Test-Path $binDir) -and ((Test-Path $viteBin) -or (Test-Path $viteBinCmd))
     if ($depsLookHealthy) { return }
 
     $attempts = @()
@@ -269,32 +245,16 @@ Start-Background -Name "backend" -FilePath "go" -ArgumentList @('run','./cmd/tea
 Ensure-NodeDependencies -ProjectName "teacher_frontend" -WorkingDirectory (Join-Path $root "frontend\teacher")
 Start-Background -Name "teacher_frontend" -FilePath "npm" -ArgumentList @('run','dev','--','--host','0.0.0.0','--port','5173') -WorkingDirectory (Join-Path $root "frontend\teacher") -StdOut "$logsDir\teacher_frontend.log" -StdErr "$logsDir\teacher_frontend.err.log"
 
-if (-not $SkipStudent) {
-    Ensure-NodeDependencies -ProjectName "student_frontend" -WorkingDirectory (Join-Path $root "frontend\student")
-    Start-Background -Name "student_frontend" -FilePath "npm" -ArgumentList @('run','serve') -WorkingDirectory (Join-Path $root "frontend\student") -StdOut "$logsDir\student_frontend.log" -StdErr "$logsDir\student_frontend.err.log"
-}
-
 $pidFile = Join-Path $scriptsDir "pids.json"
 $pids | ConvertTo-Json | Out-File -Encoding utf8 $pidFile
 
 Write-Host "Started components. PID file: $pidFile"
 Write-Host "Logs: $logsDir"
 Write-Host "If something fails, check the log files and run scripts/stop-all.ps1 to stop the background processes."
-if (Test-EndpointReady -Url 'http://localhost:8082/api/health' -RetryCount 25 -DelayMilliseconds 1000) {
-    Write-Host "Backend health check: OK (http://localhost:8082/api/health)"
+if (Test-EndpointReady -Url 'http://localhost:8082/health' -RetryCount 25 -DelayMilliseconds 1000) {
+    Write-Host "Backend health check: OK (http://localhost:8082/health)"
 } else {
     Write-Warning "Backend health check failed. Please inspect logs/backend.log and logs/backend.err.log"
-}
-
-if (-not $SkipStudent) {
-    $studentLog = Join-Path $logsDir 'student_frontend.log'
-    $studentUrl = Get-StudentFrontendUrlFromLog -LogPath $studentLog
-    if (-not $studentUrl) { $studentUrl = 'http://localhost:8080' }
-    if (Test-EndpointReady -Url $studentUrl -RetryCount 25 -DelayMilliseconds 1000) {
-        Write-Host "Student frontend ready: $studentUrl"
-    } else {
-        Write-Warning "Student frontend readiness check failed. Please inspect logs/student_frontend.log"
-    }
 }
 
 if (Test-EndpointReady -Url 'http://localhost:5173' -RetryCount 25 -DelayMilliseconds 1000) {
@@ -306,9 +266,6 @@ if (Test-EndpointReady -Url 'http://localhost:5173' -RetryCount 25 -DelayMillise
 Write-Host "Done."
 Write-Host ""
 Write-Host "Access URLs (local):"
-if (-not $SkipStudent) {
-    Write-Host "- 学生端前端: http://localhost:8080 (vue-cli serve 默认端口)"
-}
 Write-Host "- 教师端前端: http://localhost:5173 (vite 默认端口)"
 Write-Host "- 教师端后端: http://localhost:8082 (健康检查: /health, API 根路径: /api)"
 Write-Host "- AI 引擎: http://localhost:8000"

@@ -3,8 +3,8 @@
 仓库根目录下提供了方便在 Windows (PowerShell) 上一键启动/停止本项目前端、后端、AI 引擎和依赖服务的脚本。
 
 文件：
-- `scripts/start-all.ps1`：一键启动脚本，会根据宿主机提供的 CLI 选择 `docker compose`（优先）或 `docker-compose`，再执行 `up -d`；接着调用 `conda run -n fuww_ai python ai_engine/main.py`、`go run ./api/main.go` 以及带 `--host 0.0.0.0`/指定端口的 `npm run serve`（学生端）和 `npm run dev`（教师端）并把它们的 PID 写到 `scripts/pids.json`，以便 `stop-all.ps1` 使用。
-- 如果学生端或教师端缺少 `node_modules`，`start-all.ps1` 会先在对应目录自动执行 `npm ci`（无 `package-lock.json` 时退回到 `npm install`），再继续启动前端进程。
+- `scripts/start-all.ps1`：一键启动 Docker 依赖、AI 引擎、Go 教师端后端和 Vue 教师端前端，并把进程 PID 写到 `scripts/pids.json`，供 `stop-all.ps1` 使用。
+- 如果教师端缺少 `node_modules`，`start-all.ps1` 会在 `frontend/teacher` 自动执行 `npm ci`（无 `package-lock.json` 时退回到 `npm install`）。
 - 在 Windows 上，启动脚本会自动解析 `npm.cmd`/`.bat` 这类包装器后再启动，因此不需要手工把前端命令改成 `cmd /c npm ...`。
 - `scripts/stop-all.ps1`：停止 `scripts/pids.json` 中的后台进程并按需执行 `docker compose`（或 `docker-compose`）`down`（可加 `-SkipDocker` 跳过）。
 
