@@ -26,6 +26,7 @@ type exportAIClient interface {
 }
 
 type coursewareProjectLookup interface {
+	Get(context.Context, string, string) (*model.CoursewareProject, error)
 	FindByGeneration(context.Context, string, string) (*model.CoursewareProject, error)
 }
 
@@ -44,8 +45,11 @@ func (h *ExportHandler) authorizeGeneration(c *gin.Context, genID string) bool {
 		return false
 	}
 	if _, err := h.projectService.FindByGeneration(c.Request.Context(), userID, genID); err != nil {
-		exportContractError(c, http.StatusNotFound, "课件不存在")
-		return false
+		project, projectErr := h.projectService.Get(c.Request.Context(), userID, genID)
+		if projectErr != nil || project == nil || project.ID != genID || strings.TrimSpace(project.GenID) != "" {
+			exportContractError(c, http.StatusNotFound, "课件不存在")
+			return false
+		}
 	}
 	return true
 }
@@ -179,14 +183,38 @@ func (h *ExportHandler) Create(c *gin.Context) {
 		exportContractError(c, http.StatusBadRequest, "缺少 gen_id")
 		return
 	}
-	if !h.authorizeGeneration(c, genID) {
-		return
+	var payload struct {
+		service.ExportCreateRequest
+		ProjectID string `json:"project_id"`
 	}
-	var req service.ExportCreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindJSON(&payload); err != nil {
 		exportContractError(c, http.StatusBadRequest, "参数错误: "+err.Error())
 		return
 	}
+	if payload.ProjectID != "" {
+		userID := c.GetString("userID")
+		if userID == "" || h.projectService == nil {
+			exportContractError(c, http.StatusNotFound, "课件不存在")
+			return
+		}
+		project, err := h.projectService.Get(c.Request.Context(), userID, payload.ProjectID)
+		if err != nil {
+			exportContractError(c, http.StatusNotFound, "课件不存在")
+			return
+		}
+		if strings.TrimSpace(project.GenID) != "" {
+			genID = project.GenID
+		} else {
+			if len(payload.Nodes) == 0 {
+				exportContractError(c, http.StatusBadRequest, "项目版本缺少可导出的节点")
+				return
+			}
+			genID = payload.ProjectID
+		}
+	} else if !h.authorizeGeneration(c, genID) {
+		return
+	}
+	req := payload.ExportCreateRequest
 	resp, err := h.aiClient.ExportCreate(c.Request.Context(), genID, req)
 	if err != nil {
 		exportContractError(c, http.StatusBadGateway, "创建导出任务失败: "+err.Error())

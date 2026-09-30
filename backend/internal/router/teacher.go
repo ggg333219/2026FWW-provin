@@ -251,6 +251,7 @@ func RegisterNewSkillRoutes(
 
 	// ---- S4: 导出 ----
 	exp := v1.Group("/export")
+	exp.Use(handler.JWTAuthMiddleware())
 	{
 		exp.POST("/:gen_id", exportHandler.Create)
 		exp.GET("/status/:job_id", exportHandler.Status)
@@ -258,6 +259,7 @@ func RegisterNewSkillRoutes(
 	}
 	// S2S3 新功能接口契约 v1.0：/exp 为规范路径；/export 保留一个迭代周期兼容旧前端。
 	contractExp := v1.Group("/exp")
+	contractExp.Use(handler.JWTAuthMiddleware())
 	{
 		contractExp.POST("/:gen_id", exportHandler.Create)
 		contractExp.GET("/status/:job_id", exportHandler.Status)

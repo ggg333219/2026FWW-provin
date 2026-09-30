@@ -17,10 +17,14 @@ import (
 type exportTestAI struct {
 	status       *service.ExportStatusResponse
 	createCalled bool
+	createGenID  string
+	createReq    service.ExportCreateRequest
 }
 
-func (f *exportTestAI) ExportCreate(context.Context, string, service.ExportCreateRequest) (*service.ExportCreateResponse, error) {
+func (f *exportTestAI) ExportCreate(_ context.Context, genID string, req service.ExportCreateRequest) (*service.ExportCreateResponse, error) {
 	f.createCalled = true
+	f.createGenID = genID
+	f.createReq = req
 	return &service.ExportCreateResponse{JobID: "exp_test"}, nil
 }
 func (f *exportTestAI) ExportStatus(context.Context, string) (*service.ExportStatusResponse, error) {
@@ -33,11 +37,29 @@ func (f *exportTestAI) ExportDownloadURL(jobID, extension string) string {
 	return "/download/" + jobID + "." + extension
 }
 
-type exportTestProjects struct{ err error }
+type exportTestProjects struct {
+	err     error
+	project *model.CoursewareProject
+}
 
-func (f exportTestProjects) FindByGeneration(context.Context, string, string) (*model.CoursewareProject, error) {
+func (f exportTestProjects) FindByGeneration(_ context.Context, _ string, genID string) (*model.CoursewareProject, error) {
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.project != nil {
+		if f.project.GenID != genID {
+			return nil, errors.New("generation not found")
+		}
+		return f.project, nil
+	}
+	return &model.CoursewareProject{Title: "owned course"}, nil
+}
+func (f exportTestProjects) Get(context.Context, string, string) (*model.CoursewareProject, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.project != nil {
+		return f.project, nil
 	}
 	return &model.CoursewareProject{Title: "owned course"}, nil
 }
@@ -79,6 +101,56 @@ func TestExportCreateRequiresOwnedGeneration(t *testing.T) {
 	response := exportRequest(handler, "/api/v1/export/gen_other")
 	if response.Code != http.StatusNotFound || ai.createCalled {
 		t.Fatalf("unauthorized create reached AI Engine: status=%d called=%v", response.Code, ai.createCalled)
+	}
+}
+
+func TestExportCreateUsesOwnedProjectGenerationForSnapshot(t *testing.T) {
+	ai := &exportTestAI{}
+	projects := exportTestProjects{project: &model.CoursewareProject{
+		Title: "高等数学", GenID: "course_current", BaseModel: model.BaseModel{ID: "project-1"},
+	}}
+	handler := NewExportHandler(ai, projects)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("userID", "teacher-1") })
+	router.POST("/api/v1/exp/:gen_id", handler.Create)
+	body := `{"project_id":"project-1","format":"pptx","version":2,"nodes":[{"node_id":"node_001","title":"积分概念"}]}`
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/exp/course_stale", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK || !ai.createCalled {
+		t.Fatalf("project snapshot export was rejected: status=%d body=%s called=%v", recorder.Code, recorder.Body.String(), ai.createCalled)
+	}
+	if ai.createGenID != "course_current" || ai.createReq.Version != 2 || len(ai.createReq.Nodes) != 1 {
+		t.Fatalf("export did not use the owned project snapshot: gen=%q version=%d nodes=%d", ai.createGenID, ai.createReq.Version, len(ai.createReq.Nodes))
+	}
+}
+
+func TestExportProjectSnapshotWithoutGenerationCanBePolled(t *testing.T) {
+	ai := &exportTestAI{status: &service.ExportStatusResponse{JobID: "exp_project", GenerationID: "project-1", Status: "done"}}
+	projects := exportTestProjects{project: &model.CoursewareProject{
+		Title: "高等数学", BaseModel: model.BaseModel{ID: "project-1"},
+	}}
+	handler := NewExportHandler(ai, projects)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) { c.Set("userID", "teacher-1") })
+	router.POST("/api/v1/exp/:gen_id", handler.Create)
+	router.GET("/api/v1/exp/status/:job_id", handler.Status)
+	body := `{"project_id":"project-1","format":"pptx","version":1,"nodes":[{"node_id":"node_001","title":"积分概念"}]}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/exp/project-1", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	created := httptest.NewRecorder()
+	router.ServeHTTP(created, request)
+	if created.Code != http.StatusOK || ai.createGenID != "project-1" {
+		t.Fatalf("project-only snapshot export failed: status=%d gen=%q body=%s", created.Code, ai.createGenID, created.Body.String())
+	}
+	status := httptest.NewRecorder()
+	router.ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/v1/exp/status/exp_project", nil))
+	if status.Code != http.StatusOK {
+		t.Fatalf("owned project-only export status failed: status=%d body=%s", status.Code, status.Body.String())
 	}
 }
 

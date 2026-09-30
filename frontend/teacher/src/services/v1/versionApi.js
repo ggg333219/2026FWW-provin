@@ -51,7 +51,7 @@ export const teacherVersionApi = {
    * 创建导出任务
    * POST /api/v1/exp/{genId}（/export 保留为后端兼容别名）
    */
-  exportCreate: (genId, format = 'pptx', version = null, coursewareTitle = '', nodes = []) =>
+  exportCreate: (genId, format = 'pptx', version = null, coursewareTitle = '', nodes = [], projectId = '') =>
     requestJson(`/api/v1/exp/${encodeURIComponent(genId)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -59,7 +59,8 @@ export const teacherVersionApi = {
         format,
         version: version || null,
         courseware_title: coursewareTitle || '',
-        nodes: Array.isArray(nodes) ? nodes : []
+        nodes: Array.isArray(nodes) ? nodes : [],
+        project_id: projectId || ''
       })
     }),
 
