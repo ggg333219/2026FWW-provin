@@ -32,7 +32,7 @@ from ai_engine.recommendation.service import router as recommendation_router
 from ai_engine.gen.outline import OutlineBuilder, OutlineConfig
 from ai_engine.gen.modify_intent import ModifyIntentParser
 from ai_engine.gen.evidence_binding import bind_evidence_to_draft_nodes
-from ai_engine.gen.node import NodeGenerator, NodeGenConfig
+from ai_engine.gen.node import NodeGenerator, NodeGenConfig, merge_script_into_node
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
 from ai_engine.gen.preview import PreviewRenderer
@@ -623,6 +623,7 @@ class ParseModifyRequest(BaseModel):
     project_id: str = ""
     instruction: str
     nodes: list[dict[str, Any]] = Field(default_factory=list)
+    active_node_id: str = ""  # 教师界面当前选中的页面；「这页」靠它定位
 
 
 _modify_intent_parser: ModifyIntentParser | None = None
@@ -861,7 +862,7 @@ def _plan_deck_safe(intent: Any, nodes: list[dict], evidence: str) -> dict[str, 
         return {}
 
 
-def _attach_teaching_plan(node: dict[str, Any], plan: Any) -> dict[str, Any]:
+def _attach_teaching_plan(node: dict[str, Any], plan: Any, *, replace: bool = False) -> dict[str, Any]:
     """把规划器对**这一页**的决策挂到节点上。
 
     teaching_plan / figure / key_conclusion 都由这里落盘，而不是让讲稿 LLM 回显 ——
@@ -873,19 +874,57 @@ def _attach_teaching_plan(node: dict[str, Any], plan: Any) -> dict[str, Any]:
 
     空 dict 与 None 同等对待：它一条决策都没有。挂上去会让下游看到"这页规划过"
     （`"teaching_plan" in node` 为真）却读不到任何内容，比缺席更难排查。
+
+    ``replace=True`` 用于**局部修改**：这一页的正文刚被重写过，旧的图示/结论描述的
+    是旧内容，规划说没有就真的删掉 —— 否则幻灯片上留着一张与新正文对不上的图。
+    默认 False 是新建路径的语义（节点本来是干净的，只挂不删）。
     """
     if not isinstance(plan, dict) or not plan:
+        # 规划失败/为空时**保留**原有规划：拿不到新决策不等于旧决策错了，
+        # 让一次 LLM 调用失败把整页的图示和结论抹掉，比留着旧的更糟。
         return node
     from ai_engine.gen.teaching_plan import plan_to_figure
 
     merged = {**node, "teaching_plan": plan}
     conclusion = str(plan.get("key_conclusion") or "").strip()
-    if conclusion:
-        merged["key_conclusion"] = conclusion
     figure = plan_to_figure(plan)
-    if figure:
-        merged["figure"] = figure
+    for key, value in (("key_conclusion", conclusion), ("figure", figure)):
+        if value:
+            merged[key] = value
+        elif replace:
+            merged.pop(key, None)
     return merged
+
+
+def _plan_node_safe(intent: Any, node: dict[str, Any], evidence: str) -> dict[str, Any]:
+    """只重规划一页（局部修改路径）；任何失败都退回「没有规划」。
+
+    与 :func:`_plan_deck_safe` 同一退化策略：规划是加分项。返回空 dict 时
+    :func:`_attach_teaching_plan` 会保留该页原有规划，不会把页面改坏。
+    """
+    try:
+        from ai_engine.gen.teaching_plan import plan_node
+        return plan_node(intent, node, evidence=evidence)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "[Modify] 单页教学表达规划失败，保留原有规划：%s", exc
+        )
+        return {}
+
+
+def _modify_target_ids(req: Any, parse_result: Any) -> set[str]:
+    """本次修改真正落在哪些节点上。
+
+    ``page_id`` 优先（单页编辑显式指定），否则取命令里带 node_id 的那些。证据回填与
+    单页重规划都按同一份集合取数 —— 两处各算一次，迟早会算出两个不同的答案。
+    """
+    if req.page_id:
+        return {str(req.page_id)}
+    return {
+        str(command.params.get("node_id"))
+        for command in parse_result.commands
+        if command.params.get("node_id")
+    }
 
 
 #: 交给规划器的参考材料长度上限。规划只需要「不得编造材料中不存在的知识点」这一层
@@ -918,37 +957,6 @@ def _evidence_brief(evidence: Any) -> str:
     return "\n\n".join(parts)[:_PLAN_EVIDENCE_LIMIT]
 
 
-#: 讲稿生成结果里可以并回节点的字段。刻意**不含** node_id / title / node_type / type /
-#: content / summary —— 这几个由大纲确定，讲稿生成器无权改写。
-_SCRIPT_MERGE_KEYS = (
-    "script", "segments", "point_details",
-    "key_points", "core_points", "questions", "interactive_questions",
-    "layout_hint", "font_size_hint", "text_alignment", "slide_background",
-)
-
-
-def _merge_script_into_node(node: dict[str, Any], script_data: Any) -> dict[str, Any]:
-    """把讲稿生成结果并回节点，只在讲稿侧**确有内容**时覆盖。
-
-    不能写成 ``{**node, **script_data}``（``_run_content_pipeline`` 的增强分支是那么写的，
-    但那条链路此前从未真实跑过）：``normalize_stage3_scripts`` 会给缺失字段填默认值 ——
-    ``title`` 缺失填 ``node_id``、``key_points`` 缺失填 ``[]``、``node_type`` 取讲稿模型
-    自报的值。整体合并的结果是：讲稿模型漏一个标题，页面上就出现 "n3" 当标题；讲稿模型
-    把封面页报成 content，封面就退回普通内容页。这些都是老师已经确认过的大纲信息。
-
-    只增不减：``None`` / ``""`` / ``[]`` / ``{}`` 一律不覆盖，其余照收 ——
-    ``point_details`` 正是靠这一步才到得了预览与导出。
-    """
-    if not isinstance(script_data, dict):
-        return {**node}
-    merged = {**node}
-    for key in _SCRIPT_MERGE_KEYS:
-        value = script_data.get(key)
-        if value:
-            merged[key] = value
-    return merged
-
-
 def _run_content_pipeline(content_id: str, req: GenContentRequest):
     """后台内容生成管道：逐节点生成讲稿（同步，daemon 线程）
 
@@ -963,7 +971,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
     try:
         # ---- B6: 局部重生成分支 ----
         if req.target_node_ids and req.mode == "partial":
-            from ai_engine.gen.partial_content import run_partial_pipeline
+            from ai_engine.gen.partial_content import CONTENT_ACTIONS, run_partial_pipeline
             generator = NodeGenerator()
             # 页面级绑定证据（契约 v1.0 模块1）：教师显式绑到这些页上的 chunk
             # 优先级高于课件级 context_markdown，放在前面一起作为参考材料。
@@ -980,6 +988,22 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                 course_name=req.course_name,
                 generator=generator,
             )
+
+            # 单页重规划：这一页的正文刚被重写过，「该怎么教」的决策也得跟着换 ——
+            # 与 /gen/modify 同一条理由（完整的说明在那里）：最新的正文配着上一版的
+            # 图示与大字结论，幻灯片上就是一张与新内容对不上的图，而 figure /
+            # key_conclusion 只由规划器落盘，讲稿模型无权改写。
+            # 只碰目标页，且用 plan_node 逐页决策 —— 老师正在改这一页，它出图是对
+            # 这次编辑的回应，不走整份课件的出图配额。
+            if (req.modify_action or "rewrite") in CONTENT_ACTIONS:
+                target_ids = {str(nid) for nid in req.target_node_ids}
+                updated_nodes = [
+                    _attach_teaching_plan(
+                        node, _plan_node_safe(req.intent, node, partial_context), replace=True
+                    ) if str(node.get("node_id")) in target_ids else node
+                    for node in updated_nodes
+                ]
+
             with _content_tasks_lock:
                 task = _content_tasks.get(content_id)
                 if task:
@@ -1379,6 +1403,11 @@ async def modify_nodes(req: ModifyRequest):
     # 新增：内容修改场景下 generation_id 以 "content_" 开头，从 _content_tasks 加载。
     nodes = req.nodes
     is_content_task = False
+    # 版本级元数据要跟着新版本一起走：里面存着 create 时落盘的教学意图，
+    # 重规划单页（见下方 Stage 局部重规划）要读它；save_snapshot 时也要原样带过去，
+    # 不带的话改第二次就查不到 intent 了。
+    snapshot_metadata: dict[str, Any] = {}
+    intent: Any = {}
     if not nodes and req.generation_id:
         if req.generation_id.startswith("content_"):
             # 从内容任务加载节点（支持内容修改）
@@ -1388,6 +1417,8 @@ async def modify_nodes(req: ModifyRequest):
                 raise HTTPException(status_code=404, detail="内容任务不存在")
             nodes = content_task.get("nodes", [])
             is_content_task = True
+            snapshot_metadata = dict(content_task.get("metadata") or {})
+            intent = snapshot_metadata.get("intent") or {}
             if not nodes:
                 raise HTTPException(status_code=400, detail="内容任务无节点数据")
         else:
@@ -1396,8 +1427,19 @@ async def modify_nodes(req: ModifyRequest):
             if not snapshot:
                 raise HTTPException(status_code=404, detail="版本不存在")
             nodes = [node.model_dump() if hasattr(node, "model_dump") else node for node in snapshot.nodes_snapshot]
+            snapshot_metadata = dict(snapshot.metadata or {})
+            intent = snapshot_metadata.get("intent") or {}
     if not nodes:
         raise HTTPException(status_code=400, detail="nodes 或 generation_id 至少提供一个")
+
+    if not snapshot_metadata and req.generation_id and not is_content_task:
+        # nodes 是内联提交（Studio 直接提交当前节点树）时，上面那一段没读快照，
+        # 但下面 save_snapshot 照样要写新版本 —— 不补读就会把教学意图连同
+        # outline_id 一起抹成 {}，改第二次就再也查不到 intent 了。
+        latest = get_version_manager().load_version(req.generation_id)
+        if latest:
+            snapshot_metadata = dict(latest.metadata or {})
+            intent = snapshot_metadata.get("intent") or {}
 
     # 解析命令
     parse_result = parser.parse(req.commands)
@@ -1440,17 +1482,31 @@ async def modify_nodes(req: ModifyRequest):
 
     # 把本次实际使用的绑定证据写回目标页；不让请求中的缺失 chunk 伪装成引用。
     if evidence_used and not result.errors:
-        target_ids = {str(req.page_id)} if req.page_id else {
-            str(command.params.get("node_id"))
-            for command in parse_result.commands
-            if command.params.get("node_id")
-        }
+        target_ids = _modify_target_ids(req, parse_result)
         for node in result.nodes:
             if target_ids and str(node.get("node_id")) not in target_ids:
                 continue
             refs = list(dict.fromkeys([*(node.get("source_chunk_ids") or []), *evidence_used]))
             node["source_chunk_ids"] = refs
             node["citation_refs"] = list(refs)
+
+    # 局部重规划：正文刚被重写过，这一页「该怎么教」的决策也得跟着换 —— 否则会出现
+    # 最新的正文配着上一版的图示与大字结论（老师改完第 2 页，图和结论还停在旧内容上）。
+    # 只碰目标页：「其他页一字未动」是这条路径的契约。
+    #
+    # 用 plan_node 而非 plan_deck：逐页决策是这一页的事。这也意味着这里**不走**整份
+    # 课件的出图配额（见 plan_node 的注释）—— 老师正在改这一页，它出图是对这次编辑的
+    # 回应，不是"每页都硬塞一张图"那种自嗨。
+    if req.regenerate and generator and not result.errors:
+        target_ids = _modify_target_ids(req, parse_result)
+        replanned: list[dict[str, Any]] = []
+        for node in result.nodes:
+            if str(node.get("node_id")) in target_ids:
+                plan = _plan_node_safe(intent, node, evidence_context)
+                # replace=True：重规划说这页不该出图/不该有结论时，把旧的删掉
+                node = _attach_teaching_plan(node, plan, replace=True)
+            replanned.append(node)
+        result.nodes = replanned
 
     # 保存修改结果
     version_number = None
@@ -1466,6 +1522,9 @@ async def modify_nodes(req: ModifyRequest):
             generation_id=req.generation_id,
             nodes=result.nodes,
             summary="编辑修改",
+            # 元数据跟着新版本走。不传的话 save_snapshot 会落一个 {}，
+            # 教学意图在这个版本上就断了。
+            metadata=snapshot_metadata,
         )
         version_number = version.version_number
 
@@ -1910,7 +1969,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
                 (s for s in scripts_list if s.get("node_id") == node.get("node_id")),
                 {"script": "", "segments": []},
             )
-            merged = _merge_script_into_node(node, script_data)
+            merged = merge_script_into_node(node, script_data)
             merged_nodes.append(
                 _attach_teaching_plan(merged, plans.get(str(node.get("node_id") or "")))
             )
@@ -1938,6 +1997,10 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             metadata={
                 "outline_id": req.outline_id,
                 "outline_version": req.outline_version,
+                # 教学意图随快照落盘：/api/v1/gen/modify 重规划单页时要读回来，
+                # 否则「改一页」这条路径上的规划看不见教学主题/风格/对象，
+                # 与整份课件的意图脱节。见 modify_nodes 里的 intent 取数。
+                "intent": req.intent.model_dump(),
             },
         )
 
@@ -2442,7 +2505,9 @@ async def ai_parse_modify(req: ParseModifyRequest):
     """
     try:
         parser = get_modify_intent_parser()
-        result = await asyncio.to_thread(parser.parse, req.instruction, req.nodes)
+        result = await asyncio.to_thread(
+            parser.parse, req.instruction, req.nodes, req.active_node_id
+        )
         return result
     except Exception as e:
         raise _llm_endpoint_error(e, "修改指令解析失败")

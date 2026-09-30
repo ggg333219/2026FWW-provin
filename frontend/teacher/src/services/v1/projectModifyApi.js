@@ -72,6 +72,9 @@ export const projectModifyApi = {
 
   /**
    * A6 修改编排：自然语言 → 意图解析 → 局部重生成 → 版本快照
+   *
+   * activeNodeId 是教师界面上当前选中的页面，用于解析「这页」这类指示代词；
+   * 不传即退回「按指令里的页号 / 标题定位」。
    * 响应 data: { modified_nodes, all_nodes, intent, previous_version_no, new_version_no, clarification? }
    */
   modify: (project_id, instruction, nodes, confirmed = false) =>
@@ -97,6 +100,20 @@ export const projectModifyApi = {
   /** 当前草稿的稳定 PPT 元素快照，供自然语言候选定位使用。 */
   elements: (project_id) =>
     requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/elements`, {
+      method: 'GET',
+    }),
+
+  /** 保存完整版本快照（节点、呈现样式和页面证据绑定）。 */
+  createVersion: (project_id, payload = {}) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/versions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 读取指定版本的完整快照。 */
+  versionDetail: (project_id, version_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/versions/${encodeURIComponent(version_id)}`, {
       method: 'GET',
     }),
 

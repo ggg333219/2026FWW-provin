@@ -61,6 +61,33 @@ describe('modifyStore C6/C7 对话迭代', () => {
     expect(store.messages.some((message) => message.text === '已更新：排序案例')).toBe(true)
   })
 
+  it('把选中页随请求发出，供引擎解析「这页」', async () => {
+    const modify = vi.spyOn(projectModifyApi, 'modify').mockResolvedValue({ data: {
+      intent: { action: 'expand', target_ids: ['node_3'] },
+      modified_nodes: [{ node_id: 'node_3', title: '空间复杂度' }],
+      all_nodes: [{ node_id: 'node_3', title: '空间复杂度' }],
+      new_version_no: 1,
+    } })
+    vi.spyOn(projectModifyApi, 'versions').mockResolvedValue({ data: { items: [{ version_no: 1 }] } })
+    const store = useModifyStore()
+    store.bindProject('project_1')
+    store.setActiveNode('node_3')
+    store.inputText = '这页加个生活案例'
+    await store.sendModify([], () => {})
+
+    expect(modify.mock.calls[0][3].activeNodeId).toBe('node_3')
+    // 改完选中页跟到刚改的那页，「再改改刚才那页」不必重新点
+    expect(store.activeNodeId).toBe('node_3')
+  })
+
+  it('换项目时清空选中页（上一份课件的选中页在这里没有意义）', () => {
+    const store = useModifyStore()
+    store.bindProject('project_1')
+    store.setActiveNode('node_2')
+    store.bindProject('project_2')
+    expect(store.activeNodeId).toBe('')
+  })
+
   it('限制超长输入并支持失败后重新填写', async () => {
     vi.spyOn(projectModifyApi, 'modify').mockRejectedValue(new Error('服务暂不可用'))
     const store = useModifyStore()

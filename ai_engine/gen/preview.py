@@ -13,6 +13,10 @@
 gen/svg_renderer.py 渲染的 SVG 承载**。内容该画哪些字段不再由本模块决定 ——
 那是 gen/page_spec.py 的职责；本模块只负责「外壳 class 与整页 CSS」。
 
+外壳上还带 `data-node-id`：它是前端做局部刷新的锚 —— 改一页之后，只有这一页的
+DOM 会被就地替换，其余页与滚动位置都不动（见 frontend 的 utils/previewPatch.js）。
+每一页的「页单元」= slide 外壳 + 紧随其后的讲稿折叠区，两者同进同退。
+
 幻灯片是给学生看的，讲稿与分段不上屏：page_spec 把它们标成 ROLE_TEACHER，
 由本模块渲染进**幻灯片下方的折叠区** `<details class="script-panel">`（默认收起）。
 这样教师审阅时讲稿仍随手可读，投影出去的页面却不含讲授文本。
@@ -171,7 +175,11 @@ class PreviewRenderer:
         # 页型同步传给 build_page_spec，避免在这里与 _resolve_type 各判一次
         spec = build_page_spec(node, index, node_type)
         svg = render_page_spec_to_svg(spec, self._theme)
-        slide = f"""<div class="slide {slide_class}">
+        # data-node-id 是「改一页只换一页」的锚：前端拿到新 HTML 后按它找到旧页就地替换，
+        # 不再整份重设 iframe。属性放在 class 之后，`class="slide xxx-slide"` 这类
+        # 既有断言仍然成立。
+        node_id = html.escape(str(node.get("node_id") or ""), quote=True)
+        slide = f"""<div class="slide {slide_class}" data-node-id="{node_id}">
   <div class="slide-num">{index}</div>
   {svg}
 </div>"""

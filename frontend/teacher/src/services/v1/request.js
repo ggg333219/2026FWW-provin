@@ -55,7 +55,7 @@ async function isBackendReachable() {
   if (typeof fetch === 'undefined') return false
   const now = Date.now()
   if (lastProbeFailedAt && now - lastProbeFailedAt < PROBE_TTL_MS) return false
-  for (const path of ['/health', '/api/health']) {
+  for (const path of ['/health', '/api/health', '/api/v1/coursewares']) {
     let timer = 0
     try {
       const controller = new AbortController()
@@ -65,7 +65,8 @@ async function isBackendReachable() {
         signal: controller.signal,
         cache: 'no-store'
       })
-      if (resp.ok) {
+      // 只要能收到任何HTTP响应（包括401未授权）就说明后端进程活着
+      if (resp.status > 0) {
         lastProbeFailedAt = 0
         return true
       }

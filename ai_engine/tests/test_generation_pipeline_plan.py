@@ -32,14 +32,17 @@ if str(_ROOT) not in sys.path:
 
 from ai_engine import main as main_module  # noqa: E402
 from ai_engine.core.llm import LLMClient  # noqa: E402
-from ai_engine.core.schema import IntentSummary, TeachingNode  # noqa: E402
+from ai_engine.core.schema import (  # noqa: E402
+    IntentSummary,
+    TeachingNode,
+    normalize_generation_nodes,
+)
 from ai_engine.gen import teaching_plan as tp  # noqa: E402
-from ai_engine.gen.node import NodeGenerator  # noqa: E402
+from ai_engine.gen.node import NodeGenerator, merge_script_into_node  # noqa: E402
 from ai_engine.gen.version import VersionManager  # noqa: E402
 from ai_engine.main import (  # noqa: E402
     _attach_teaching_plan,
     _evidence_brief,
-    _merge_script_into_node,
     app,
 )
 
@@ -48,8 +51,14 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def _deterministic_planner(monkeypatch):
-    """强制规划器走确定性兜底：不碰网络，也不受 AI_GEN_MODE 影响。"""
-    monkeypatch.setattr(tp, "_use_llm", lambda llm=None: None)
+    """不构造真实 LLM 客户端：显式传入的 fake 照用，其余一律走确定性兜底。
+
+    掐掉的只是 ``_use_llm`` 里「从 settings 新建客户端」那一支，不是让它恒返回 ``None``
+    —— 后者会把测试自己传进来的 fake 也一并吞掉（``_use_llm`` 首行本就是
+    ``if llm is not None: return llm``），于是「规划器收得到意图吗」这类用例会静默地
+    退化成启发式路径，测了个寂寞。
+    """
+    monkeypatch.setattr(tp, "_use_llm", lambda llm=None: llm)
 
 
 # =============================================================================
@@ -135,7 +144,7 @@ def test_merge_script_carries_point_details():
         "node_id": "n1", "script": "讲稿", "segments": [{"segment_id": "s1"}],
         "point_details": [{"point": "时间复杂度", "detail": "描述增长趋势"}],
     }
-    merged = _merge_script_into_node(node, script)
+    merged = merge_script_into_node(node, script)
 
     assert merged["point_details"] == [{"point": "时间复杂度", "detail": "描述增长趋势"}]
     assert merged["script"] == "讲稿"
@@ -156,7 +165,7 @@ def test_merge_script_does_not_clobber_outline_authoritative_fields():
         "node_id": "n3", "title": "n3", "node_type": "content", "type": "content",
         "script": "讲稿", "segments": [], "key_points": [], "core_points": [],
     }
-    merged = _merge_script_into_node(node, script)
+    merged = merge_script_into_node(node, script)
 
     assert merged["title"] == "教师确认的封面"
     assert merged["node_type"] == "cover"
@@ -169,12 +178,12 @@ def test_merge_script_does_not_clobber_outline_authoritative_fields():
 
 def test_merge_script_ignores_empty_and_non_dict():
     node = {"node_id": "n1", "title": "标题", "script": "原讲稿"}
-    merged = _merge_script_into_node(node, {"script": "", "segments": [], "point_details": None})
+    merged = merge_script_into_node(node, {"script": "", "segments": [], "point_details": None})
     assert merged["script"] == "原讲稿"
     assert "point_details" not in merged
 
-    assert _merge_script_into_node(node, None) == node
-    assert _merge_script_into_node(node, "丢弃") == node
+    assert merge_script_into_node(node, None) == node
+    assert merge_script_into_node(node, "丢弃") == node
 
 
 # =============================================================================
@@ -182,14 +191,24 @@ def test_merge_script_ignores_empty_and_non_dict():
 # =============================================================================
 
 def _planned_node() -> dict:
-    node = {"node_id": "n1", "title": "复杂度基础", "node_type": "content",
-            "summary": "复杂度描述算法规模增长趋势。", "key_points": ["时间复杂度"]}
+    """一个走完「大纲别名 → 内部枚举」这一跳的节点，与管线里的形态一致。
+
+    ``node_type`` 刻意写成 ``"content"``：这是大纲接口（Go outline 契约）真实上送的
+    值，由 :func:`normalize_generation_nodes` 翻成内部枚举 ``"slide"``
+    （``main.py:1840``，就在规划器上游两行）。别名直接喂给 ``TeachingNode.model_validate``
+    会被枚举拒掉 —— 内部枚举**不放宽**是既定裁定（见 ``normalize_generation_node_type``
+    的 docstring），所以这里先过一遍归一化，而不是把 fixture 改成 ``"slide"`` 绕开边界。
+    """
+    node = normalize_generation_nodes([{
+        "node_id": "n1", "title": "复杂度基础", "node_type": "content",
+        "summary": "复杂度描述算法规模增长趋势。", "key_points": ["时间复杂度"],
+    }])[0]
     plan = {
         "node_id": "n1", "teaching_goal": "理解增长趋势",
         "visual_type": "flow", "visual_structure": ["输入规模", "增长趋势", "复杂度"],
         "key_conclusion": "复杂度描述的是增长趋势，不是绝对耗时",
     }
-    merged = _merge_script_into_node(
+    merged = merge_script_into_node(
         node, {"script": "讲稿", "segments": [],
                "point_details": [{"point": "时间复杂度", "detail": "描述增长趋势"}]},
     )
@@ -291,7 +310,12 @@ def _create_payload() -> dict:
     }
 
 
-def _run_create(monkeypatch, tmp_path, payload: dict) -> dict:
+def _run_create(monkeypatch, tmp_path, payload: dict) -> tuple[dict, str]:
+    """跑一次 /gen/create 到任务结束，返回 (最终状态, generation_id)。
+
+    带上 generation_id 是为了能接着读磁盘快照 —— 教学意图落在快照 metadata 里，
+    而那是 ``/gen/modify`` 重规划单页唯一的取数来源（见 test_modify_replan.py）。
+    """
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(main_module._task_store, "_use_redis", False)
 
@@ -309,7 +333,8 @@ def _run_create(monkeypatch, tmp_path, payload: dict) -> dict:
 
     created = client.post("/api/v1/gen/create", json=payload)
     assert created.status_code == 200
-    task_id = created.json()["task_id"]
+    created_body = created.json()
+    task_id = created_body["task_id"]
 
     status = None
     for _ in range(500):
@@ -318,7 +343,7 @@ def _run_create(monkeypatch, tmp_path, payload: dict) -> dict:
         if status.json()["status"] in {"done", "failed"}:
             break
         time.sleep(0.02)
-    return status.json()
+    return status.json(), created_body["generation_id"]
 
 
 def test_create_pipeline_delivers_planned_fields_to_the_api(monkeypatch, tmp_path):
@@ -327,7 +352,7 @@ def test_create_pipeline_delivers_planned_fields_to_the_api(monkeypatch, tmp_pat
     改动前 point_details 停在合并那一步、teaching_plan/figure/key_conclusion 压根没有；
     前端拿到的节点与改动前逐字相同，等于新特性不存在。
     """
-    body = _run_create(monkeypatch, tmp_path, _create_payload())
+    body, _generation_id = _run_create(monkeypatch, tmp_path, _create_payload())
 
     assert body["status"] == "done"
     node = body["nodes"][0]
@@ -354,7 +379,7 @@ def test_create_pipeline_still_succeeds_when_the_planner_dies(monkeypatch, tmp_p
         tp, "plan_deck",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("规划服务不可用")),
     )
-    body = _run_create(monkeypatch, tmp_path, _create_payload())
+    body, _generation_id = _run_create(monkeypatch, tmp_path, _create_payload())
 
     assert body["status"] == "done"
     node = body["nodes"][0]
@@ -363,3 +388,19 @@ def test_create_pipeline_still_succeeds_when_the_planner_dies(monkeypatch, tmp_p
     assert not node.get("key_conclusion")
     # 讲稿链路不受影响
     assert node["point_details"] == [{"point": "时间复杂度", "detail": "描述增长趋势"}]
+
+
+def test_create_writes_the_intent_into_the_snapshot(monkeypatch, tmp_path):
+    """教学意图要跟快照一起落盘 —— 这是 /gen/modify 重规划单页唯一的取数来源。
+
+    不写的话，「改一页」这条路径上的规划看不见教学主题 / 风格 / 对象，与整份课件的
+    意图脱节（P4）。这条断言看着琐碎，但它是 P4 那一串读回逻辑的地基。
+    """
+    _, generation_id = _run_create(monkeypatch, tmp_path, _create_payload())
+
+    snapshot = VersionManager().load_version(generation_id)
+    assert snapshot is not None
+    assert snapshot.metadata["intent"]["topic"] == "排序算法"
+    assert snapshot.metadata["intent"]["style"] == "案例驱动"
+    # 同一次写入里的另一个键：大纲溯源信息不能因为加了 intent 就被挤掉
+    assert snapshot.metadata["outline_id"] == "outline_plan_001"
