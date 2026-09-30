@@ -509,13 +509,13 @@ type ModifyResult struct {
 }
 
 // Modify 修改编排：解析意图 → （低置信度则追问）→ 局部生成 → 更新草稿 → 版本快照。
-func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction string, nodes []TeachingNodeItem) (*ModifyResult, error) {
-	return s.ModifyWithOptions(ctx, projectID, instruction, nodes, false)
+func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction string, nodes []TeachingNodeItem, activeNodeID ...string) (*ModifyResult, error) {
+	return s.ModifyWithOptions(ctx, projectID, instruction, nodes, false, activeNodeID...)
 }
 
 // ModifyWithOptions adds the explicit confirmation boundary required for
 // destructive, media, structural, and batch element operations.
-func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, instruction string, nodes []TeachingNodeItem, confirmed bool) (*ModifyResult, error) {
+func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, instruction string, nodes []TeachingNodeItem, confirmed bool, activeNodeID ...string) (*ModifyResult, error) {
 	project, err := s.store.GetProject(ctx, projectID)
 	if err != nil {
 		return nil, err
@@ -527,11 +527,15 @@ func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, in
 	nodes = ensureElementMetadata(nodes)
 
 	// 1) B5: 解析意图
+	selectedNodeID := ""
+	if len(activeNodeID) > 0 {
+		selectedNodeID = activeNodeID[0]
+	}
 	intentPtr, err := s.aiClient.ParseModify(ctx, ParseModifyRequest{
 		ProjectID:    projectID,
 		Instruction:  instruction,
 		Nodes:        nodes,
-		ActiveNodeID: activeNodeID,
+		ActiveNodeID: selectedNodeID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("意图解析失败: %w", err)
@@ -586,11 +590,11 @@ func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, in
 		if err != nil {
 			return nil, fmt.Errorf("局部重生成失败: %w", err)
 		}
-		resp, err = s.waitForPartialContent(ctx, resp)
+		partial, err := s.waitContentResult(ctx, resp)
 		if err != nil {
 			return nil, fmt.Errorf("局部重生成失败: %w", err)
 		}
-		updatedNodes = mergePartialResult(updatedNodes, resp.Nodes, intent.TargetIDs)
+		updatedNodes = mergePartialResult(updatedNodes, partial, intent.TargetIDs)
 		if intent.Action == "expand" && !hasVisibleTargetChange(nodes, updatedNodes, intent.TargetIDs) {
 			return nil, fmt.Errorf("AI 引擎没有生成可见的课件内容，请重试或明确指定要添加的内容")
 		}
@@ -942,6 +946,10 @@ func (s *CoursewareService) waitContentResult(
 			continue
 		}
 		lastErr = nil
+		if status == nil {
+			lastErr = fmt.Errorf("AI 引擎未返回内容生成状态")
+			continue
+		}
 
 		if len(status.Nodes) > 0 {
 			return status.Nodes, nil

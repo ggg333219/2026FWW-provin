@@ -77,12 +77,12 @@ export const projectModifyApi = {
    * 不传即退回「按指令里的页号 / 标题定位」。
    * 响应 data: { modified_nodes, all_nodes, intent, previous_version_no, new_version_no, clarification? }
    */
-  modify: (project_id, instruction, nodes, confirmed = false) =>
+  modify: (project_id, instruction, nodes, { activeNodeId = '', confirmed = false } = {}) =>
     requestJson(`/api/v1/coursewares/${project_id}/modify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       timeoutMs: MODIFY_LLM_TIMEOUT_MS,
-      body: JSON.stringify({ instruction, nodes, confirmed }),
+      body: JSON.stringify({ instruction, nodes, confirmed, active_node_id: activeNodeId || '' }),
     }),
 
   /** 修改记录列表 */
@@ -100,20 +100,6 @@ export const projectModifyApi = {
   /** 当前草稿的稳定 PPT 元素快照，供自然语言候选定位使用。 */
   elements: (project_id) =>
     requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/elements`, {
-      method: 'GET',
-    }),
-
-  /** 保存完整版本快照（节点、呈现样式和页面证据绑定）。 */
-  createVersion: (project_id, payload = {}) =>
-    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/versions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }),
-
-  /** 读取指定版本的完整快照。 */
-  versionDetail: (project_id, version_id) =>
-    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/versions/${encodeURIComponent(version_id)}`, {
       method: 'GET',
     }),
 

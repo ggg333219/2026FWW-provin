@@ -12,14 +12,16 @@ import (
 // ---- fake：只实现 modifyClient 窄接口 ----
 
 type fakeModifyAI struct {
-	intent      *ModifyIntent
-	intentErr   error
-	genResp     *GenContentStatusResponse
-	genErr      error
-	lastGenReq  *GenContentRequest
-	statusResp  *GenContentStatusResponse
-	statusErr   error
-	statusCalls int
+	intent       *ModifyIntent
+	intentErr    error
+	genResp      *GenContentStatusResponse
+	genErr       error
+	lastGenReq   *GenContentRequest
+	statusResp   *GenContentStatusResponse
+	statusErr    error
+	statusCalls  int
+	statusQueue  []*GenContentStatusResponse
+	statusErrFor int
 }
 
 func (f *fakeModifyAI) ParseModify(_ context.Context, _ ParseModifyRequest) (*ModifyIntent, error) {
@@ -39,6 +41,20 @@ func (f *fakeModifyAI) GenerateContent(_ context.Context, req GenContentRequest)
 
 func (f *fakeModifyAI) ContentStatus(_ context.Context, _ string) (*GenContentStatusResponse, error) {
 	f.statusCalls++
+	if f.statusErrFor > 0 && f.statusCalls <= f.statusErrFor {
+		return nil, f.statusErr
+	}
+	if len(f.statusQueue) > 0 {
+		response := f.statusQueue[0]
+		f.statusQueue = f.statusQueue[1:]
+		return response, nil
+	}
+	if f.statusErrFor > 0 {
+		return f.statusResp, nil
+	}
+	if f.statusResp == nil && f.statusErr == nil {
+		return &GenContentStatusResponse{Status: "generating"}, nil
+	}
 	return f.statusResp, f.statusErr
 }
 
@@ -701,7 +717,7 @@ func TestModifyToleratesTransientStatusErrors(t *testing.T) {
 		statusErrFor: 2,
 		statusResp: &GenContentStatusResponse{
 			ContentID: "content_flaky", Status: "done",
-			Nodes: []TeachingNodeItem{{NodeID: "node_2", Script: "抖完之后的讲稿"}},
+			Nodes: []TeachingNodeItem{{NodeID: "node_2", Summary: "增加生活案例", Script: "抖完之后的讲稿"}},
 		},
 	}
 	svc := newCoursewareTestSvc(ai)

@@ -123,7 +123,7 @@ describe('modifyStore C6/C7 对话迭代', () => {
 
     expect(store.pendingConfirmation).not.toBeNull()
     await store.confirmPending()
-    expect(modify.mock.calls[1][3]).toBe(true)
+    expect(modify.mock.calls[1][3]).toMatchObject({ confirmed: true })
     expect(store.pendingConfirmation).toBeNull()
   })
 })

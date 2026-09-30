@@ -246,6 +246,10 @@ def apply_page_revision(node: dict[str, Any], revision: Any,
 
     if "point_details" in revision:
         updated["point_details"] = revision.get("point_details") or []
+        if updated["point_details"]:
+            metadata = dict(updated.get("metadata") or {})
+            metadata["show_modified_details"] = True
+            updated["metadata"] = metadata
 
     if str(revision.get("script") or "").strip():
         updated["script"] = revision.get("script")
@@ -359,39 +363,16 @@ def run_partial_pipeline(
             )
 
             try:
-                new_script = gen.generate_single(
-                    node,
-                    course_name=course_name,
-                    extra_instruction=modify_instruction,
-                    context_markdown=reference,
-                )
-                if isinstance(new_script, dict) and new_script.get("script"):
-                    updated_node = dict(node)
-                    updated_node["script"] = new_script.get("script", "")
-                    # segments 缺失时不覆盖。前端 ModifyPanel 的契约是「缺失字段保留
-                    # 当前 PPT 内容」，后端若发一个显式的 [] 反而会把分段清空。
-                    # generate_single 现在恒带该字段，这里只兜住自定义 generator。
-                    if "segments" in new_script:
-                        updated_node["segments"] = new_script.get("segments") or []
-                    # point_details 走与 segments 完全相同的口径：key 在就覆盖，缺席就
-                    # 保留。generate_single 现在恒带该字段，这里只兜住自定义 generator。
-                    # 不回写的话，教师改第 2 页时展开说明会停在旧内容上 —— 幻灯片上看
-                    # 起来就是"改了等于没改"。
-                    if "point_details" in new_script:
-                        updated_node["point_details"] = new_script.get("point_details") or []
-                        if updated_node["point_details"]:
-                            metadata = dict(updated_node.get("metadata") or {})
-                            metadata["show_modified_details"] = True
-                            updated_node["metadata"] = metadata
-                    # 引用关系：原有 refs 全部保留，追加本次实际检索到的证据
-                    # （去重保序）。否则内容已经改自新证据、引用却还指向旧资料，
-                    # 证据追溯会对不上。与 main.py 的 /gen/modify 回填方式一致。
-                    if evidence_ids:
-                        updated_node["source_chunk_ids"] = list(dict.fromkeys([
-                            *(updated_node.get("source_chunk_ids") or []),
-                            *evidence_ids,
-                        ]))
-                    updated.append(updated_node)
+                request: dict[str, Any] = {
+                    "course_name": course_name,
+                    "extra_instruction": modify_instruction,
+                    "context_markdown": reference,
+                }
+                if _supports_slide_revision(gen):
+                    request["revise_slide"] = True
+                new_script = gen.generate_single(node, **request)
+                if _revision_has_content(new_script):
+                    updated.append(apply_page_revision(node, new_script, evidence_ids))
                 else:
                     # 模型什么都没给（既没讲稿也没正文/要点）。保留原内容，
                     # 但要留下痕迹 —— 这条日志对应老师看到的「改了看不见」。

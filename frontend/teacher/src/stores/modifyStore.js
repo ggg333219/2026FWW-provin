@@ -169,7 +169,10 @@ export const useModifyStore = defineStore('modifyPanel', {
       const confirmed = this.confirmationReady
       this.confirmationReady = false
       try {
-        const resp = await projectModifyApi.modify(this.projectId, instruction, nodes, confirmed)
+        const resp = await projectModifyApi.modify(this.projectId, instruction, nodes, {
+          activeNodeId: this.activeNodeId,
+          confirmed,
+        })
         const data = resp.data || resp
 
         // 追问分支：AI 置信度低，返回澄清问题，不执行修改
@@ -272,11 +275,11 @@ export const useModifyStore = defineStore('modifyPanel', {
       this.inputText = chip.text
     },
 
-    confirmPending() {
+    confirmPending(nodes = [], onApplied) {
       if (!this.pendingConfirmation || this.modifying) return
       this.inputText = this.pendingConfirmation.instruction
       this.confirmationReady = true
-      return this.sendModify()
+      return this.sendModify(nodes, onApplied)
     },
 
     retryLast() {

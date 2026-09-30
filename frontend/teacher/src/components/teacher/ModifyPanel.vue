@@ -77,7 +77,7 @@
       <span v-if="modifyStore.pendingConfirmation.candidates?.length">
         将影响：{{ modifyStore.pendingConfirmation.candidates.map((item) => `第${item.page_number}页${item.role || item.element_type}`).join('、') }}
       </span>
-      <button type="button" class="confirm-btn" @click="modifyStore.confirmPending">确认并执行</button>
+      <button type="button" class="confirm-btn" @click="handleConfirm">确认并执行</button>
     </div>
 
     <!-- 输入区 -->
@@ -249,6 +249,11 @@ async function applyResult({ allNodes, modifiedNodes, intent, instruction, prese
 
 async function handleSend() {
   await modifyStore.sendModify(nodesForApi(), applyResult)
+  scrollToBottom()
+}
+
+async function handleConfirm() {
+  await modifyStore.confirmPending(nodesForApi(), applyResult)
   scrollToBottom()
 }
 

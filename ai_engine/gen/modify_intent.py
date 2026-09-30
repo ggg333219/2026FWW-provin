@@ -233,7 +233,7 @@ class ModifyIntentParser:
             logger.warning("[parse_modify] LLM 调用失败: %s", exc)
             return self._clarify("AI 服务暂不可用，请稍后重试或换一种说法。")
 
-        return self._normalize(result, element_snapshot, candidate_result)
+        return self._normalize(result, element_snapshot, candidate_result, active, instruction)
 
     # ------------------------------------------------------------------
 
@@ -275,7 +275,8 @@ class ModifyIntentParser:
         }
 
     def _normalize(self, result: Any, nodes: list[dict[str, Any]],
-                   candidate_result: dict[str, Any] | None = None) -> dict[str, Any]:
+                   candidate_result: dict[str, Any] | None = None,
+                   active_node_id: str = "", instruction: str = "") -> dict[str, Any]:
         """LLM 返回容错归一：非 dict / 枚举外值 / 越界 node_id 收敛到安全值。"""
         if not isinstance(result, dict):
             return self._clarify("指令解析失败，请换一种说法（例如“第三页减少文字”）。")
@@ -309,6 +310,9 @@ class ModifyIntentParser:
             target_element_ids = list(candidate_result.get("target_element_ids") or [])
         if target_element_ids and not target_ids:
             target_ids = list(dict.fromkeys(element_map[item] for item in target_element_ids if item in element_map))
+        target_ids = _resolve_active_target(
+            instruction, target_ids, action, target_type, active_node_id, valid_ids
+        )
         # 节点类动作但没定位到合法 id → 需要澄清
         if action in _NODE_ACTIONS and target_type in ("node", "page") and not target_ids:
             return self._clarify("没有定位到要修改的节点，请说明是哪一页（例如“第三页”）。")

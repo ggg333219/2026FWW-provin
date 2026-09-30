@@ -228,9 +228,10 @@ func (h *CoursewareHandler) Modify(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Instruction string                     `json:"instruction"`
-		Nodes       []service.TeachingNodeItem `json:"nodes"`
-		Confirmed   bool                       `json:"confirmed"`
+		Instruction  string                     `json:"instruction"`
+		Nodes        []service.TeachingNodeItem `json:"nodes"`
+		Confirmed    bool                       `json:"confirmed"`
+		ActiveNodeID string                     `json:"active_node_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
@@ -240,7 +241,7 @@ func (h *CoursewareHandler) Modify(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "instruction 不能为空"})
 		return
 	}
-	result, err := h.svc.ModifyWithOptions(c.Request.Context(), projectID, req.Instruction, req.Nodes, req.Confirmed)
+	result, err := h.svc.ModifyWithOptions(c.Request.Context(), projectID, req.Instruction, req.Nodes, req.Confirmed, req.ActiveNodeID)
 	if err != nil {
 		h.mapError(c, err)
 		return
