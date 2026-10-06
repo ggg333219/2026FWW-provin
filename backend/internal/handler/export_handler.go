@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"strconv"
@@ -289,5 +291,32 @@ func (h *ExportHandler) Download(c *gin.Context) {
 	if err != nil || !h.authorizeGeneration(c, status.GenerationID) {
 		return
 	}
-	c.Redirect(http.StatusTemporaryRedirect, provider.ExportDownloadURL(jobID, extension))
+	// 直接代理文件流而非 307 重定向：引擎地址（baseURL）是内网地址，
+	// 重定向会让公网浏览器拿到 127.0.0.1 导致下载失败；网关代流对所有部署形态都成立。
+	upstream, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, provider.ExportDownloadURL(jobID, extension), nil)
+	if err != nil {
+		exportContractError(c, http.StatusInternalServerError, "构造下载请求失败: "+err.Error())
+		return
+	}
+	downstream, err := http.DefaultClient.Do(upstream)
+	if err != nil {
+		exportContractError(c, http.StatusBadGateway, "拉取导出文件失败: "+err.Error())
+		return
+	}
+	defer downstream.Body.Close()
+	if downstream.StatusCode >= 300 {
+		exportContractError(c, http.StatusBadGateway, fmt.Sprintf("拉取导出文件返回异常: %d", downstream.StatusCode))
+		return
+	}
+	if ct := downstream.Header.Get("Content-Type"); ct != "" {
+		c.Header("Content-Type", ct)
+	}
+	if cd := downstream.Header.Get("Content-Disposition"); cd != "" {
+		c.Header("Content-Disposition", cd)
+	}
+	if cl := downstream.Header.Get("Content-Length"); cl != "" {
+		c.Header("Content-Length", cl)
+	}
+	c.Status(downstream.StatusCode)
+	_, _ = io.Copy(c.Writer, downstream.Body)
 }
