@@ -9,7 +9,9 @@ export const teacherIntentApi = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId, messages }),
-      timeoutMs: 45000
+      // H1 三层超时统一：前端 90s ≥ Go 网关 90s ≥ 引擎 LLM 60s×2，
+      // 保证引擎的一次重试周期不被前端先切断。
+      timeoutMs: 90000
     })
     return unwrap(payload)
   },

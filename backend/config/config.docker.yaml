@@ -35,7 +35,8 @@ ai:
   base_url: http://host.docker.internal:8000
   api_key: ""
   model: qwen-plus
-  timeout: 120s
+  # H1 三层超时统一：网关 90s ≥ AI 引擎 LLM 60s×2
+  timeout: 90s
 
 log:
   level: info

@@ -81,7 +81,7 @@ def resolve_llm_timeout() -> int:
     解析 LLM 调用超时秒数。
 
     优先读环境变量 LLM_TIMEOUT_SECONDS（运行时可改，便于测试/压测），
-    未设置或非法时回退 settings.LLM_TIMEOUT（同样来自该变量，默认 120）。
+    未设置或非法时回退 settings.LLM_TIMEOUT（同样来自该变量，默认 60）。
 
     供 core.LLMClient 及 legacy 直连 OpenAI() 的模块（qa.py/parser.py/
     generator.py/main.py）统一使用，保证超时保护口径一致。
@@ -217,7 +217,7 @@ class LLMClient:
         self.model = model or settings.MODEL
         self.temperature = temperature if temperature is not None else settings.TEMPERATURE
         # 超时保护：显式传入优先（如 video_processor 的 300s），
-        # 否则取 LLM_TIMEOUT_SECONDS / 默认 120
+        # 否则取 LLM_TIMEOUT_SECONDS / 默认 60
         self.timeout = int(timeout) if timeout else resolve_llm_timeout()
         # 重试收紧：显式传入 max_attempts（如批量降级路径传 1 = 不重试）优先，
         # None 时每次调用按 LLM_RETRY_MAX_ATTEMPTS 环境变量 / 默认 2 解析
