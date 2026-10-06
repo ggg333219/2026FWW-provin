@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
+import logging
 import re
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from ai_engine.core import LLMClient, IntentSummary, DialogueTurn, SessionStatus, ConversationSession, settings
 from ai_engine.intent.intent_engine import IntentEngine
+
+logger = logging.getLogger(__name__)
+
+# 降级日志中原始 LLM 输出的最大长度，避免超长输出刷爆日志。
+_DEGRADED_RAW_OUTPUT_MAX_CHARS = 800
 
 
 # 单进程会话仓库。生产环境可在不改变服务接口的情况下替换为 Redis。
@@ -120,6 +127,9 @@ class IntentUnderstandingService:
             "can_confirm": can_confirm,
             "engine": engine_name,
             "used_fallback": used_fallback,
+            # H0 可观测性：degraded 是 used_fallback 的显式别名，
+            # 供监控/前端统一识别“LLM 失败→规则引擎兜底”的降级链路。
+            "degraded": used_fallback,
         }
 
     def build_followup_questions(self, summary: IntentSummary, core_only: bool = False) -> list[str]:
@@ -172,6 +182,7 @@ class IntentUnderstandingService:
         messages: list[DialogueTurn],
         raw_messages: list[dict[str, str]],
     ) -> tuple[IntentSummary, str, bool]:
+        result: Any = None
         if self.engine is not None:
             try:
                 result = self.engine.extract_intent(raw_messages)
@@ -181,8 +192,30 @@ class IntentUnderstandingService:
                     summary = IntentSummary(**result)
                     if summary.topic:
                         return summary, self.engine.__class__.__name__, False
-            except Exception:
-                pass
+                    self._log_degraded(
+                        reason=f"自定义引擎输出缺少有效主题（topic={summary.topic!r}）",
+                        raw_output=self._dump_raw_output(result),
+                        path="engine",
+                    )
+                elif isinstance(result, dict):
+                    self._log_degraded(
+                        reason=f"自定义引擎返回错误（error={result.get('error')!r}）",
+                        raw_output=self._dump_raw_output(result),
+                        path="engine",
+                    )
+                else:
+                    self._log_degraded(
+                        reason=f"自定义引擎返回了不支持的类型（{type(result).__name__}）",
+                        raw_output=self._dump_raw_output(result),
+                        path="engine",
+                    )
+            except Exception as exc:
+                self._log_degraded(
+                    reason=f"自定义引擎输出校验失败：{type(exc).__name__}: {exc}",
+                    raw_output=self._dump_raw_output(result),
+                    path="engine",
+                    exc=exc,
+                )
             return IntentEngine.extract_intent(raw_messages), "IntentEngine", True
 
         prompt = self._build_extract_prompt(messages)
@@ -203,8 +236,42 @@ class IntentUnderstandingService:
             if not summary.topic:
                 raise ValueError("LLM 未返回有效主题")
             return summary, "LLM", False
-        except Exception:
+        except Exception as exc:
+            self._log_degraded(
+                reason=f"LLM 意图提取失败：{type(exc).__name__}: {exc}",
+                raw_output=self._dump_raw_output(result),
+                path="chat_json",
+                exc=exc,
+            )
             return IntentEngine.extract_intent(raw_messages), "IntentEngine", True
+
+    @staticmethod
+    def _dump_raw_output(result: Any) -> str:
+        """把原始 LLM/引擎输出序列化为可读日志文本，超长截断。"""
+        if result is None:
+            return "<无输出>"
+        if isinstance(result, str):
+            text = result
+        else:
+            try:
+                text = json.dumps(result, ensure_ascii=False, default=str)
+            except Exception:
+                text = repr(result)
+        if len(text) > _DEGRADED_RAW_OUTPUT_MAX_CHARS:
+            text = text[:_DEGRADED_RAW_OUTPUT_MAX_CHARS] + f"…（已截断，全长 {len(text)} 字符）"
+        return text
+
+    @staticmethod
+    def _log_degraded(reason: str, raw_output: str, path: str, exc: Exception | None = None) -> None:
+        """H0 可观测性：LLM 结果验证失败回退规则引擎时，输出结构化降级日志。"""
+        logger.warning(
+            "S1 意图提取降级：LLM 结果未通过校验，回退本地规则引擎 | "
+            "path=%s | reason=%s | raw_output=%s",
+            path,
+            reason,
+            raw_output,
+            exc_info=exc if exc is not None else None,
+        )
 
     @staticmethod
     def _build_extract_prompt(messages: list[DialogueTurn]) -> str:

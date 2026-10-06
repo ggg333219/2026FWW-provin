@@ -148,6 +148,27 @@ class IntentUnderstandingTests(unittest.TestCase):
         with self.assertRaises(IntentSessionNotFound):
             self.service.confirm_intent("missing")
 
+    def test_degraded_flag_marks_llm_fallback(self):
+        # H0 可观测性：引擎输出非法（返回 error）回退规则引擎时，
+        # 响应必须带 degraded=true，与 used_fallback 一致。
+        class BrokenEngine:
+            @staticmethod
+            def extract_intent(_messages):
+                return {"error": "引擎崩溃"}
+
+        service = IntentUnderstandingService(engine=BrokenEngine())
+        result = service.extract_intent("session_degraded", [self._turn("我要做排序算法课件")])
+        self.assertTrue(result["used_fallback"])
+        self.assertTrue(result["degraded"])
+        self.assertEqual(result["engine"], "IntentEngine")
+
+    def test_degraded_flag_false_on_normal_path(self):
+        result = self.service.extract_intent("session_normal", [self._turn(
+            "我要做排序算法课件，面向大一计算机专业学生，45分钟。"
+        )])
+        self.assertFalse(result["degraded"])
+        self.assertFalse(result["used_fallback"])
+
 
 if __name__ == "__main__":
     unittest.main()
