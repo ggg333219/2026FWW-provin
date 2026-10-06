@@ -2,19 +2,38 @@
 
 > 首次部署完成：2026-10-07 · 服务器 114.55.31.135（杭州，2C/1.9G，与其他项目共用）
 > 访问入口：**http://114.55.31.135:8098**（安全组已放行 TCP 8098）
+> **语音输入入口：https://114.55.31.135:8443**（自签证书，浏览器需"高级→继续访问"信任一次；
+> 麦克风 getUserMedia 是浏览器硬性安全策略，仅在 HTTPS 或 localhost 可用，HTTP 下按钮会给出引导提示）
 
 ## 1. 部署形态（原生进程，无 Docker）
 
 | 组件 | 端口 | 说明 |
 |------|------|------|
-| nginx（独立实例） | **8098** | 公网唯一入口：静态前端 + `/api/`→后端 + `/ai/`→引擎 + `/download/`→引擎 |
-| Go 后端（teacher-server-linux） | 18082 | 完整模式（PG+MinIO 均连上）；仅监听 127.0.0.1 之外的本机 |
-| Python AI 引擎（uvicorn） | 18000 | 无 LLM key 时自动降级 mock（响应带 degraded 标记） |
+| nginx（独立实例） | **8098 / 8443(ssl)** | 公网入口：静态前端 + `/api/`→后端 + `/ai/`→引擎 + `/download/`→引擎 |
+| Go 后端（teacher-server-linux） | 18082 | 完整模式（PG+MinIO 均连上） |
+| Python AI 引擎（uvicorn） | 18000 | 无 LLM key 自动降级 mock；**ASR 走本地 faster-whisper tiny**（int8/CPU，常驻约 +230MB 内存） |
 | PostgreSQL（独立实例） | 15433 | 复用系统 `/usr/bin` 二进制，数据目录 `/var/lib/pgsql/a12_data`，库 teaching |
 | MinIO（独立实例） | 19000 | 复用系统 `/usr/local/bin/minio`，数据目录 `/opt/a12teaching/data/minio`，bucket teaching |
 | Redis | 6379/db3 | **复用服务器现有实例**（无密码），键空间隔离 |
 
 ⚠️ 服务器上 80/8090/8095 等端口被其他项目占用，本套服务全部避让，互不影响。
+
+## 1.1 语音输入（ASR）链路
+
+```
+浏览器 MediaRecorder 录音（全浏览器通用，不依赖 Web Speech API）
+  → POST /ai/api/v1/asr/transcribe（multipart，≤20MB）
+  → AI 引擎 ai_engine/asr.py provider 链：
+      ① dashscope（DASHSCOPE_API_KEY / AI_API_KEY 存在时，Paraformer 云端识别）
+      ② local_whisper（ASR_ALLOW_LOCAL_WHISPER=1，faster-whisper tiny int8，模型经 HF_ENDPOINT 镜像）
+      ③ 都没有 → 501 ASR_NOT_CONFIGURED（前端给出明确提示）
+  → {text} 回填输入框
+```
+
+- 测试素材：`deploy/testdata/voice-test-zh.wav`（Windows TTS 生成），
+  `curl -F "file=@voice-test-zh.wav;type=audio/wav" -F "language=zh" .../api/v1/asr/transcribe`
+- 实测：tiny 模型中文短句识别可用，首调 ~18s（加载模型），此后 ~1s
+- 引擎启动命令必须带：`ASR_ALLOW_LOCAL_WHISPER=1 HF_ENDPOINT=https://hf-mirror.com`
 
 ## 2. 目录与关键文件
 
@@ -39,7 +58,7 @@ nginx -s stop -c /opt/a12teaching/deploy/nginx/a12.conf
 
 # 启动引擎
 cd /opt/a12teaching/ai_engine && setsid nohup env PYTHONPATH=/opt/a12teaching \
-  MINIO_ENDPOINT=127.0.0.1:19000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin MINIO_BUCKET=teaching \
+  MINIO_ENDPOINT=127.0.0.1:19000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin ASR_ALLOW_LOCAL_WHISPER=1 HF_ENDPOINT=https://hf-mirror.com MINIO_BUCKET=teaching \
   .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 18000 < /dev/null > /tmp/ai_a12.log 2>&1 &
 
 # 启动后端（A12_PROJECT_ROOT 必配：覆盖交叉编译烧入的构建期路径）
