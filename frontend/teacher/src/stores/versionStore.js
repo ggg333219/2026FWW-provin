@@ -82,6 +82,8 @@ export const useVersionStore = defineStore("version", {
     exportFiles: {},
     /** 导出错误 */
     exportError: "",
+    /** PPTX 导出质量报告 */
+    exportQualityReport: null,
 
     loading: false,
     error: "",
@@ -155,6 +157,7 @@ export const useVersionStore = defineStore("version", {
 
     async loadProjectVersions(projectId) {
       if (!projectId) return;
+      if (this.projectId !== projectId) this.currentVersionDetail = null;
       this.projectId = projectId;
       this.loading = true;
       this.error = "";
@@ -170,8 +173,10 @@ export const useVersionStore = defineStore("version", {
           createdAt: v.created_at || "",
           nodes: v.nodes || [],
           presentation: v.presentation || {},
-        }));
+        })).sort((left, right) => Number(right.version) - Number(left.version));
       } catch (err) {
+        this.versions = [];
+        this.currentVersionDetail = null;
         this.error = err.message || "加载项目版本历史失败";
         throw err;
       } finally { this.loading = false; }
@@ -378,14 +383,16 @@ export const useVersionStore = defineStore("version", {
     // ================================================================
     // 导出
     // ================================================================
-    async startExport(genId, format = "pptx", version = null, coursewareTitle = "", nodes = []) {
+    async startExport(genId, format = "pptx", version = null, coursewareTitle = "", nodes = [], projectId = "") {
       if (!genId) return;
       this.exportStatus = "pending";
       this.exportFormat = format;
       this.exportError = "";
+      this.exportQualityReport = null;
+      this.exportFiles = {};
       try {
         // 统一兼容 {code,message,data} 信封（Mock）与裸响应（FastAPI 网关）
-        const response = await teacherV1Api.version.exportCreate(genId, format, version, coursewareTitle, nodes);
+        const response = await teacherV1Api.version.exportCreate(genId, format, version, coursewareTitle, nodes, projectId);
         const job = response?.data || response || {};
         this.exportJobId = job.job_id || "";
         this.exportStatus = job.status === "done" ? "done" : "pending";
@@ -426,6 +433,7 @@ export const useVersionStore = defineStore("version", {
             Object.entries(job.files || {}).map(([format, url]) => [format, normalizeDownloadUrl(url)]),
           );
           this.exportError = job.error || "";
+          this.exportQualityReport = job.quality_report || null;
           if (this.exportStatus === "done" || this.exportStatus === "failed") {
             return;
           }
@@ -450,6 +458,7 @@ export const useVersionStore = defineStore("version", {
       this.exportDownloadUrl = "";
       this.exportFiles = {};
       this.exportError = "";
+      this.exportQualityReport = null;
     },
 
     // ================================================================

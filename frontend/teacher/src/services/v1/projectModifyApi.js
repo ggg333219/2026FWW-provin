@@ -20,7 +20,7 @@ import { requestJson } from './request'
  *   POST   /coursewares/:id/rollback       回滚（A7，克隆式）
  *   GET    /coursewares/:id/latest-generation-context 权威读端点（契约 v1.0 §3.2）
  */
-const MODIFY_LLM_TIMEOUT_MS = 120000 // 修改编排含 LLM 意图解析 + 局部生成，给 2 分钟
+const MODIFY_LLM_TIMEOUT_MS = 240000 // 意图解析与局部任务轮询共用一次请求
 
 export const projectModifyApi = {
   /** 新建课件项目 */
@@ -78,12 +78,12 @@ export const projectModifyApi = {
    * 不传即退回「按指令里的页号 / 标题定位」。
    * 响应 data: { modified_nodes, all_nodes, intent, previous_version_no, new_version_no, clarification? }
    */
-  modify: (project_id, instruction, nodes, { activeNodeId = '' } = {}) =>
+  modify: (project_id, instruction, nodes, { activeNodeId = '', confirmed = false } = {}) =>
     requestJson(`/api/v1/coursewares/${project_id}/modify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       timeoutMs: MODIFY_LLM_TIMEOUT_MS,
-      body: JSON.stringify({ instruction, nodes, active_node_id: activeNodeId || '' }),
+      body: JSON.stringify({ instruction, nodes, confirmed, active_node_id: activeNodeId || '' }),
     }),
 
   /** 修改记录列表 */
@@ -95,6 +95,12 @@ export const projectModifyApi = {
   /** 版本列表 */
   versions: (project_id) =>
     requestJson(`/api/v1/coursewares/${project_id}/versions`, {
+      method: 'GET',
+    }),
+
+  /** 当前草稿的稳定 PPT 元素快照，供自然语言候选定位使用。 */
+  elements: (project_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/elements`, {
       method: 'GET',
     }),
 

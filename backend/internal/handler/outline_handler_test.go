@@ -16,7 +16,9 @@ import (
 // ---- 与 service 测试同构的 fake（满足 service 的窄 outlineClient 接口）----
 
 type fakeAIOutline struct {
-	nodes []service.OutlineNode
+	nodes          []service.OutlineNode
+	usedFallback   bool
+	fallbackReason string
 }
 
 func (f *fakeAIOutline) GenerateOutline(_ context.Context, _ service.OutlineGenerateRequest) (*service.OutlineGenerateResponse, error) {
@@ -26,7 +28,9 @@ func (f *fakeAIOutline) GenerateOutline(_ context.Context, _ service.OutlineGene
 			{NodeID: "node_002", Order: 2, Title: "主算法", Summary: "核心", NodeType: "section", EstimatedDurationMin: 20},
 		}
 	}
-	return &service.OutlineGenerateResponse{Nodes: f.nodes}, nil
+	return &service.OutlineGenerateResponse{
+		Nodes: f.nodes, UsedFallback: f.usedFallback, FallbackReason: f.fallbackReason,
+	}, nil
 }
 
 func (f *fakeAIOutline) ReviseOutline(_ context.Context, _ service.OutlineReviseAIRequest) (*service.OutlineReviseAIResponse, error) {
@@ -106,10 +110,10 @@ func TestOutlineCreate_Code200(t *testing.T) {
 	var resp struct {
 		Code int `json:"code"`
 		Data struct {
-			OutlineID    string `json:"outline_id"`
-			OutlineVersion int  `json:"outline_version"`
-			Status       string `json:"status"`
-			Nodes        []any  `json:"nodes"`
+			OutlineID      string `json:"outline_id"`
+			OutlineVersion int    `json:"outline_version"`
+			Status         string `json:"status"`
+			Nodes          []any  `json:"nodes"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -123,6 +127,31 @@ func TestOutlineCreate_Code200(t *testing.T) {
 	}
 	if len(resp.Data.Nodes) == 0 {
 		t.Fatal("大纲应包含节点")
+	}
+}
+
+func TestOutlineCreate_PropagatesFallbackState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := service.NewOutlineService(&fakeAIOutline{
+		usedFallback: true, fallbackReason: "timeout",
+	})
+	r := gin.New()
+	r.POST("/api/v1/outlines", NewOutlineHandler(svc).Create)
+	w := doJSON(t, r, "POST", "/api/v1/outlines", `{"session_id":"session_1","intent":{"topic":"测试"}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("创建大纲 HTTP %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			UsedFallback   bool   `json:"used_fallback"`
+			FallbackReason string `json:"fallback_reason"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Data.UsedFallback || resp.Data.FallbackReason != "timeout" {
+		t.Fatalf("回退状态未传递: %+v", resp.Data)
 	}
 }
 

@@ -93,7 +93,7 @@
                 </div>
 
                 <!-- 锁定 -->
-                <div class="action-row">
+                <div v-if="!projectStore.projectId" class="action-row">
                   <button
                     class="btn btn-sm btn-warn"
                     :disabled="versionStore.loading || versionStore.isCurrentLocked"
@@ -104,9 +104,9 @@
                 </div>
 
                 <!-- 修改指令 -->
-                <div class="action-divider"></div>
-                <h4>修改指令</h4>
-                <div class="action-row">
+                <div v-if="!projectStore.projectId" class="action-divider"></div>
+                <h4 v-if="!projectStore.projectId">修改指令</h4>
+                <div v-if="!projectStore.projectId" class="action-row">
                   <select v-model="changeType" class="action-select" :disabled="versionStore.isCurrentLocked">
                     <option value="update_node">更新节点</option>
                     <option value="add_node">新增节点</option>
@@ -119,7 +119,7 @@
                 </div>
 
                 <!-- 待处理列表 -->
-                <div v-if="versionStore.pendingChanges.length > 0" class="change-mini-list">
+                <div v-if="!projectStore.projectId && versionStore.pendingChanges.length > 0" class="change-mini-list">
                   <div v-for="c in versionStore.pendingChanges" :key="c.id" class="change-mini-row">
                     <span class="change-type-badge">{{ c.type }}</span>
                     <span class="change-target">{{ c.target }}</span>
@@ -153,12 +153,13 @@
           <!-- 导出中心 -->
           <section class="s4-export">
             <S4VersionExportCenter
-              :gen-id="versionStore.genId"
+              :gen-id="exportGenId"
               :export-status="versionStore.exportStatus"
               :export-format="versionStore.exportFormat"
               :export-download-url="versionStore.exportDownloadUrl"
               :export-files="versionStore.exportFiles"
               :export-error="versionStore.exportError"
+              :export-quality-report="versionStore.exportQualityReport"
               :loading="versionStore.loading"
               :intent="intentStore.intentSummary || {}"
               :nodes="versionStore.currentVersionDetail?.nodes || []"
@@ -228,30 +229,31 @@ const route = useRoute()
 const router = useRouter()
 
 const genIdInput = ref(
-  generationStore.lastGenId ||
-  generationStore.restoreLastGenId() ||
-  workspaceStore.currentCourseId ||
-  ''
+  route.query.project_id
+    ? ''
+    : String(route.query.generation_id || route.query.genId || generationStore.lastGenId || generationStore.restoreLastGenId() || workspaceStore.currentCourseId || '')
 )
 
 // 路由参数变化时自动加载版本（S3 一键生成后带 genId 跳转过来）
 watch(() => route.query.generation_id || route.query.genId, (id) => {
   if (id && typeof id === 'string') {
     genIdInput.value = id
-    loadData()
+    if (!route.query.project_id) loadData()
   }
 }, { immediate: true })
 watch(() => route.query.project_id, async (id) => {
   if (!id || typeof id !== 'string') return
   projectStore.setActive(id)
-  await projectStore.resume(id).catch(() => {})
+  const context = await projectStore.resume(id).catch(() => null)
+  genIdInput.value = String(context?.project?.gen_id || '')
   projectStore.updateStep('s4_version').catch(() => {})
   await loadData()
 }, { immediate: true })
 onMounted(() => {
-  if (!(route.query.generation_id || route.query.genId) && genIdInput.value) loadData()
+  if (!route.query.project_id && !(route.query.generation_id || route.query.genId) && genIdInput.value) loadData()
 })
 const courseTitle = computed(() => projectStore.project?.title || intentStore.intentSummary?.topic || '未命名课件')
+const exportGenId = computed(() => versionStore.genId || (projectStore.projectId && versionStore.currentVersionDetail ? projectStore.projectId : ''))
 const currentVersionLabel = computed(() => `v${versionStore.currentVersionDetail?.version || versionStore.versions?.[0]?.version || 1}`)
 const rollbackTarget = ref(null)
 const changeType = ref('update_node')
@@ -275,9 +277,9 @@ const evidenceTrace = computed(() => {
 
 async function loadData() {
   const id = genIdInput.value.trim()
-  const projectId = projectStore.projectId || String(route.query.project_id || '')
+  const projectId = String(route.query.project_id || projectStore.projectId || '')
   if (!id && !projectId) return
-  if (id) versionStore.genId = id
+  versionStore.genId = id
   if (projectId) await versionStore.loadProjectVersions(projectId)
   else await versionStore.loadVersions(id)
   if (versionStore.versions.length > 0) {
@@ -357,13 +359,14 @@ async function handleSubmitModify() {
 }
 
 function handleStartExport(format) {
-  if (!versionStore.genId) return
+  if (!exportGenId.value) return
   versionStore.startExport(
-    versionStore.genId,
+    exportGenId.value,
     format,
     versionStore.currentVersionDetail?.version || null,
     courseTitle.value,
     versionStore.currentVersionDetail?.nodes || [],
+    projectStore.projectId,
   )
 }
 

@@ -24,7 +24,7 @@ from ..schema import (
     normalize_stage2_nodes,
     to_outline_contract_nodes,
 )
-from ..core.llm import LLMClient
+from ..core.llm import LLMClient, resolve_llm_timeout
 
 
 @dataclass
@@ -173,10 +173,18 @@ class OutlineBuilder:
         try:
             nodes = self._run_node_tree_generation(markdown, key_points, total_duration)
             if not nodes:
-                nodes = fallback["nodes"]
+                return {
+                    "nodes": self._finalize(fallback["nodes"], total_duration),
+                    "used_fallback": True,
+                    "fallback_reason": "empty_model_response",
+                }
             return {"nodes": self._finalize(nodes, total_duration), "used_fallback": False}
-        except Exception:
-            return {"nodes": self._finalize(fallback["nodes"], total_duration), "used_fallback": True}
+        except Exception as exc:
+            return {
+                "nodes": self._finalize(fallback["nodes"], total_duration),
+                "used_fallback": True,
+                "fallback_reason": self._fallback_reason(exc),
+            }
 
     def build_from_markdown(self, markdown: str, course_name: str | None = None) -> dict[str, Any]:
         """从已有 Markdown 构建节点树（兼容旧接口）"""
@@ -186,10 +194,28 @@ class OutlineBuilder:
         try:
             nodes = self._run_node_tree_generation(markdown, [], total_duration)
             if not nodes:
-                nodes = fallback["nodes"]
+                return {
+                    "nodes": self._finalize(fallback["nodes"], total_duration),
+                    "used_fallback": True,
+                    "fallback_reason": "empty_model_response",
+                }
             return {"nodes": self._finalize(nodes, total_duration), "used_fallback": False}
-        except Exception:
-            return {"nodes": self._finalize(fallback["nodes"], total_duration), "used_fallback": True}
+        except Exception as exc:
+            return {
+                "nodes": self._finalize(fallback["nodes"], total_duration),
+                "used_fallback": True,
+                "fallback_reason": self._fallback_reason(exc),
+            }
+
+    @staticmethod
+    def _fallback_reason(exc: Exception) -> str:
+        name = type(exc).__name__.lower()
+        message = str(exc).lower()
+        if "timeout" in name or "timed out" in message or "timeout" in message:
+            return "timeout"
+        if "json" in name or "parse" in message or "schema" in message:
+            return "invalid_model_response"
+        return "model_error"
 
     def revise(self, nodes: list[dict[str, Any]], message: str) -> dict[str, Any]:
         """按教师指令生成修订候选；既有节点 ID 由服务边界强制保持稳定。"""
@@ -294,7 +320,15 @@ class OutlineBuilder:
         """获取 LLM 客户端（懒创建，支持注入）"""
         if self._llm is not None:
             return self._llm
-        return LLMClient(temperature=self.config.temperature, model=self.config.model or None)
+        # Keep the provider call below the Go and browser request deadlines.
+        return LLMClient(
+            temperature=self.config.temperature,
+            model=self.config.model or None,
+            timeout=min(resolve_llm_timeout(), 90),
+            max_attempts=1,
+            disable_sdk_retries=True,
+            stop_schema_fallback_on_error=True,
+        )
 
     # ── 工具方法 ──
 

@@ -206,6 +206,7 @@ export function patchPreview(iframeEl, newHtml, changedNodeIds = []) {
   // 退回整份重设，慢一点但一定是对的。
   const settled = collectPageUnits(liveRoot)
   const unconverged = nextUnits.some((nextUnit, index) => {
+    if (wanted.size && !wanted.has(nextUnit.id)) return false
     const unit = settled[index]
     return !unit || unit.id !== nextUnit.id || unitSignature(unit) !== unitSignature(nextUnit)
   })

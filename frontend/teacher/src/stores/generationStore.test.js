@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useGenerationStore } from './generationStore'
+import { handleMockRequest } from '../services/v1/mockBackend'
 
 function createStorage() {
   const values = new Map()
@@ -21,7 +22,24 @@ function createStorage() {
 beforeEach(() => {
   const localStorage = createStorage()
   globalThis.window = { localStorage }
-  globalThis.fetch = () => Promise.reject(new Error('backend unreachable'))
+  // S3 真实链路禁止在 request 层静默回退 Mock；测试显式把 Mock backend
+  // 暴露成 fetch 响应，避免用“后端不可达”模拟已经被禁止的旧回退行为。
+  globalThis.fetch = async (url, options = {}) => {
+    const parsed = new URL(url, 'http://localhost')
+    const payload = handleMockRequest(`${parsed.pathname}${parsed.search}`, options)
+    if (!payload) {
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({ message: `mock route not found: ${parsed.pathname}` })
+      }
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => payload
+    }
+  }
   setActivePinia(createPinia())
 })
 

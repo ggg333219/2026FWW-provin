@@ -49,6 +49,7 @@ from ai_engine.core.schema import (
     GenerationTask, TeachingNode, IntentSummary,
     ExportRequest, ExportFormat,
     ExportStatusResponse, ExportStatus, ExportJob,
+    ExportQualityReport,
     RollbackRequest,
     normalize_generation_nodes,
 )
@@ -772,6 +773,13 @@ _content_tasks: dict[str, dict[str, Any]] = {}
 _content_tasks_lock = threading.Lock()
 
 
+class ModifyIntentRequest(BaseModel):
+    project_id: str = ""
+    instruction: str = ""
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    modify_session_id: str = ""
+
+
 def _persist_content_task_sync(content_id: str, data: dict) -> None:
     """在同步 daemon 线程中持久化内容生成任务快照。"""
     try:
@@ -787,6 +795,7 @@ def _persist_content_task_sync(content_id: str, data: dict) -> None:
 
 
 @app.post("/gen/content", response_model=GenContentStatusResponse)
+@app.post("/api/v1/gen/content", response_model=GenContentStatusResponse)
 async def generate_content(req: GenContentRequest):
     """[S3 P1] 大纲确认后的内容生成：逐节点生成讲稿内容。
 
@@ -797,6 +806,8 @@ async def generate_content(req: GenContentRequest):
     """
     if not req.nodes:
         raise HTTPException(status_code=400, detail="nodes 不能为空")
+    if req.mode == "partial" and not req.target_node_ids:
+        raise HTTPException(status_code=400, detail="partial 模式需要 target_node_ids")
 
     content_id = f"content_{uuid.uuid4().hex[:12]}"
     now = datetime.utcnow().isoformat() + "Z"
@@ -1007,6 +1018,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
 
         generator = NodeGenerator()
         nodes = req.nodes
+        target_ids = set(req.target_node_ids)
         total = len(nodes)
         completed = []
         errors = []
@@ -1124,6 +1136,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
 
 
 @app.get("/gen/content/status/{content_id}", response_model=GenContentStatusResponse)
+@app.get("/api/v1/gen/content/status/{content_id}", response_model=GenContentStatusResponse)
 async def content_status(content_id: str):
     """[S3 P1] 查询内容生成任务状态。
 
@@ -2104,11 +2117,32 @@ async def get_preview(gen_id: str, version: Optional[int] = None):
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig, LessonPlanDOCExporter
 from ai_engine.gen.export_html5 import export_interactive_html
+from ai_engine.gen.export_quality import validate_pptx
 from ai_engine.gen.lesson_plan import LessonPlanGenerator
 
 # 进程内导出任务存储
 _export_tasks: dict[str, ExportJob] = {}
 _export_lock = asyncio.Lock()
+
+
+async def _persist_export_job(job: ExportJob) -> None:
+    await _task_store.save_export(job.job_id, job.model_dump(mode="json"))
+
+
+async def _load_export_job(job_id: str) -> ExportJob | None:
+    saved = await _task_store.load_export(job_id)
+    if saved:
+        try:
+            job = ExportJob.model_validate(saved)
+        except Exception:
+            job = None
+        if job:
+            async with _export_lock:
+                _export_tasks[job_id] = job
+            return job
+
+    async with _export_lock:
+        return _export_tasks.get(job_id)
 
 
 def _export_contract_filename(courseware_title: str, version: int, fmt: ExportFormat) -> str:
@@ -2164,6 +2198,7 @@ async def export_create(gen_id: str, req: ExportRequest):
 
     async with _export_lock:
         _export_tasks[job_id] = job
+    await _persist_export_job(job)
 
     # 教案导出（lesson_plan）需要意图摘要补充课时/授课对象等，从内存生成任务查找（找不到则 fallback 全靠节点）
     intent_dict = None
@@ -2208,6 +2243,7 @@ async def _run_export(
 
     try:
         job.status = ExportStatus.EXPORTING
+        await _persist_export_job(job)
 
         course_name = courseware_title
         export_dir = Path("data/exports")
@@ -2238,6 +2274,28 @@ async def _run_export(
             job.metadata = job.metadata or {}
             job.metadata["ppt_path"] = str(ppt_path)
             job.file_size = ppt_path.stat().st_size
+            try:
+                quality_result = await asyncio.to_thread(validate_pptx, buf.getvalue())
+            except Exception:
+                quality_result = {
+                    "status": "failed",
+                    "slide_count": 0,
+                    "findings": [{
+                        "code": "validator_unavailable",
+                        "severity": "error",
+                        "message": "PPTX quality validation could not be completed.",
+                    }],
+                }
+            job.quality_report = ExportQualityReport.model_validate(quality_result)
+            if job.quality_report.status == "failed":
+                job.metadata.pop("ppt_path", None)
+                job.error = "PPTX quality validation failed; the artifact is unavailable."
+                job.status = ExportStatus.FAILED
+                if fmt != ExportFormat.BOTH:
+                    async with _export_lock:
+                        _export_tasks[job_id] = job
+                    await _persist_export_job(job)
+                    return
 
         if fmt in (ExportFormat.BOTH, ExportFormat.DOCX):
             exporter = DOCExporter()
@@ -2258,7 +2316,8 @@ async def _run_export(
             job.metadata["html_path"] = html5["path"]
             job.file_size = html5["file_size"]
 
-        job.status = ExportStatus.DONE
+        if not (job.quality_report and job.quality_report.status == "failed"):
+            job.status = ExportStatus.DONE
 
         # 真实上传 MinIO（导出成功后尽力上传；失败降级为本地路径，任务仍为 done）。
         # 上传段独立捕获异常：任何上传问题都不能把已 DONE 的导出翻转为 FAILED。
@@ -2304,12 +2363,14 @@ async def _run_export(
 
         async with _export_lock:
             _export_tasks[job_id] = job
+        await _persist_export_job(job)
 
     except Exception as e:
         job.status = ExportStatus.FAILED
         job.error = str(e)
         async with _export_lock:
             _export_tasks[job_id] = job
+        await _persist_export_job(job)
 
 
 @app.get("/api/v1/exp/status/{job_id}", response_model=ExportStatusResponse)
@@ -2320,27 +2381,23 @@ async def export_status(job_id: str):
 
     对应 Go 端：ExportHandler.Status → AIEngine.ExportStatus
     """
-    async with _export_lock:
-        job = _export_tasks.get(job_id)
+    job = await _load_export_job(job_id)
 
     if not job:
         raise HTTPException(status_code=404, detail="导出任务不存在")
 
-    download_url = None
-    files: dict[str, str] = {}
-    if job.status == ExportStatus.DONE:
-        meta = job.metadata or {}
-        if "ppt_path" in meta:
-            files["pptx"] = f"/download/{job_id}.pptx"
-        if "doc_path" in meta:
-            files["docx"] = f"/download/{job_id}.docx"
-        if "html_path" in meta:
-            files["html"] = f"/download/{job_id}.html"
-        download_url = next(iter(files.values()), None)
-
     meta = job.metadata or {}
+    files: dict[str, str] = {}
+    for ext, key in (("pptx", "ppt_path"), ("docx", "doc_path"), ("html", "html_path")):
+        if not meta.get(key) or not Path(meta[key]).is_file():
+            continue
+        if ext == "pptx" and job.quality_report and job.quality_report.status == "failed":
+            continue
+        files[ext] = f"/download/{job_id}.{ext}"
+    download_url = next(iter(files.values()), None) if job.status == ExportStatus.DONE else None
     return ExportStatusResponse(
         job_id=job.job_id,
+        generation_id=job.generation_id,
         filename=meta.get("filename") or _export_contract_filename(
             meta.get("courseware_title") or "课件", int(meta.get("version") or job.version or 1), job.format,
         ),
@@ -2354,19 +2411,25 @@ async def export_status(job_id: str):
         version=int(meta.get("version") or job.version or 1),
         version_no=int(meta.get("version") or job.version or 1),
         files=files,
+        quality_report=job.quality_report,
     )
 
 
 @app.get("/download/{job_id}.{extension}")
 async def export_download(job_id: str, extension: str):
     """下载已完成的 PPTX/DOCX/HTML5 导出文件。"""
-    async with _export_lock:
-        job = _export_tasks.get(job_id)
+    job = await _load_export_job(job_id)
 
-    if not job or job.status != ExportStatus.DONE:
+    if not job:
         raise HTTPException(status_code=404, detail="导出文件不存在或任务尚未完成")
 
     key = {"pptx": "ppt_path", "docx": "doc_path", "html": "html_path"}.get(extension.lower())
+    if extension.lower() == "pptx" and job.quality_report and job.quality_report.status == "failed":
+        raise HTTPException(status_code=404, detail="PPTX 未通过质量检查")
+    if job.status != ExportStatus.DONE and not (
+        job.format == ExportFormat.BOTH and key in {"doc_path", "html_path"}
+    ):
+        raise HTTPException(status_code=404, detail="导出文件不存在或任务尚未完成")
     path = Path(job.metadata.get(key, "")) if key else None
     if not path or not path.is_file():
         raise HTTPException(status_code=404, detail="请求的导出格式不存在")

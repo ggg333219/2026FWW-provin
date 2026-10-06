@@ -33,7 +33,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -562,6 +562,19 @@ class GenerationVersion(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExportQualityFinding(BaseModel):
+    code: str
+    severity: Literal["warning", "error"]
+    message: str
+    slide_number: Optional[int] = None
+
+
+class ExportQualityReport(BaseModel):
+    status: Literal["passed", "passed_with_warnings", "failed"]
+    slide_count: int
+    findings: list[ExportQualityFinding] = Field(default_factory=list)
+
+
 class ExportJob(BaseModel):
     """S4 导出任务。"""
     job_id: str = ""
@@ -573,6 +586,7 @@ class ExportJob(BaseModel):
     download_url: Optional[str] = None
     file_size: Optional[int] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    quality_report: Optional[ExportQualityReport] = None
     error: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
@@ -750,9 +764,12 @@ class ExportRequest(BaseModel):
 
 class ExportStatusResponse(BaseModel):
     job_id: str = ""
+    generation_id: Optional[str] = None
     filename: str = ""
     status: ExportStatus = ExportStatus.PENDING
     download_url: Optional[str] = None
+    files: dict[str, str] = Field(default_factory=dict)
+    quality_report: Optional[ExportQualityReport] = None
     error: Optional[str] = None
     # 导出产物上传状态（字段只增不删）：uploaded / failed / skipped，None 表示尚未尝试
     upload_status: Optional[str] = None
@@ -761,4 +778,3 @@ class ExportStatusResponse(BaseModel):
     courseware_title: Optional[str] = None
     version: Optional[int] = None
     version_no: Optional[int] = None
-    files: dict[str, str] = Field(default_factory=dict)

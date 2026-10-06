@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Generator
 import re
 
 from ai_engine.core.schema import IntentSummary
+from ai_engine.core import settings
 from ai_engine.intent.rules import (
     detect_interactive,
     extract_duration,
@@ -146,7 +147,7 @@ class LLMIntentEngine:
     def __init__(self, client=None):
         from ai_engine.core import LLMClient
 
-        self.client = client or LLMClient(model="qwen-turbo", temperature=0.1)
+        self.client = client or LLMClient(model=settings.MODEL, temperature=0.1)
 
     def extract_intent(self, messages: List[Dict[str, Any]]) -> dict:
         # build a simple user prompt containing recent teacher messages

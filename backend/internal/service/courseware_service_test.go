@@ -9,23 +9,19 @@ import (
 	"time"
 )
 
-// ---- fake：实现 modifyClient 窄接口（ParseModify + GenerateContent + ContentStatus）----
+// ---- fake：只实现 modifyClient 窄接口 ----
 
 type fakeModifyAI struct {
-	intent     *ModifyIntent
-	intentErr  error
-	genResp    *GenContentStatusResponse
-	genErr     error
-	lastGenReq *GenContentRequest
-
-	// 轮询侧。statusQueue 按序出队、最后一个反复返回（省得为每个用例把
-	// "generating" 重复写 N 遍）；队列为空时退到 statusResp，再为空则一直
-	// "generating"（专门用来测超时）。statusErrFor > 0 时前 N 次查询报错。
-	statusQueue  []*GenContentStatusResponse
+	intent       *ModifyIntent
+	intentErr    error
+	genResp      *GenContentStatusResponse
+	genErr       error
+	lastGenReq   *GenContentRequest
 	statusResp   *GenContentStatusResponse
 	statusErr    error
-	statusErrFor int
 	statusCalls  int
+	statusQueue  []*GenContentStatusResponse
+	statusErrFor int
 }
 
 func (f *fakeModifyAI) ParseModify(_ context.Context, _ ParseModifyRequest) (*ModifyIntent, error) {
@@ -49,16 +45,71 @@ func (f *fakeModifyAI) ContentStatus(_ context.Context, _ string) (*GenContentSt
 		return nil, f.statusErr
 	}
 	if len(f.statusQueue) > 0 {
-		resp := f.statusQueue[0]
-		if len(f.statusQueue) > 1 {
-			f.statusQueue = f.statusQueue[1:]
-		}
-		return resp, nil
+		response := f.statusQueue[0]
+		f.statusQueue = f.statusQueue[1:]
+		return response, nil
 	}
-	if f.statusResp != nil {
+	if f.statusErrFor > 0 {
 		return f.statusResp, nil
 	}
-	return &GenContentStatusResponse{Status: "generating"}, nil
+	if f.statusResp == nil && f.statusErr == nil {
+		return &GenContentStatusResponse{Status: "generating"}, nil
+	}
+	return f.statusResp, f.statusErr
+}
+
+func TestModifyWaitsForGeneratedNodes(t *testing.T) {
+	ai := &fakeModifyAI{
+		intent:     &ModifyIntent{TargetType: "node", TargetIDs: []string{"node_2"}, Action: "expand", Confidence: 0.9},
+		genResp:    &GenContentStatusResponse{ContentID: "content_1", Status: "generating"},
+		statusResp: &GenContentStatusResponse{ContentID: "content_1", Status: "done", Nodes: []TeachingNodeItem{{NodeID: "node_2", Title: "冒泡排序", Summary: "新增生活案例", Script: "新的讲稿"}}},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+	result, err := svc.Modify(context.Background(), p.ProjectID, "第二页增加生活案例", sampleTeachingNodes())
+	if err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if ai.statusCalls != 1 || result.AllNodes[1].Summary != "新增生活案例" {
+		t.Fatalf("应等待完成并应用结果: calls=%d node=%+v", ai.statusCalls, result.AllNodes[1])
+	}
+}
+
+func TestModifyDoesNotSaveEmptyOrFailedGeneration(t *testing.T) {
+	for _, status := range []string{"done", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			ai := &fakeModifyAI{
+				intent:     &ModifyIntent{TargetType: "node", TargetIDs: []string{"node_2"}, Action: "expand", Confidence: 0.9},
+				genResp:    &GenContentStatusResponse{ContentID: "content_1", Status: "generating"},
+				statusResp: &GenContentStatusResponse{ContentID: "content_1", Status: status, Error: "upstream failed"},
+			}
+			svc := newCoursewareTestSvc(ai)
+			p := mustCreateProject(t, svc)
+			if _, err := svc.Modify(context.Background(), p.ProjectID, "第二页增加案例", sampleTeachingNodes()); err == nil {
+				t.Fatal("空结果或失败应返回错误")
+			}
+			versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
+			if len(versions) != 0 {
+				t.Fatalf("失败不应保存版本: %d", len(versions))
+			}
+		})
+	}
+}
+
+func TestModifyExpandRejectsScriptOnlyChange(t *testing.T) {
+	ai := &fakeModifyAI{
+		intent:  &ModifyIntent{TargetType: "node", TargetIDs: []string{"node_2"}, Action: "expand", Confidence: 0.9},
+		genResp: &GenContentStatusResponse{Status: "done", Nodes: []TeachingNodeItem{{NodeID: "node_2", Title: "冒泡排序", Summary: "原理", Script: "只改了讲稿"}}},
+	}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+	if _, err := svc.Modify(context.Background(), p.ProjectID, "第二页增加案例", sampleTeachingNodes()); err == nil {
+		t.Fatal("仅修改讲稿不应被标记为 PPT 扩写成功")
+	}
+	versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
+	if len(versions) != 0 {
+		t.Fatalf("可见内容未变不应保存版本: %d", len(versions))
+	}
 }
 
 func sampleTeachingNodes() []TeachingNodeItem {
@@ -169,9 +220,9 @@ func TestModifySnapshotPerCall(t *testing.T) {
 	if len(draft.Generation.Nodes) != len(r1.AllNodes) {
 		t.Fatalf("修改后的草稿应保存完整生成节点, 实际 %d", len(draft.Generation.Nodes))
 	}
-	// 首个快照保存的是"修改前"状态
+	// 正式版本保存修改后状态，BeforeSnapshotJSON 保存修改前状态。
 	var snapNodes []TeachingNodeItem
-	_ = json.Unmarshal([]byte(versions[0].NodesJSON), &snapNodes)
+	_ = json.Unmarshal([]byte(versions[0].BeforeSnapshotJSON), &snapNodes)
 	if len(snapNodes) != 3 || snapNodes[1].Script != "原始讲稿2" {
 		t.Fatalf("首个快照应为修改前状态, 实际 %+v", snapNodes)
 	}
@@ -189,12 +240,7 @@ func TestModifyPartialCarriesCourseNameAndBoundEvidence(t *testing.T) {
 			TargetType: "node", TargetIDs: []string{"node_2"},
 			Action: "expand", Confidence: 0.9,
 		},
-		// 与真实引擎一致：POST 只回 content_id 与 "generating"，节点要轮询才有
-		genResp: &GenContentStatusResponse{ContentID: "content_test", Status: "generating"},
-		statusResp: &GenContentStatusResponse{
-			ContentID: "content_test", Status: "done",
-			Nodes: []TeachingNodeItem{{NodeID: "node_2", Title: "冒泡排序", Script: "重生成的讲稿"}},
-		},
+		genResp: &GenContentStatusResponse{Status: "done", Nodes: []TeachingNodeItem{{NodeID: "node_2", Title: "冒泡排序", Summary: "增加证据", Script: "证据讲稿"}}},
 	}
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc) // 项目标题为 "排序算法"
@@ -229,11 +275,7 @@ func TestModifyPartialWithoutBindingsSendsNoEvidence(t *testing.T) {
 			TargetType: "node", TargetIDs: []string{"node_2"},
 			Action: "simplify", Confidence: 0.9,
 		},
-		genResp: &GenContentStatusResponse{ContentID: "content_test", Status: "generating"},
-		statusResp: &GenContentStatusResponse{
-			ContentID: "content_test", Status: "done",
-			Nodes: []TeachingNodeItem{{NodeID: "node_2", Script: "重生成的讲稿"}},
-		},
+		genResp: &GenContentStatusResponse{Status: "done", Nodes: []TeachingNodeItem{{NodeID: "node_2", Title: "冒泡排序", Summary: "精简结果", Script: "精简讲稿"}}},
 	}
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc)
@@ -269,6 +311,41 @@ func TestModifyClarification(t *testing.T) {
 	versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
 	if len(versions) != 0 {
 		t.Fatalf("追问时不应产生快照, 实际 %d", len(versions))
+	}
+}
+
+func TestModifyRequiresConfirmationForHighRiskElementAction(t *testing.T) {
+	ai := &fakeModifyAI{intent: &ModifyIntent{
+		TargetType: "node", TargetIDs: []string{"node_2"},
+		TargetElementIDs: []string{"el_node_2_chart"}, Action: "restyle",
+		RiskLevel: "high", ConfirmationRequired: true, Confidence: 0.95,
+	}}
+	svc := newCoursewareTestSvc(ai)
+	p := mustCreateProject(t, svc)
+
+	result, err := svc.ModifyWithOptions(context.Background(), p.ProjectID, "把第二页图表改成柱状图", sampleTeachingNodes(), false)
+	if err != nil {
+		t.Fatalf("ModifyWithOptions: %v", err)
+	}
+	if !result.RequiresConfirmation || result.RiskLevel != "high" {
+		t.Fatalf("高风险元素修改应先确认: %+v", result)
+	}
+	versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
+	if len(versions) != 0 {
+		t.Fatalf("确认前不应产生版本, 实际 %d", len(versions))
+	}
+}
+
+func TestEnsureElementMetadataKeepsStableIDs(t *testing.T) {
+	nodes := ensureElementMetadata(sampleTeachingNodes())
+	first := nodes[1].Metadata["elements"].([]map[string]any)
+	if first[0]["element_id"] != "el_node_2_title" {
+		t.Fatalf("标题元素 ID 不稳定: %#v", first[0])
+	}
+	nodes = ensureElementMetadata(nodes)
+	second := nodes[1].Metadata["elements"].([]map[string]any)
+	if second[0]["element_id"] != first[0]["element_id"] {
+		t.Fatalf("重复归一化改变元素 ID")
 	}
 }
 
@@ -367,7 +444,7 @@ func TestRollbackClonesVersion(t *testing.T) {
 		}
 	}
 
-	// 回滚到 v1 → 生成 v4，内容 = v1 的修改前状态（原始 nodes）
+	// 回滚到 v1 → 生成 v4，内容 = v1 的正式版本状态
 	rb, err := svc.Rollback(context.Background(), p.ProjectID, 1)
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
@@ -375,7 +452,7 @@ func TestRollbackClonesVersion(t *testing.T) {
 	if rb.NewVersionNo != 4 {
 		t.Fatalf("回滚应生成 v4, 实际 %d", rb.NewVersionNo)
 	}
-	if len(rb.Nodes) != 3 || rb.Nodes[1].Script != "原始讲稿2" {
+	if len(rb.Nodes) != 3 || rb.Nodes[1].Script != "v2 内容" {
 		t.Fatalf("回滚内容应为 v1 状态, 实际 %+v", rb.Nodes)
 	}
 	// v1/v2/v3 仍可查
@@ -640,7 +717,7 @@ func TestModifyToleratesTransientStatusErrors(t *testing.T) {
 		statusErrFor: 2,
 		statusResp: &GenContentStatusResponse{
 			ContentID: "content_flaky", Status: "done",
-			Nodes: []TeachingNodeItem{{NodeID: "node_2", Script: "抖完之后的讲稿"}},
+			Nodes: []TeachingNodeItem{{NodeID: "node_2", Summary: "增加生活案例", Script: "抖完之后的讲稿"}},
 		},
 	}
 	svc := newCoursewareTestSvc(ai)

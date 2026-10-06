@@ -82,6 +82,8 @@ func main() {
 	if err := db.AutoMigrate(
 		&model.User{},
 		&model.Course{},
+		&model.CoursewareProject{},
+		&service.CoursewareVersion{},
 		&model.CoursePage{},
 		&model.TeachingNode{},
 		&model.TeachingNodeRelation{},

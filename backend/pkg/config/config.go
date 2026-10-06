@@ -185,6 +185,7 @@ func bindEnv(v *viper.Viper) {
 		"ai.base_url":  {"AI_ENGINE_BASE_URL", "AI_BASE_URL"},
 		"ai.api_key":   {"AI_API_KEY"},
 		"ai.model":     {"AI_MODEL"},
+		"ai.timeout":   {"AI_TIMEOUT"},
 		"log.level":    {"LOG_LEVEL"},
 		"log.filename": {"LOG_FILENAME"},
 	}

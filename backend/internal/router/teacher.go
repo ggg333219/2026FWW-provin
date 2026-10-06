@@ -141,6 +141,7 @@ func RegisterNewSkillRoutes(
 		projects.GET("/:project_id/context", coursewareProjectHandler.Context)
 		projects.GET("/:project_id/draft", coursewareProjectHandler.DraftGet)
 		projects.PUT("/:project_id/draft", coursewareProjectHandler.DraftPut)
+		projects.GET("/:project_id/elements", coursewareHandler.Elements)
 		projects.PUT("/:project_id/step", coursewareProjectHandler.StepPut)
 		// A6/A7: 修改对话 + 版本快照 + 回滚（追加到同一路由组）
 		projects.POST("/:project_id/modify", coursewareHandler.Modify)
@@ -168,6 +169,7 @@ func RegisterNewSkillRoutes(
 		projects.PUT("/:project_id/step", coursewareHandler.UpdateStep)
 		projects.PUT("/:project_id/draft", coursewareHandler.SaveDraft)
 		projects.GET("/:project_id/draft", coursewareHandler.GetDraft)
+		projects.GET("/:project_id/elements", coursewareHandler.Elements)
 		projects.POST("/:project_id/modify", coursewareHandler.Modify)
 		projects.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
 		projects.GET("/:project_id/versions", coursewareHandler.Versions)
@@ -257,6 +259,7 @@ func RegisterNewSkillRoutes(
 
 	// ---- S4: 导出 ----
 	exp := v1.Group("/export")
+	exp.Use(handler.JWTAuthMiddleware())
 	{
 		exp.POST("/:gen_id", exportHandler.Create)
 		exp.GET("/status/:job_id", exportHandler.Status)
@@ -264,6 +267,7 @@ func RegisterNewSkillRoutes(
 	}
 	// S2S3 新功能接口契约 v1.0：/exp 为规范路径；/export 保留一个迭代周期兼容旧前端。
 	contractExp := v1.Group("/exp")
+	contractExp.Use(handler.JWTAuthMiddleware())
 	{
 		contractExp.POST("/:gen_id", exportHandler.Create)
 		contractExp.GET("/status/:job_id", exportHandler.Status)

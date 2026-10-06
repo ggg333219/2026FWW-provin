@@ -72,6 +72,14 @@
       <span>{{ modifyStore.pendingClarification.question }}</span>
     </div>
 
+    <div v-if="modifyStore.pendingConfirmation" class="confirmation-context" role="alert">
+      <strong>请确认高风险修改</strong>
+      <span v-if="modifyStore.pendingConfirmation.candidates?.length">
+        将影响：{{ modifyStore.pendingConfirmation.candidates.map((item) => `第${item.page_number}页${item.role || item.element_type}`).join('、') }}
+      </span>
+      <button type="button" class="confirm-btn" @click="handleConfirm">确认并执行</button>
+    </div>
+
     <!-- 输入区 -->
     <div class="input-area">
       <textarea v-model="modifyStore.inputText" rows="2" maxlength="500"
@@ -244,6 +252,11 @@ async function handleSend() {
   scrollToBottom()
 }
 
+async function handleConfirm() {
+  await modifyStore.confirmPending(nodesForApi(), applyResult)
+  scrollToBottom()
+}
+
 async function handleUndo() {
   await modifyStore.undo(nodesForApi(), applyResult)
 }
@@ -305,28 +318,6 @@ watch(() => modifyStore.messages.length, scrollToBottom)
 }
 .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .icon-btn:hover:not(:disabled) { background: #eee; }
-
-.active-page-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid #eee;
-  background: #f6f9ff;
-}
-.apb-label { font-size: 12px; color: #4a5b70; white-space: nowrap; }
-.apb-select {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  padding: 3px 6px;
-  border: 1px solid #ccd8e6;
-  border-radius: 6px;
-  background: #fff;
-  color: #33443e;
-  cursor: pointer;
-}
-.apb-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .quick-chips {
   display: flex;
@@ -409,6 +400,29 @@ watch(() => modifyStore.messages.length, scrollToBottom)
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.confirmation-context {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 12px 0;
+  padding: 9px 10px;
+  border: 1px solid #e4b75b;
+  border-radius: 6px;
+  background: #fff8e7;
+  color: #6f4d00;
+  font-size: 12px;
+}
+
+.confirm-btn {
+  align-self: flex-start;
+  border: 0;
+  border-radius: 4px;
+  padding: 5px 9px;
+  background: #b7791f;
+  color: #fff;
+  cursor: pointer;
 }
 .ai-working{display:flex;align-items:center;gap:11px;margin:10px 12px 0;padding:12px;border:1px solid #cde2da;border-radius:11px;background:linear-gradient(110deg,#eff9f5,#fff);color:#28594c}.ai-working strong{font-size:13px}.ai-working p{margin:3px 0 0;color:#789087;font-size:11px}.ai-working-spinner{width:22px;height:22px;flex:0 0 auto;border:3px solid #d6e9e1;border-top-color:#28735f;border-radius:50%;animation:ai-spin .75s linear infinite}@keyframes ai-spin{to{transform:rotate(360deg)}}
 .error-bar button { border:0; background:transparent; color:#9f2525; text-decoration:underline; cursor:pointer; }

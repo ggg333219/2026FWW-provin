@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"path"
 	"strconv"
@@ -8,21 +9,49 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"smart-teaching-backend/internal/model"
 	"smart-teaching-backend/internal/service"
 )
 
 // ExportHandler S4 导出任务 — HTTP 处理器
 type ExportHandler struct {
-	aiClient       service.AIEngine
-	projectService *service.CoursewareProjectService
+	aiClient       exportAIClient
+	projectService coursewareProjectLookup
 }
 
-func NewExportHandler(aiClient service.AIEngine, projectServices ...*service.CoursewareProjectService) *ExportHandler {
-	var projectService *service.CoursewareProjectService
+type exportAIClient interface {
+	ExportCreate(context.Context, string, service.ExportCreateRequest) (*service.ExportCreateResponse, error)
+	ExportStatus(context.Context, string) (*service.ExportStatusResponse, error)
+	VersionLoad(context.Context, string, int) (*service.VersionSnapshot, error)
+}
+
+type coursewareProjectLookup interface {
+	Get(context.Context, string, string) (*model.CoursewareProject, error)
+	FindByGeneration(context.Context, string, string) (*model.CoursewareProject, error)
+}
+
+func NewExportHandler(aiClient exportAIClient, projectServices ...coursewareProjectLookup) *ExportHandler {
+	var projectService coursewareProjectLookup
 	if len(projectServices) > 0 {
 		projectService = projectServices[0]
 	}
 	return &ExportHandler{aiClient: aiClient, projectService: projectService}
+}
+
+func (h *ExportHandler) authorizeGeneration(c *gin.Context, genID string) bool {
+	userID := c.GetString("userID")
+	if userID == "" || h.projectService == nil || genID == "" {
+		exportContractError(c, http.StatusNotFound, "课件不存在")
+		return false
+	}
+	if _, err := h.projectService.FindByGeneration(c.Request.Context(), userID, genID); err != nil {
+		project, projectErr := h.projectService.Get(c.Request.Context(), userID, genID)
+		if projectErr != nil || project == nil || project.ID != genID || strings.TrimSpace(project.GenID) != "" {
+			exportContractError(c, http.StatusNotFound, "课件不存在")
+			return false
+		}
+	}
+	return true
 }
 
 func exportContractError(c *gin.Context, status int, message string) {
@@ -67,6 +96,9 @@ func (h *ExportHandler) CreateV2(c *gin.Context) {
 	genID := c.Param("generation_id")
 	if genID == "" {
 		exportContractError(c, http.StatusBadRequest, "缺少 generation_id")
+		return
+	}
+	if !h.authorizeGeneration(c, genID) {
 		return
 	}
 	var req service.ExportCreateRequest
@@ -137,6 +169,9 @@ func (h *ExportHandler) StatusV2(c *gin.Context) {
 		exportContractError(c, http.StatusBadGateway, "查询导出状态失败: "+err.Error())
 		return
 	}
+	if !h.authorizeGeneration(c, resp.GenerationID) {
+		return
+	}
 	h.rewriteExportDownloads(jobID, resp)
 	exportContractOK(c, resp)
 }
@@ -148,11 +183,38 @@ func (h *ExportHandler) Create(c *gin.Context) {
 		exportContractError(c, http.StatusBadRequest, "缺少 gen_id")
 		return
 	}
-	var req service.ExportCreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var payload struct {
+		service.ExportCreateRequest
+		ProjectID string `json:"project_id"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
 		exportContractError(c, http.StatusBadRequest, "参数错误: "+err.Error())
 		return
 	}
+	if payload.ProjectID != "" {
+		userID := c.GetString("userID")
+		if userID == "" || h.projectService == nil {
+			exportContractError(c, http.StatusNotFound, "课件不存在")
+			return
+		}
+		project, err := h.projectService.Get(c.Request.Context(), userID, payload.ProjectID)
+		if err != nil {
+			exportContractError(c, http.StatusNotFound, "课件不存在")
+			return
+		}
+		if strings.TrimSpace(project.GenID) != "" {
+			genID = project.GenID
+		} else {
+			if len(payload.Nodes) == 0 {
+				exportContractError(c, http.StatusBadRequest, "项目版本缺少可导出的节点")
+				return
+			}
+			genID = payload.ProjectID
+		}
+	} else if !h.authorizeGeneration(c, genID) {
+		return
+	}
+	req := payload.ExportCreateRequest
 	resp, err := h.aiClient.ExportCreate(c.Request.Context(), genID, req)
 	if err != nil {
 		exportContractError(c, http.StatusBadGateway, "创建导出任务失败: "+err.Error())
@@ -174,6 +236,9 @@ func (h *ExportHandler) Status(c *gin.Context) {
 		exportContractError(c, http.StatusBadGateway, "查询导出状态失败: "+err.Error())
 		return
 	}
+	if !h.authorizeGeneration(c, resp.GenerationID) {
+		return
+	}
 	h.rewriteExportDownloads(jobID, resp)
 	exportContractOK(c, resp)
 }
@@ -190,14 +255,14 @@ func (h *ExportHandler) rewriteExportDownloads(jobID string, resp *service.Expor
 			if extension == "" {
 				extension = "pptx"
 			}
-			resp.DownloadURL = "/api/v1/exp/download/" + jobID + "/" + extension
+			resp.DownloadURL = "/api/v1/export/download/" + jobID + "/" + extension
 		}
 		for format := range resp.Files {
 			extension := strings.ToLower(format)
 			if extension == "html5" || extension == "interactive" {
 				extension = "html"
 			}
-			resp.Files[format] = "/api/v1/exp/download/" + jobID + "/" + extension
+			resp.Files[format] = "/api/v1/export/download/" + jobID + "/" + extension
 		}
 	}
 }
@@ -218,6 +283,10 @@ func (h *ExportHandler) Download(c *gin.Context) {
 	})
 	if !ok {
 		exportContractError(c, http.StatusNotImplemented, "当前 AI 客户端不支持导出下载")
+		return
+	}
+	status, err := h.aiClient.ExportStatus(c.Request.Context(), jobID)
+	if err != nil || !h.authorizeGeneration(c, status.GenerationID) {
 		return
 	}
 	c.Redirect(http.StatusTemporaryRedirect, provider.ExportDownloadURL(jobID, extension))

@@ -65,18 +65,36 @@
         <div v-if="exportStatus === 'done'" class="done-section">
           <span class="done-icon">✅ 导出完成</span>
           <div v-if="downloadFiles.length" class="download-list">
-            <button v-for="file in downloadFiles" :key="file.format" class="btn btn-sm" @click="handleDownload(file.url)">
+            <button v-for="file in downloadFiles" :key="file.format" class="btn btn-sm" @click="handleDownload(file.url, file.format)">
               下载 {{ file.label }}
             </button>
           </div>
           <button
             v-else-if="exportDownloadUrl"
             class="btn btn-sm"
-            @click="handleDownload(exportDownloadUrl)"
+            @click="handleDownload(exportDownloadUrl, selectedFormat)"
           >
             下载文件
           </button>
           <button class="btn btn-sm" @click="$emit('reset-export')">重新导出</button>
+        </div>
+        <p v-if="downloadError" class="error-msg">{{ downloadError }}</p>
+
+        <div v-if="exportQualityReport" class="quality-report" :class="exportQualityReport.status">
+          <strong>{{ qualityStatusText }}</strong>
+          <span>已检查 {{ exportQualityReport.slide_count }} 页</span>
+          <ul v-if="exportQualityReport.findings?.length">
+            <li v-for="(finding, index) in exportQualityReport.findings" :key="`${finding.code}-${index}`">
+              {{ finding.slide_number ? `第 ${finding.slide_number} 页：` : '' }}{{ finding.message }}
+            </li>
+          </ul>
+        </div>
+
+        <div v-if="exportStatus === 'failed' && Object.keys(exportFiles).length" class="partial-files">
+          <strong>其他格式仍可下载</strong>
+          <button v-for="file in downloadFiles" :key="file.format" class="btn btn-sm" @click="handleDownload(file.url, file.format)">
+            下载 {{ file.label }}
+          </button>
         </div>
 
         <!-- 失败 -->
@@ -92,6 +110,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
+import { API_BASE } from '../../config/api'
 
 const props = defineProps({
   genId: { type: String, default: '' },
@@ -100,6 +119,7 @@ const props = defineProps({
   exportDownloadUrl: { type: String, default: '' },
   exportFiles: { type: Object, default: () => ({}) },
   exportError: { type: String, default: '' },
+  exportQualityReport: { type: Object, default: null },
   loading: { type: Boolean, default: false },
   /** 教学意图对象（传给 deck-skill 生成 HTML 课件） */
   intent: { type: Object, default: () => ({}) },
@@ -113,6 +133,7 @@ defineEmits(['start-export', 'reset-export', 'skill-preview'])
 
 const selectedFormat = ref(props.exportFormat || 'pptx')
 const skillPreviewLoading = ref(false)
+const downloadError = ref('')
 
 async function handleSkillPreview() {
   if (!props.genId) return
@@ -195,8 +216,29 @@ watch(() => props.exportStatus, (val) => {
   }
 })
 
-function handleDownload(url) {
-  if (url) window.open(url, '_blank', 'noopener')
+async function handleDownload(url, format = 'pptx') {
+  if (!url) return
+  downloadError.value = ''
+  try {
+    const target = new URL(url, API_BASE)
+    const headers = new Headers()
+    if (target.origin === new URL(API_BASE).origin) {
+      const token = window.localStorage.getItem('fuww_teacher_auth_token')
+      if (token && !token.startsWith('local_')) headers.set('Authorization', `Bearer ${token}`)
+    }
+    const response = await fetch(target.href, { headers })
+    if (!response.ok) throw new Error(`下载失败（${response.status}）`)
+    const objectUrl = URL.createObjectURL(await response.blob())
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `${String(props.courseTitle || '课件').replace(/[\\/:*?"<>|]/g, '_')}_${props.versionLabel}.${format === 'html5' || format === 'interactive' ? 'html' : format === 'lesson_plan' ? 'docx' : format}`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+  } catch (error) {
+    downloadError.value = error?.message || '下载失败'
+  }
 }
 </script>
 
@@ -252,4 +294,10 @@ function handleDownload(url) {
 .error-section { margin-top: 4px; }
 .error-icon { font-size: 14px; color: #dc2626; font-weight: 500; }
 .error-msg { font-size: 12px; color: #991b1b; margin: 4px 0 8px; }
+.quality-report { margin-top: 10px; padding: 10px 12px; border-left: 3px solid #15803d; background: #f0fdf4; color: #166534; font-size: 13px; }
+.quality-report.passed_with_warnings { border-color: #d97706; background: #fffbeb; color: #92400e; }
+.quality-report.failed { border-color: #dc2626; background: #fef2f2; color: #991b1b; }
+.quality-report span { margin-left: 10px; }
+.quality-report ul { margin: 6px 0 0; padding-left: 18px; }
+.quality-report li + li { margin-top: 4px; }
 </style>

@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const outlineRequestTimeout = 120 * time.Second
+
 // AIEngine 定义所有向后端 AI Engine 的调用契约。
 // 旧接口继续保持向后兼容，新 Skill 接口按功能域分组。
 type AIEngine interface {
@@ -563,8 +565,9 @@ type OutlineGenerateRequest struct {
 
 // OutlineGenerateResponse —— POST /gen/outline 响应（Python 返回裸 {"nodes": [...], "used_fallback": ...}）。
 type OutlineGenerateResponse struct {
-	Nodes        []OutlineNode `json:"nodes"`
-	UsedFallback bool          `json:"used_fallback,omitempty"`
+	Nodes          []OutlineNode `json:"nodes"`
+	UsedFallback   bool          `json:"used_fallback,omitempty"`
+	FallbackReason string        `json:"fallback_reason,omitempty"`
 }
 
 // OutlineReviseAIRequest —— POST /gen/outline/revise 请求（Python GenOutlineReviseRequest 镜像）。
@@ -786,19 +789,34 @@ type ExportCreateResponse struct {
 }
 
 type ExportStatusResponse struct {
-	JobID       string `json:"job_id"`
-	Filename    string `json:"filename,omitempty"`
-	Status      string `json:"status"`
-	DownloadURL string `json:"download_url,omitempty"`
-	Error       string `json:"error,omitempty"`
+	JobID        string `json:"job_id"`
+	GenerationID string `json:"generation_id,omitempty"`
+	Filename     string `json:"filename,omitempty"`
+	Status       string `json:"status"`
+	DownloadURL  string `json:"download_url,omitempty"`
+	Error        string `json:"error,omitempty"`
 	// 引擎侧导出产物上传状态等扩展字段（字段只增不删），透传给前端。
-	UploadStatus    string            `json:"upload_status,omitempty"`
-	MinioPath       string            `json:"minio_path,omitempty"`
-	FileSize        int64             `json:"file_size,omitempty"`
-	CoursewareTitle string            `json:"courseware_title,omitempty"`
-	Version         int               `json:"version,omitempty"`
-	VersionNo       int               `json:"version_no,omitempty"`
-	Files           map[string]string `json:"files,omitempty"`
+	UploadStatus    string               `json:"upload_status,omitempty"`
+	MinioPath       string               `json:"minio_path,omitempty"`
+	FileSize        int64                `json:"file_size,omitempty"`
+	CoursewareTitle string               `json:"courseware_title,omitempty"`
+	Version         int                  `json:"version,omitempty"`
+	VersionNo       int                  `json:"version_no,omitempty"`
+	Files           map[string]string    `json:"files,omitempty"`
+	QualityReport   *ExportQualityReport `json:"quality_report,omitempty"`
+}
+
+type ExportQualityFinding struct {
+	Code        string `json:"code"`
+	Severity    string `json:"severity"`
+	Message     string `json:"message"`
+	SlideNumber *int   `json:"slide_number,omitempty"`
+}
+
+type ExportQualityReport struct {
+	Status     string                 `json:"status"`
+	SlideCount int                    `json:"slide_count"`
+	Findings   []ExportQualityFinding `json:"findings"`
 }
 
 // =============================================================================
@@ -866,6 +884,25 @@ type GenContentStatusResponse struct {
 	CompletedNodes int                `json:"completed_nodes"`
 	Nodes          []TeachingNodeItem `json:"nodes,omitempty"`
 	Error          string             `json:"error,omitempty"`
+}
+
+type ModifyIntentRequest struct {
+	ProjectID       string             `json:"project_id"`
+	Instruction     string             `json:"instruction"`
+	Nodes           []TeachingNodeItem `json:"nodes"`
+	ModifySessionID string             `json:"modify_session_id,omitempty"`
+}
+
+type ModifyIntentResponse struct {
+	ProjectID           string   `json:"project_id,omitempty"`
+	TargetType          string   `json:"target_type"`
+	TargetIDs           []string `json:"target_ids"`
+	Action              string   `json:"action"`
+	Actions             []string `json:"actions,omitempty"`
+	Constraints         []string `json:"constraints"`
+	Confidence          float64  `json:"confidence"`
+	ClarificationNeeded bool     `json:"clarification_needed"`
+	Clarification       string   `json:"clarification,omitempty"`
 }
 
 func (c *aiEngineClient) GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error) {
@@ -1121,7 +1158,7 @@ func (c *aiEngineClient) GenerationCreate(ctx context.Context, req GenerationCre
 
 func (c *aiEngineClient) GenerateOutline(ctx context.Context, req OutlineGenerateRequest) (*OutlineGenerateResponse, error) {
 	var result OutlineGenerateResponse
-	if err := c.postJSON(ctx, "/gen/outline", req, &result); err != nil {
+	if err := c.postJSONWithTimeout(ctx, "/gen/outline", req, &result, outlineRequestTimeout); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -1129,7 +1166,7 @@ func (c *aiEngineClient) GenerateOutline(ctx context.Context, req OutlineGenerat
 
 func (c *aiEngineClient) ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error) {
 	var result OutlineReviseAIResponse
-	if err := c.postJSON(ctx, "/gen/outline/revise", req, &result); err != nil {
+	if err := c.postJSONWithTimeout(ctx, "/gen/outline/revise", req, &result, outlineRequestTimeout); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -1303,6 +1340,10 @@ func (c *aiEngineClient) ExportDownloadURL(jobID, extension string) string {
 }
 
 func (c *aiEngineClient) postJSON(ctx context.Context, path string, reqBody any, out any) error {
+	return c.postJSONWithTimeout(ctx, path, reqBody, out, 0)
+}
+
+func (c *aiEngineClient) postJSONWithTimeout(ctx context.Context, path string, reqBody any, out any, timeout time.Duration) error {
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("序列化请求失败: %w", err)
@@ -1314,7 +1355,13 @@ func (c *aiEngineClient) postJSON(ctx context.Context, path string, reqBody any,
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.client.Do(req)
+	client := c.client
+	if timeout > 0 {
+		clientCopy := *c.client
+		clientCopy.Timeout = timeout
+		client = &clientCopy
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("调用AI引擎失败: %w", err)
 	}

@@ -8,6 +8,91 @@ describe('outlineStore 大纲拖拽排序', () => {
     setActivePinia(createPinia())
     vi.stubGlobal('window', { localStorage: { setItem: vi.fn(), getItem: vi.fn(), removeItem: vi.fn() } })
   })
+
+  it('保留 AI 回退状态并将其写入本地恢复快照', () => {
+    const setItem = vi.fn()
+    vi.stubGlobal('window', { localStorage: { setItem, getItem: vi.fn(), removeItem: vi.fn() } })
+    const store = useOutlineStore()
+
+    store._applyOutlineData({
+      outline_id: 'outline_fallback',
+      used_fallback: true,
+      fallback_reason: 'timeout',
+      nodes: [{ node_id: 'node_001', title: '本地兜底节点' }],
+    })
+    store._persist()
+
+    expect(store.usedFallback).toBe(true)
+    expect(store.fallbackReason).toBe('timeout')
+    expect(store.fallbackNotice).toContain('AI 请求超时')
+    expect(store.fallbackNotice).toContain('最初使用本地兜底生成')
+    expect(store.fallbackNotice).toContain('继续手动编辑')
+    expect(JSON.parse(setItem.mock.calls.at(-1)[1])).toMatchObject({
+      used_fallback: true,
+      fallback_reason: 'timeout',
+    })
+  })
+
+  it('AI 成功大纲不显示回退提示，兜底大纲仍可编辑并保存', async () => {
+    const save = vi.spyOn(teacherV1Api.outline, 'save').mockResolvedValue({
+      data: { outline_version: 2, status: 'draft' },
+    })
+    const store = useOutlineStore()
+    store._applyOutlineData({
+      outline_id: 'outline_generated',
+      used_fallback: false,
+      nodes: [{ node_id: 'node_001', title: 'AI 生成节点', summary: '摘要' }],
+    })
+    expect(store.fallbackNotice).toBe('')
+
+    store._applyOutlineData({
+      outline_id: 'outline_fallback',
+      used_fallback: true,
+      fallback_reason: 'timeout',
+      nodes: [{ node_id: 'node_001', title: '兜底节点', summary: '摘要' }],
+    })
+    store.updateNode('node_001', { title: '教师已编辑' })
+    await store.saveVersion()
+
+    expect(store.nodes[0].title).toBe('教师已编辑')
+    expect(store.canEdit).toBe(true)
+    expect(save).toHaveBeenCalledWith('outline_fallback', expect.objectContaining({
+      nodes: [expect.objectContaining({ title: '教师已编辑' })],
+    }))
+  })
+
+  it('应用已落库的 AI 修订候选时直接切换到候选版本，不用旧版本号重复保存', async () => {
+    const revise = vi.spyOn(teacherV1Api.outline, 'revise').mockResolvedValue({
+      data: {
+        outline_version: 2,
+        status: 'draft',
+        nodes: [{
+          node_id: 'node_001',
+          order: 1,
+          title: '修订后标题',
+          summary: '新的摘要',
+          node_type: 'content',
+          estimated_duration_minutes: 8,
+        }],
+        change_summary: ['更新标题'],
+      },
+    })
+    const save = vi.spyOn(teacherV1Api.outline, 'save')
+    const store = useOutlineStore()
+    store.outline_id = 'outline_1'
+    store.outline_version = 1
+    store.nodes = [{ node_id: 'node_001', order: 1, title: '旧标题', summary: '旧摘要' }]
+
+    await store.reviseOutline('更新标题')
+    const applied = await store.applyRevision()
+
+    expect(revise).toHaveBeenCalledWith('outline_1', expect.objectContaining({ base_version: 1 }))
+    expect(save).not.toHaveBeenCalled()
+    expect(store.outline_version).toBe(2)
+    expect(store.nodes[0].title).toBe('修订后标题')
+    expect(store.pendingRevision).toBeNull()
+    expect(applied.outline_version).toBe(2)
+  })
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()

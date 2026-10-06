@@ -103,6 +103,7 @@ describe('modifyStore C6/C7 对话迭代', () => {
     expect(store.error).toBe('')
   })
 
+<<<<<<< HEAD
   /**
    * 契约 v1.0 §3.2：切 PPT / 新建课件后必须清空"上一个课件"的 AI 对话气泡，
    * 否则切回会看到之前残留。之前的 bindProject 只在 !projectId 时清，导致
@@ -292,5 +293,29 @@ describe('modifyStore C6/C7 对话迭代', () => {
     // 失败 → 消息回到 pending；Pinia 会再包一层 reactive，引用会变，比内容即可
     expect(store._pendingPersist).toHaveLength(1)
     expect(store._pendingPersist[0]).toMatchObject({ id: m.id, role: 'teacher', text: '测试消息' })
+  })
+
+  it('高风险元素修改先等待确认，确认后才发送 confirmed', async () => {
+    const modify = vi.spyOn(projectModifyApi, 'modify')
+      .mockResolvedValueOnce({ data: {
+        requires_confirmation: true,
+        candidates: [{ page_number: 2, role: 'chart' }],
+      } })
+      .mockResolvedValueOnce({ data: {
+        intent: { action: 'restyle', target_element_ids: ['el_node_2_chart'] },
+        all_nodes: [{ node_id: 'node_2', title: '图表' }],
+        modified_nodes: [{ node_id: 'node_2', title: '图表' }],
+        new_version_no: 1,
+      } })
+    vi.spyOn(projectModifyApi, 'versions').mockResolvedValue({ data: { items: [{ version_no: 1 }] } })
+    const store = useModifyStore()
+    store.bindProject('project_1')
+    store.inputText = '把第二页图表改成柱状图'
+    await store.sendModify([], () => {})
+
+    expect(store.pendingConfirmation).not.toBeNull()
+    await store.confirmPending()
+    expect(modify.mock.calls[1][3]).toMatchObject({ confirmed: true })
+    expect(store.pendingConfirmation).toBeNull()
   })
 })

@@ -7,7 +7,7 @@ import re
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
-from ai_engine.core import LLMClient, IntentSummary, DialogueTurn, SessionStatus, ConversationSession
+from ai_engine.core import LLMClient, IntentSummary, DialogueTurn, SessionStatus, ConversationSession, settings
 from ai_engine.intent.intent_engine import IntentEngine
 
 
@@ -51,7 +51,7 @@ class IntentUnderstandingService:
     }
 
     def __init__(self, client: LLMClient | None = None, engine: object | None = None) -> None:
-        self.client = client or LLMClient(model="qwen-turbo", temperature=0.1)
+        self.client = client or LLMClient(model=settings.MODEL, temperature=0.1)
         self.engine = engine
 
     def extract_intent(self, session_id: str, messages: list[DialogueTurn]) -> dict[str, Any]:

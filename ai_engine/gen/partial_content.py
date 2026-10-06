@@ -246,6 +246,10 @@ def apply_page_revision(node: dict[str, Any], revision: Any,
 
     if "point_details" in revision:
         updated["point_details"] = revision.get("point_details") or []
+        if updated["point_details"]:
+            metadata = dict(updated.get("metadata") or {})
+            metadata["show_modified_details"] = True
+            updated["metadata"] = metadata
 
     if str(revision.get("script") or "").strip():
         updated["script"] = revision.get("script")
@@ -364,8 +368,6 @@ def run_partial_pipeline(
                     "extra_instruction": modify_instruction,
                     "context_markdown": reference,
                 }
-                # 支持的话就明确告诉生成器：这次改的是**幻灯片上的内容**，
-                # 并把当前正文/要点摊给它看（见 node._current_slide_context）。
                 if _supports_slide_revision(gen):
                     request["revise_slide"] = True
                 new_script = gen.generate_single(node, **request)
