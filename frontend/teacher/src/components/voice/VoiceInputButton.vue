@@ -1,5 +1,6 @@
 <template>
-  <div class="voice-input" :class="{ listening: isListening }">
+  <!-- 特性检测不通过（如 Firefox）时整组件隐藏，不留置灰占位（H2 要求） -->
+  <div v-if="isSupported" class="voice-input" :class="{ listening: isListening }">
     <!-- 语音识别错误提示条（自动消失，也可手动关闭） -->
     <div v-if="errorMessage" class="voice-error" role="alert">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.1"/></svg>
