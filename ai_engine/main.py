@@ -72,7 +72,7 @@ def _warn_missing_llm_key() -> None:
 
 _warn_missing_llm_key()
 
-app = FastAPI(title="泛雅 AI 智课系统后端", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
+app = FastAPI(title="多模态 AI 互动式教学智能体 AI 引擎", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
 app.include_router(recommendation_router)
 # 保留旧的 /intent/* 供历史调试工具使用，同时提供 Go Backend 约定的 /api/v1/intent/*。
 app.include_router(intent_router)

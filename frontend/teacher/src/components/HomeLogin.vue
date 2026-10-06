@@ -191,16 +191,18 @@ const isRegisterMode = ref(false)
 const role = ref('teacher')
 const errorMessage = ref('')
 
-const projectName = '启智云'
+// M1：登录页主文案使用赛题产品全名，替换早期占位名“启智云”。
+const projectName = '多模态 AI 互动式教学智能体'
 const displayedProjectName = ref('')
 const taglineSets = [
-  { top: '一个平台', bottom: '连接教与学' },
-  { top: '让学习更简单', bottom: '让教学更高效' }
+  { top: '多轮对话讲清教学思路', bottom: '一键生成课件与教案' },
+  { top: '融合多模态资料与知识库', bottom: '让备课更快、更好改' }
 ]
 const displayedTaglineTop = ref('')
 const displayedTaglineBottom = ref('')
 
-const TITLE_TYPE_MS = 320
+// 产品全名较长，标题打字速度相应调快，保证首屏 ~2s 内完成。
+const TITLE_TYPE_MS = 130
 const SLOGAN_TYPE_MS = 140
 const SLOGAN_LINE_GAP_MS = 120
 const SLOGAN_HOLD_MS = 1800
