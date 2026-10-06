@@ -2469,13 +2469,46 @@ async def export_download(job_id: str, extension: str):
 
 
 # =============================================================================
+# ASR 语音识别（服务端转写 — 前端 MediaRecorder 录音上传，替代浏览器绑定的 Web Speech API）
+# =============================================================================
+
+from ai_engine.asr import ASRError, asr_provider_name, transcribe_bytes
+
+
+@app.post("/api/v1/asr/transcribe")
+async def asr_transcribe(file: UploadFile = File(...), language: str = "zh"):
+    """
+    POST /api/v1/asr/transcribe — 上传短音频（≤20MB / ≤60s），返回识别文本。
+
+    前端链路：MediaRecorder 录音 → multipart 上传（经 /ai/ 前缀反代到引擎）→ 回填输入框。
+    provider 链见 ai_engine/asr.py：dashscope（有 key）→ local_whisper（ASR_ALLOW_LOCAL_WHISPER=1）→ 501。
+    """
+    data = await file.read()
+    content_type = file.content_type or ""
+    try:
+        result = transcribe_bytes(data, content_type, language)
+    except ASRError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={
+            "error_code": exc.error_code, "message": exc.message,
+        })
+    return {"code": 200, "data": result, "error": "", "ok": True}
+
+
+@app.get("/api/v1/asr/status")
+def asr_status():
+    """ASR 能力自检：前端可据此决定提示文案。"""
+    return {"code": 200, "data": {"provider": asr_provider_name()}, "ok": True}
+
+
+# =============================================================================
 # 健康检查
 # =============================================================================
 
 @app.get("/health")
 def health_check():
     """健康检查接口，供前端联调测试"""
-    return {"status": "running", "version": "v1.0.0", "llm": _llm_health_payload()}
+    return {"status": "running", "version": "v1.0.0",
+            "llm": _llm_health_payload(), "asr": {"provider": asr_provider_name()}}
 
 
 # =============================================================================
