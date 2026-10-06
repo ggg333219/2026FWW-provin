@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -29,7 +30,12 @@ import (
 func main() {
 	_, filename, _, _ := runtime.Caller(0)
 	// 本文件位于 backend/cmd/teacher/main.go，向上 3 级即为 backend 根目录。
+	// runtime.Caller 返回的是编译期路径，交叉编译部署时会失效，
+	// 因此允许用 A12_PROJECT_ROOT 环境变量覆盖（部署场景必配）。
 	projectRoot := filepath.Dir(filepath.Dir(filepath.Dir(filename)))
+	if override := strings.TrimSpace(os.Getenv("A12_PROJECT_ROOT")); override != "" {
+		projectRoot = override
+	}
 
 	cfg, err := config.LoadConfig(filepath.Join(projectRoot, "config"))
 	if err != nil {
