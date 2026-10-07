@@ -1,15 +1,8 @@
 <template>
   <!-- 特性检测不通过（极老的浏览器缺 MediaRecorder/getUserMedia）时整组件隐藏 -->
   <div v-if="isSupported" class="voice-input">
-    <!-- 错误提示条（自动消失，也可手动关闭） -->
-    <div v-if="errorMessage" class="voice-error" role="alert">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.1"/></svg>
-      <span>{{ errorMessage }}</span>
-      <button type="button" class="voice-error-close" aria-label="关闭提示" @click="errorMessage = ''">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
-    </div>
-
+    <!-- 语音异常静默处理：不弹错误提示（用户可改用系统级语音输入，如 Win+H），
+         仅控制台留痕便于排查 -->
     <!-- 录音中 / 识别中状态气泡 -->
     <div v-if="isListening || isTranscribing" class="voice-live" aria-live="polite">
       <i></i>
@@ -40,7 +33,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { AI_API_BASE } from '../../config/api'
 
 /**
@@ -68,11 +61,23 @@ const isTranscribing = ref(false)
 const recordedSeconds = ref(0)
 const errorMessage = ref('')
 
+// 语音异常不再弹 UI 提示（用户可改用系统语音输入）；仅控制台留痕
+watch(errorMessage, (msg) => {
+  if (msg) console.warn('[voice-input]', msg)
+})
+
 const isSupported = typeof navigator !== 'undefined'
-  && Boolean(navigator.mediaDevices?.getUserMedia)
   && typeof window.MediaRecorder !== 'undefined'
+  && Boolean(window.MediaRecorder.isTypeSupported)
+
+// 浏览器安全策略：getUserMedia 仅在 HTTPS 或 localhost 的安全上下文暴露。
+// HTTP 公网访问时 mediaDevices 为 undefined —— 此时按钮仍渲染，点击给出明确引导而非静默消失。
+const needsSecureContext = typeof navigator !== 'undefined'
+  && typeof window.isSecureContext === 'boolean'
+  && !window.isSecureContext
 
 const buttonTitle = computed(() => {
+  if (needsSecureContext.value) return '麦克风需要 HTTPS 访问：请改用 https:// 开头的站点地址（或 localhost）'
   if (isTranscribing.value) return '正在识别语音…'
   return isListening.value ? '停止录音并识别' : '语音输入（点击开始）'
 })
@@ -173,6 +178,11 @@ const stopRecording = () => {
 
 const startRecording = async () => {
   errorMessage.value = ''
+  if (needsSecureContext.value || !navigator.mediaDevices?.getUserMedia) {
+    errorMessage.value = '浏览器安全策略要求 HTTPS 才能使用麦克风：请改用 https:// 开头的站点地址（或 localhost）访问。'
+    emit('error', errorMessage.value)
+    return
+  }
   let stream
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true })
