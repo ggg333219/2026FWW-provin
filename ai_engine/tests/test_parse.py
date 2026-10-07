@@ -85,8 +85,10 @@ class ChunkNormalizerTest(unittest.TestCase):
         self.assertEqual(chunks[1].page_ref, 2)
 
         # content
-        self.assertEqual(chunks[0].content, "第一章 线性回归")
-        self.assertEqual(chunks[1].content, "损失函数与梯度下降")
+        self.assertTrue(chunks[0].content.startswith("# 第1页"))
+        self.assertIn("第一章 线性回归", chunks[0].content)
+        self.assertTrue(chunks[1].content.startswith("# 第2页"))
+        self.assertIn("损失函数与梯度下降", chunks[1].content)
 
     def test_normalize_with_custom_seq_index(self):
         """raw_chunk 中自定义 seq_index 生效。"""

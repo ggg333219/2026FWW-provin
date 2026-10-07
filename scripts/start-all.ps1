@@ -12,6 +12,44 @@ New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
 New-Item -ItemType Directory -Force -Path $scriptsDir | Out-Null
 
+# Load the project-level .env before applying defaults so every child process
+# (especially the AI Engine) inherits the configured provider, model and key.
+$envFile = Join-Path $root ".env"
+if (Test-Path -LiteralPath $envFile) {
+    foreach ($line in Get-Content -LiteralPath $envFile) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('#')) {
+            continue
+        }
+
+        if ($trimmed.StartsWith('export ')) {
+            $trimmed = $trimmed.Substring(7).Trim()
+        }
+
+        $separator = $trimmed.IndexOf('=')
+        if ($separator -le 0) {
+            continue
+        }
+
+        $name = $trimmed.Substring(0, $separator).Trim()
+        $value = $trimmed.Substring($separator + 1).Trim()
+        if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
+            continue
+        }
+
+        if ($value.Length -ge 2) {
+            $first = $value[0]
+            $last = $value[$value.Length - 1]
+            if (($first -eq '"' -and $last -eq '"') -or ($first -eq "'" -and $last -eq "'")) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+        }
+
+        [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+    }
+    Write-Host "Loaded environment: $envFile"
+}
+
 if ([string]::IsNullOrWhiteSpace($env:AI_BASE_URL) -or $env:AI_BASE_URL -match 'example\.com') {
     $env:AI_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 }

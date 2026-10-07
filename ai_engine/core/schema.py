@@ -356,6 +356,7 @@ class GenerationInstructionSet(BaseModel):
     """Immutable, versioned input contract shared by S3 generation stages."""
     schema_version: int = 1
     intent: IntentSummary = Field(default_factory=IntentSummary)
+    outline_nodes: list[dict[str, Any]] = Field(default_factory=list)
     reference_materials: list[dict[str, Any]] = Field(default_factory=list)
     confirmed_evidence: Optional[EvidencePacket] = None
     output_requirements: dict[str, Any] = Field(default_factory=dict)

@@ -10,6 +10,7 @@ DOCX 导出模块 — S3 课件生成
 
 import io
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -58,7 +59,13 @@ class DOCExporter:
         _format_normalizer(doc)
 
         safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in course_name)
-        output_path = Path(self.config.output_dir) / f"{safe_name}.docx"
+        output_dir = Path(self.config.output_dir)
+        # 兼容 Linux 测试约定：Windows 下 /tmp 会被解析为当前盘根目录，
+        # 通常不可写，因此映射到系统临时目录，保持调用方无需区分平台。
+        if os.name == "nt" and output_dir.as_posix().startswith("/tmp"):
+            relative = output_dir.as_posix()[len("/tmp"):].lstrip("/")
+            output_dir = Path(tempfile.gettempdir()) / relative
+        output_path = output_dir / f"{safe_name}.docx"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         doc.save(str(output_path))
 

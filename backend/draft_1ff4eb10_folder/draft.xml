@@ -1,0 +1,501 @@
+<title>AI智能课件生成系统 技术方案 v1.1</title>
+
+<h1 seq="auto">文档概述</h1>
+
+<h2 seq="auto">目的与读者</h2>
+<p>本文档基于 PRD 第 4 节「现状问题与待修复清单」中的 19 条问题，逐条给出技术根因分析、实施方案、涉及模块与工作量估算，供开发排期与任务拆解使用。</p>
+<p><b>读者：</b>后端开发、前端开发、AI 引擎开发、项目经理。</p>
+<p><b>v1.1 修订说明：</b>根据代码审计反馈修正——(1) 新增 S1 静默降级可观测性工作项；(2) 瑞士风专项改为基于 page_spec / svg_renderer / export_ppt 三处联动，废弃「HTML 截图嵌入」方案；(3) H5 疏密排版按三处联动重估；(4) H1/H3 补充三层超时与 Go SSE 转发层；(5) M2 改为复用现有 draft key。</p>
+
+<h2 seq="auto">范围</h2>
+<p>覆盖全局 1 条、S1 阶段 2 条、S2 阶段 2 条、S3 阶段 10 条、S4 阶段 4 条，共 19 条问题。另含瑞士教育风专项技术分析（11 个断裂点）与 S1 静默降级专项。</p>
+
+<h1 seq="auto">系统架构关键事实</h1>
+
+<p>本方案基于以下代码事实，修改前需确认：</p>
+<ul>
+<li><b>PPT 导出是 SVG 架构：</b>export_ppt.py 由 page_spec 驱动，与预览侧 svg_renderer 共享同一份 build_page_spec（export_ppt.py:383、:964），不是单点坐标硬编码。</li>
+<li><b>三层超时链：</b>前端请求 45s &lt; Go ai.timeout 30s &lt; 引擎 LLM 120s×2（重试 1 次，退避 2s/4s）——Go 会在 LLM 第二次重试前超时。</li>
+<li><b>S1 静默降级：</b>intent/service.py:170-207 的 _extract_summary，LLM 结果验证失败后被 <code>except Exception: pass</code> 吞掉，静默回退规则引擎，无日志。</li>
+<li><b>Go 后端已有 outline PUT 接口：</b>teacher.go:211 PUT /api/v1/outlines/:outline_id，H4 只需前端接线。</li>
+<li><b>草稿 key 已有分区：</b>coursewareDraft.js:13 的 resumeDraftKey(projectId) 已按项目分区，但部分组件仍用全局 key。</li>
+</ul>
+
+<h1 seq="auto">高优先级问题技术方案</h1>
+
+<p>共 10 条高优先级问题（含新增 S1 降级可观测性）。</p>
+
+<table>
+<colgroup><col width="50"/><col width="120"/><col width="200"/><col width="260"/><col width="110"/><col width="60"/></colgroup>
+<thead><tr>
+<th background-color="light-gray"><p>编号</p></th>
+<th background-color="light-gray"><p>问题点</p></th>
+<th background-color="light-gray"><p>根因</p></th>
+<th background-color="light-gray"><p>技术方案</p></th>
+<th background-color="light-gray"><p>涉及模块</p></th>
+<th background-color="light-gray"><p>工作量</p></th>
+</tr></thead>
+<tbody>
+<tr>
+<td><p>H0</p></td>
+<td><p><b>S1 降级可观测性</b></p></td>
+<td><p>LLM 结果验证失败后被 except:pass 吞掉，静默回退规则引擎，无日志无告警</p></td>
+<td>
+<ul>
+<li>_extract_summary 的 except 分支加结构化日志：记录原始 LLM 输出、验证失败原因</li>
+<li>降级时在响应里加 <code>degraded=true</code> 标记，前端可见提示</li>
+<li>这是 H1 的前置——先让降级可见，再调重试参数</li>
+</ul>
+</td>
+<td><p>ai_engine/intent/service.py</p></td>
+<td><p>0.5 人天</p></td>
+</tr>
+<tr>
+<td><p>H1</p></td>
+<td><p><b>意图解析稳定性</b></p></td>
+<td><p>三层超时不一致：前端 45s &gt; Go 30s &gt; 引擎 LLM 120s×2。Go 在 LLM 首次重试前就超时返回。重试参数已存在（2次/2s,4s）但网关层切断了它</p></td>
+<td>
+<ul>
+<li>统一三层超时：前端 90s、Go ai.timeout 90s、引擎 LLM 60s×2</li>
+<li>引擎重试参数保持现状（2次/2s,4s），不新增</li>
+<li>配合 H0 的降级标记，失败时前端展示具体原因</li>
+</ul>
+</td>
+<td><p>ai_engine/core/llm.py<br/>backend/config.go<br/>frontend api client</p></td>
+<td><p>1.5 人天</p></td>
+</tr>
+<tr>
+<td><p>H2</p></td>
+<td><p><b>语音对话</b></p></td>
+<td><p>前端无语音输入组件，后端无 ASR 接口</p></td>
+<td>
+<ul>
+<li>前端接入浏览器 Web Speech API（Chrome/Edge）</li>
+<li>转录文本填入意图输入框，支持多轮追加</li>
+<li>Firefox 等不支持的浏览器隐藏语音按钮</li>
+<li>ASR 用浏览器内置，不依赖外部服务</li>
+</ul>
+</td>
+<td><p>frontend S1页面</p></td>
+<td><p>2 人天</p></td>
+</tr>
+<tr>
+<td><p>H3</p></td>
+<td><p><b>大纲生成超时</b></p></td>
+<td><p>大纲生成耗时长，前端轮询 status，Go 网关 30s 超时切断</p></td>
+<td>
+<ul>
+<li>Go 网关新增 SSE 转发端点（/api/v1/gen/outline/stream），透传 AI 引擎的流式输出</li>
+<li>AI 引擎 outline.py 改为逐节点流式 yield</li>
+<li>前端 EventSource 接收，逐节点渲染大纲树</li>
+<li>Go ai.timeout 提到 90s（与 H1 统一）</li>
+</ul>
+</td>
+<td><p>ai_engine/gen/outline.py<br/>backend teacher.go + handler<br/>frontend S3StudioPage</p></td>
+<td><p>4 人天</p></td>
+</tr>
+<tr>
+<td><p>H4</p></td>
+<td><p><b>大纲手动编辑</b></p></td>
+<td><p>Go 后端 PUT /api/v1/outlines/:outline_id 已存在，前端未接线</p></td>
+<td>
+<ul>
+<li>前端大纲树节点支持双击编辑标题/摘要</li>
+<li>支持增删节点、拖拽排序</li>
+<li>编辑后调已有 PUT 接口持久化</li>
+<li>不涉及后端改动</li>
+</ul>
+</td>
+<td><p>frontend S3StudioPage</p></td>
+<td><p>2 人天</p></td>
+</tr>
+<tr>
+<td><p>H5</p></td>
+<td><p><b>PPT 疏密排版</b></p></td>
+<td><p>density 参数横跨 page_spec.py + svg_renderer.py + export_ppt.py 三处，预览侧和导出侧各自计算坐标，改一处必须改两处</p></td>
+<td>
+<ul>
+<li><b>预览侧：</b>page_spec.py 按 density 三档（compact/comfortable/loose）计算行距、段间距、边距参数表，svg_renderer 读取后渲染</li>
+<li><b>导出侧：</b>export_ppt.py 从同一份 page_spec 读取密度参数，python-pptx 坐标按参数表计算</li>
+<li>前端下拉切换后调 gen/preview 实时刷新</li>
+</ul>
+</td>
+<td><p>ai_engine/gen/page_spec.py<br/>svg_renderer.py<br/>export_ppt.py</p></td>
+<td><p>5-6 人天</p></td>
+</tr>
+<tr>
+<td><p>H6</p></td>
+<td><p><b>Word 教案缺项</b></p></td>
+<td><p>教案模板缺少教学方法、课堂活动设计、课后作业</p></td>
+<td>
+<ul>
+<li>教案生成 prompt 追加三个板块的生成指令</li>
+<li>导出 .docx 时这三个板块用加粗+大字号（14pt）标题突出</li>
+</ul>
+</td>
+<td><p>ai_engine/gen/export_doc.py</p></td>
+<td><p>1.5 人天</p></td>
+</tr>
+<tr>
+<td><p>H7</p></td>
+<td><p><b>Word 导出失败（卡住）</b></p></td>
+<td><p>导出任务状态更新链路 bug，完成后 status 未翻转</p></td>
+<td>
+<ul>
+<li>排查 export job 状态机：完成后写 status=success + file_url</li>
+<li>前端轮询 status 接口条件修正</li>
+<li>与 H6 合并开发</li>
+</ul>
+</td>
+<td><p>backend export_handler<br/>ai_engine/export</p></td>
+<td><p>2 人天</p></td>
+</tr>
+<tr>
+<td><p>H8</p></td>
+<td><p><b>互动内容导出集成到 PPT</b></p></td>
+<td><p>HTML5 互动页在 PPTX 里只是静态占位图</p></td>
+<td>
+<ul>
+<li>PPTX 互动页插入占位形状，超链接指向同目录 html5 文件</li>
+<li>导出时将 html5 文件与 pptx 打包同一文件夹</li>
+<li>播放时点击互动页浏览器打开 html5</li>
+</ul>
+</td>
+<td><p>ai_engine/gen/export_ppt.py<br/>export_html5.py</p></td>
+<td><p>3 人天</p></td>
+</tr>
+<tr>
+<td><p>H9</p></td>
+<td><p><b>Go 后端 AI 引擎地址配置</b></p></td>
+<td><p>config 把 AI_BASE_URL（LLM地址）误当 AI 引擎地址</p></td>
+<td>
+<ul>
+<li>已修复：.env 增加 AI_ENGINE_BASE_URL=http://127.0.0.1:8000</li>
+<li>补充：启动时如果 AI_API_KEY 未配置，打印警告并走 mock 模式</li>
+</ul>
+</td>
+<td><p>backend/pkg/config</p></td>
+<td><p>0.5 人天</p></td>
+</tr>
+</tbody>
+</table>
+
+<p><b>高优先级小计：</b>约 22 人天。</p>
+
+<h1 seq="auto">中优先级问题技术方案</h1>
+
+<p>共 6 条中优先级问题。</p>
+
+<table>
+<colgroup><col width="50"/><col width="120"/><col width="200"/><col width="260"/><col width="110"/><col width="60"/></colgroup>
+<thead><tr>
+<th background-color="light-gray"><p>编号</p></th>
+<th background-color="light-gray"><p>问题点</p></th>
+<th background-color="light-gray"><p>根因</p></th>
+<th background-color="light-gray"><p>技术方案</p></th>
+<th background-color="light-gray"><p>涉及模块</p></th>
+<th background-color="light-gray"><p>工作量</p></th>
+</tr></thead>
+<tbody>
+<tr>
+<td><p>M1</p></td>
+<td><p><b>登录页文案</b></p></td>
+<td><p>泛雅默认文字未替换</p></td>
+<td><p>修改前端登录页文案为产品名</p></td>
+<td><p>frontend/login</p></td>
+<td><p>0.5 人天</p></td>
+</tr>
+<tr>
+<td><p>M2</p></td>
+<td><p><b>草稿隔离</b></p></td>
+<td><p>resumeDraftKey(projectId) 已分区，但 CoursewareResumePage.vue 和 generationStore.js 仍用全局 key</p></td>
+<td>
+<ul>
+<li>统一所有草稿读写点到 resumeDraftKey(projectId)</li>
+<li>删除全局 key 残留</li>
+<li>不新增存储逻辑，仅统一命名</li>
+</ul>
+</td>
+<td><p>frontend coursewareDraft.js<br/>CoursewareResumePage.vue<br/>generationStore.js</p></td>
+<td><p>1 人天</p></td>
+</tr>
+<tr>
+<td><p>M3</p></td>
+<td><p><b>PPT 封面/目录/总结</b></p></td>
+<td><p>默认不生成封面、目录、总结页</p></td>
+<td><p>生成时默认添加封面和总结页；大纲节点&gt;5时自动加目录页</p></td>
+<td><p>ai_engine/gen/outline.py<br/>page_spec.py</p></td>
+<td><p>1.5 人天</p></td>
+</tr>
+<tr>
+<td><p>M4</p></td>
+<td><p><b>PPT 内容概述冗余</b></p></td>
+<td><p>大纲节点 summary 被直接打到 PPT 正文</p></td>
+<td><p>page_spec 渲染时跳过 summary 字段，仅用 key_points 和正文；summary 仅用于讲稿</p></td>
+<td><p>ai_engine/gen/page_spec.py</p></td>
+<td><p>0.5 人天</p></td>
+</tr>
+<tr>
+<td><p>M5</p></td>
+<td><p><b>生成模式定义</b></p></td>
+<td><p>"内容生成"无实际作用</p></td>
+<td><p>明确定义：内容生成=基于已确认大纲只生成PPT不重新解析意图；全流程生成=从意图开始全链路</p></td>
+<td><p>frontend S3StudioPage</p></td>
+<td><p>1 人天</p></td>
+</tr>
+<tr>
+<td><p>M6</p></td>
+<td><p><b>PPT 图文并茂</b></p></td>
+<td><p>PPT 不支持插入图片</p></td>
+<td>
+<ul>
+<li>大纲节点支持 image_url 字段</li>
+<li>LLM 推荐配图（内置图库优先，Unsplash 兜底）</li>
+<li>page_spec 加图片区块，svg_renderer 和 export_ppt 各自渲染</li>
+<li>内网部署时内置图库，不走外网</li>
+</ul>
+</td>
+<td><p>ai_engine/gen/outline.py<br/>page_spec.py<br/>svg_renderer.py<br/>export_ppt.py</p></td>
+<td><p>5 人天</p></td>
+</tr>
+</tbody>
+</table>
+
+<p><b>中优先级小计：</b>约 9.5 人天。</p>
+
+<h1 seq="auto">低优先级问题技术方案</h1>
+
+<p>共 4 条低优先级问题。</p>
+
+<table>
+<colgroup><col width="50"/><col width="120"/><col width="200"/><col width="260"/><col width="110"/><col width="60"/></colgroup>
+<thead><tr>
+<th background-color="light-gray"><p>编号</p></th>
+<th background-color="light-gray"><p>问题点</p></th>
+<th background-color="light-gray"><p>根因</p></th>
+<th background-color="light-gray"><p>技术方案</p></th>
+<th background-color="light-gray"><p>涉及模块</p></th>
+<th background-color="light-gray"><p>工作量</p></th>
+</tr></thead>
+<tbody>
+<tr>
+<td><p>L1</p></td>
+<td><p><b>知识库持久化</b></p></td>
+<td><p>向量索引存内存，重启丢失</p></td>
+<td><p>向量索引持久化到磁盘（chroma/pickle），启动时加载</p></td>
+<td><p>ai_engine/gen/rag</p></td>
+<td><p>1.5 人天</p></td>
+</tr>
+<tr>
+<td><p>L2</p></td>
+<td><p><b>证据包筛选</b></p></td>
+<td><p>S2 上传后不支持筛选，S3 仅展示前 10 条</p></td>
+<td><p>证据列表加关键词搜索 + 滚动分页（limit/offset）</p></td>
+<td><p>frontend S2/S3<br/>backend</p></td>
+<td><p>1.5 人天</p></td>
+</tr>
+<tr>
+<td><p>L3</p></td>
+<td><p><b>逐页生成</b></p></td>
+<td><p>"逐页生成"只触发样式重渲染</p></td>
+<td><p>按节点逐个调内容生成接口，前端展示单页 loading</p></td>
+<td><p>ai_engine/gen/content.py</p></td>
+<td><p>2 人天</p></td>
+</tr>
+<tr>
+<td><p>L4</p></td>
+<td><p><b>html5 mock 残留</b></p></td>
+<td><p>蓝色框 html5 预览是早期 mock</p></td>
+<td><p>删除前端 mock 组件，替换为真实互动资产预览</p></td>
+<td><p>frontend S4</p></td>
+<td><p>0.5 人天</p></td>
+</tr>
+</tbody>
+</table>
+
+<p><b>低优先级小计：</b>约 5.5 人天。</p>
+
+<h1 seq="auto">瑞士教育风专项分析</h1>
+
+<p>当前 UI 选择「瑞士教育风」后，实际生效的只有调色板（克莱因蓝 #315fd4，注意 SKILL.md 定义的是 #002FA7，两边数值不一致本身是一处断点）。SKILL.md 定义的设计语言（直角、16列网格、1px细线、字号极端反差、Inter Tight/JetBrains Mono、26种布局池）在 PPTX 导出中均未落地。</p>
+
+<p><b>关键架构事实：</b>当前 PPT 导出是 SVG 架构——page_spec 驱动 svg_renderer（预览）和 export_ppt.py（导出 PPTX）共享同一份规格，不是单点坐标硬编码。瑞士风改造必须在三处联动，不能只改 export_ppt。</p>
+
+<h2 seq="auto">断裂点清单</h2>
+
+<table>
+<colgroup><col width="40"/><col width="180"/><col width="440"/></colgroup>
+<thead><tr>
+<th background-color="light-gray"><p>#</p></th>
+<th background-color="light-gray"><p>位置</p></th>
+<th background-color="light-gray"><p>缺什么</p></th>
+</tr></thead>
+<tbody>
+<tr><td><p>1</p></td><td><p>presentation.py:18</p></td><td><p>PRESENTATION_KEYS 无 template_id，前端传的 template_id 被丢弃</p></td></tr>
+<tr><td><p>2</p></td><td><p>presentation.py:75</p></td><td><p>template_id 唯一作用是兜底 palette=klein-blue</p></td></tr>
+<tr><td><p>3</p></td><td><p>main.py:2271</p></td><td><p>导出 PPTX 时未传 template_id，默认走 default 模板</p></td></tr>
+<tr><td><p>4</p></td><td><p>ai_engine_client.go:772</p></td><td><p>Go ExportCreateRequest 无 template_id 字段</p></td></tr>
+<tr><td><p>5</p></td><td><p>schema.py:756</p></td><td><p>引擎 ExportRequest 无 template_id，未回读 GenerationTask.template_id</p></td></tr>
+<tr><td><p>6</p></td><td><p>pptx_renderer.py:22</p></td><td><p>依赖不存在的 pptygen 包，import 即失败，纯死代码</p></td></tr>
+<tr><td><p>7</p></td><td><p>export_ppt.py:194</p></td><td><p>方角开关已删，永远圆角，与直角铁律冲突</p></td></tr>
+<tr><td><p>8</p></td><td><p>skill_router.py:168</p></td><td><p>/api/v1/skill/pptx 返回 501，因无可用渲染器</p></td></tr>
+<tr><td><p>9</p></td><td><p>preview.py:382</p></td><td><p>预览 .slide { border-radius: 22px }，与直角铁律冲突</p></td></tr>
+<tr><td><p>10</p></td><td><p>generator.py:68</p></td><td><p>HTML deck 侧仅实现 9/26 种布局</p></td></tr>
+<tr><td><p>11</p></td><td><p>pptx_renderer.py:637</p></td><td><p>20 个布局处理器全是 fallback 空壳</p></td></tr>
+</tbody>
+</table>
+
+<h2 seq="auto">技术路线（SVG 三处联动）</h2>
+
+<p>废弃「HTML 截图嵌入 PPTX」方案——它会新开一条与 page_spec 脱节的并行走线，造成预览与导出版面再次分叉。正确路线是在现有 SVG 架构上注入瑞士设计语义：</p>
+
+<table>
+<colgroup><col width="140"/><col width="280"/><col width="100"/></colgroup>
+<thead><tr>
+<th background-color="light-gray"><p>阶段</p></th>
+<th background-color="light-gray"><p>内容</p></th>
+<th background-color="light-gray"><p>工作量</p></th>
+</tr></thead>
+<tbody>
+<tr>
+<td><p><b>① 契约贯通</b></p></td>
+<td><p>template_id 从前端 → presentation.py → Go ExportCreateRequest → 引擎 ExportRequest 整条链路打通（断裂点 #1 #3 #4 #5）</p></td>
+<td><p>1-2 人天</p></td>
+</tr>
+<tr>
+<td><p><b>② 版式模板化</b></p></td>
+<td>
+<p>在 page_spec 层定义瑞士风版式参数（直角、1px细线、极端字号反差、字体声明），svg_renderer 和 export_ppt.py 同时读取该参数——三处联动（#7 #9 #11）</p>
+<p>调色板对齐：把 presentation.py 的 #315fd4 改为 SKILL.md 定义的 #002FA7</p>
+</td>
+<td><p>5 人天</p></td>
+</tr>
+<tr>
+<td><p><b>③ 核心布局补齐</b></p></td>
+<td><p>在 page_spec 布局分发里补 8-10 种核心布局（封面S01、概念定义S23、三卡S05、对比S08、时间轴S02/S11、章节过渡S26、结语S09），覆盖80%教学场景（#10）</p></td>
+<td><p>8 人天</p></td>
+</tr>
+<tr>
+<td><p><b>④ 导出与接口验证</b></p></td>
+<td><p>export_ppt.py 验证瑞士风导出效果；打通 /api/v1/skill/pptx 接口（#8），接入真实渲染管线而非返回 501</p></td>
+<td><p>3 人天</p></td>
+</tr>
+<tr>
+<td colspan="2"><p><b>合计</b></p></td>
+<td><p><b>17-18 人天</b></p></td>
+</tr>
+</tbody>
+</table>
+
+<p><b>说明：</b>pptx_renderer.py 的 pptygen 死代码（#6）直接删除，不修复——瑞士风渲染走 page_spec/svg_renderer/export_ppt 现有链路，不依赖 pptygen。</p>
+
+<h1 seq="auto">实施排期建议</h1>
+
+<table>
+<colgroup><col width="100"/><col width="280"/><col width="100"/><col width="140"/></colgroup>
+<thead><tr>
+<th background-color="light-gray"><p>阶段</p></th>
+<th background-color="light-gray"><p>内容</p></th>
+<th background-color="light-gray"><p>工作量</p></th>
+<th background-color="light-gray"><p>交付物</p></th>
+</tr></thead>
+<tbody>
+<tr>
+<td><p><b>Phase 1<br/>核心链路修复</b></p></td>
+<td>
+<ul>
+<li>H0 S1 降级可观测性</li>
+<li>H1 三层超时统一</li>
+<li>H9 Go 配置修复 + 密钥告警</li>
+<li>H4 大纲手动编辑（前端接线）</li>
+<li>H6+H7 Word 教案补项与导出修复</li>
+<li>M1 登录页文案</li>
+</ul>
+</td>
+<td><p>~9 人天</p></td>
+<td><p>核心链路可用，降级可观测</p></td>
+</tr>
+<tr>
+<td><p><b>Phase 2<br/>体验与导出完善</b></p></td>
+<td>
+<ul>
+<li>H3 大纲流式生成（Go SSE 转发）</li>
+<li>H2 语音对话</li>
+<li>H5 疏密排版（三处联动）</li>
+<li>H8 互动 html5 集成 PPT</li>
+<li>M2 草稿 key 统一</li>
+<li>M3 封面/目录/总结默认</li>
+<li>M4 移除冗余概述</li>
+<li>M5 生成模式定义</li>
+<li>L4 删除 mock</li>
+</ul>
+</td>
+<td><p>~20 人天</p></td>
+<td><p>体验完整，导出链路全通</p></td>
+</tr>
+<tr>
+<td><p><b>Phase 3<br/>瑞士风 + 长尾</b></p></td>
+<td>
+<ul>
+<li>瑞士教育风 SVG 三处联动（17-18 人天）</li>
+<li>M6 PPT 图文并茂（5 人天）</li>
+<li>L1 知识库持久化</li>
+<li>L2 证据包筛选</li>
+<li>L3 逐页生成</li>
+</ul>
+</td>
+<td><p>~27 人天</p></td>
+<td><p>瑞士风真正生效，长尾补齐</p></td>
+</tr>
+</tbody>
+</table>
+
+<p><b>总计：</b>约 56 人天（含瑞士风专项 17-18 人天）。</p>
+
+<h1 seq="auto">风险与依赖</h1>
+
+<table>
+<colgroup><col width="160"/><col width="300"/><col width="180"/></colgroup>
+<thead><tr>
+<th background-color="light-gray"><p>风险项</p></th>
+<th background-color="light-gray"><p>说明</p></th>
+<th background-color="light-gray"><p>应对</p></th>
+</tr></thead>
+<tbody>
+<tr>
+<td><p>三层超时一致性</p></td>
+<td><p>前端 45s / Go 30s / 引擎 120s×2 不一致，Go 先超时切断引擎重试链</p></td>
+<td><p>H1 统一调到 90s 级，前端 api client 同步调整</p></td>
+</tr>
+<tr>
+<td><p>S1 静默降级</p></td>
+<td><p>LLM 失败后静默回退规则引擎，用户无感知，H1 修完仍可能"看起来失败"</p></td>
+<td><p>H0 先做可观测性，加 degraded 标记和日志</p></td>
+</tr>
+<tr>
+<td><p>冷启动无密钥</p></td>
+<td><p>全新环境无 AI_API_KEY 时走 mock，topic 全空，静默降级</p></td>
+<td><p>启动时检测无密钥则打印警告，前端登录页提示配置</p></td>
+</tr>
+<tr>
+<td><p>瑞士风 SVG 三处联动</p></td>
+<td><p>page_spec / svg_renderer / export_ppt 改一处必须改两处，易出排版不一致</p></td>
+<td><p>先定参数表，三处按同一参数表读取；导出后人工对比预览与导出</p></td>
+</tr>
+<tr>
+<td><p>语音浏览器兼容</p></td>
+<td><p>Web Speech API 在 Firefox 支持不佳</p></td>
+<td><p>限定 Chrome/Edge，其他浏览器隐藏语音按钮</p></td>
+</tr>
+<tr>
+<td><p>配图图源离线</p></td>
+<td><p>Unsplash 外网图源在内网部署不可用</p></td>
+<td><p>M6 内置图库优先，Unsplash 仅兜底</p></td>
+</tr>
+<tr>
+<td><p>Go 降级路径</p></td>
+<td><p>DB/MinIO 不可用时后端走 runS1Standalone，影响 H1/H7 链路</p></td>
+<td><p>Phase 1 验证降级路径下的行为，确保不阻塞核心流程</p></td>
+</tr>
+</tbody>
+</table>

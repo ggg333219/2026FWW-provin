@@ -868,13 +868,14 @@ func (c *aiEngineClient) GenerationFinalize(ctx context.Context, req GenerationF
 // =============================================================================
 
 type GenContentRequest struct {
-	Nodes           []TeachingNodeItem `json:"nodes"`
-	ContextMarkdown string             `json:"context_markdown"`
-	CourseName      string             `json:"course_name"`
-	Mode            string             `json:"mode"`
-	Enhanced        bool               `json:"enhanced"`
-	OutlineID       string             `json:"outline_id"`
-	OutlineVersion  int                `json:"outline_version"`
+	Nodes                    []TeachingNodeItem `json:"nodes"`
+	ContextMarkdown          string             `json:"context_markdown"`
+	CourseName               string             `json:"course_name"`
+	Mode                     string             `json:"mode"`
+	Enhanced                 bool               `json:"enhanced"`
+	OutlineID                string             `json:"outline_id"`
+	OutlineVersion           int                `json:"outline_version"`
+	GenerationInstructionSet map[string]any     `json:"generation_instruction_set,omitempty"`
 	// B6: 局部重生成（mode=partial 时生效）
 	TargetNodeIDs     []string `json:"target_node_ids,omitempty"`
 	ModifyAction      string   `json:"modify_action,omitempty"`

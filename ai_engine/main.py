@@ -1,5 +1,6 @@
 from datetime import datetime
 import sys
+import inspect
 # 必须模块级导入：函数内写 `import logging` 会让 logging 成为**该函数的局部名**
 # （编译期决定），于是同一函数中更早的 logging 引用抛 UnboundLocalError 而非
 # NameError —— 那种情况下顶层的 import 也救不了，降级日志本身会把链路带崩。
@@ -709,14 +710,20 @@ async def generate_outline(req: GenOutlineRequest):
     builder = OutlineBuilder()
     try:
         if req.markdown:
+            method = builder.build_from_markdown
+            args = (req.markdown, req.course_name)
+            if "generation_instruction_set" in inspect.signature(method).parameters:
+                args += (req.generation_instruction_set,)
             result = await asyncio.to_thread(
-                builder.build_from_markdown, req.markdown, req.course_name,
-                req.generation_instruction_set,
+                method, *args,
             )
         else:
+            method = builder.build
+            args = (req.intent, req.evidence_packet)
+            if "generation_instruction_set" in inspect.signature(method).parameters:
+                args += (req.generation_instruction_set,)
             result = await asyncio.to_thread(
-                builder.build, req.intent, req.evidence_packet,
-                req.generation_instruction_set,
+                method, *args,
             )
         return result
     except Exception as e:
@@ -756,6 +763,7 @@ class GenContentRequest(BaseModel):
     enhanced: bool = False
     outline_id: str = ""
     outline_version: int = 0
+    generation_instruction_set: dict[str, Any] = Field(default_factory=dict)
     # B6: 局部重生成
     target_node_ids: list[str] = Field(default_factory=list, description="[B6] 局部重生成目标节点ID；非空时进入 partial 模式")
     modify_action: str = ""
@@ -1063,7 +1071,9 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         plan_evidence = "\n\n".join(
             part for part in (bound_evidence.strip(), (req.context_markdown or "").strip()) if part
         )
-        plans = _plan_deck_safe(req.intent, nodes, plan_evidence)
+        plans = _plan_deck_safe(
+            req.intent, nodes, plan_evidence, req.generation_instruction_set
+        )
 
         # 增强批量生成原本写在循环体内：对 N 个节点会把**整批**讲稿生成 N 次，
         # 最坏延迟与 token 费用都放大 N 倍。提到循环外只算一次；失败则退回逐节点
@@ -1072,7 +1082,8 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         if req.enhanced:
             try:
                 enhanced_scripts = generator.generate_enhanced(
-                    nodes, req.context_markdown, req.course_name
+                    nodes, req.context_markdown, req.course_name,
+                    generation_instruction_set=req.generation_instruction_set,
                 ).get("scripts", []) or []
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger(__name__).warning(
@@ -1090,7 +1101,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
 
                 node_type = str(node.get("node_type") or node.get("type") or "").strip().lower()
                 if node_type == "interactive":
-                    interactive_items = InteractiveBuilder().build_all(node)
+                    interactive_items = InteractiveBuilder().build_all(node, mode=req.mode)
                     from ai_engine.gen.export_html5 import render_interactive_html
                     merged = {
                         **node,
@@ -1114,6 +1125,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                             node, req.course_name,
                             context_markdown=req.context_markdown,
                             teaching_plan=plans.get(str(node.get("node_id") or "")),
+                            generation_instruction_context=NodeGenerator._generation_instruction_context(req.generation_instruction_set),
                         )
                     merged = {**node, **script_data}
                 else:
@@ -1121,6 +1133,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                         node, req.course_name,
                         context_markdown=req.context_markdown,
                         teaching_plan=plans.get(str(node.get("node_id") or "")),
+                        generation_instruction_context=NodeGenerator._generation_instruction_context(req.generation_instruction_set),
                     )
 
                     merged = {**node, **script_data}
@@ -1790,12 +1803,13 @@ async def gen_create(req: GenerationCreateRequest):
 
     对应 Go 端：GenerationHandler.Create → AIEngine.GenerationCreate
     """
+    instruction_outline_nodes = req.generation_instruction_set.outline_nodes
     if req.outline_id:
         if not req.outline_confirmed:
             raise HTTPException(status_code=409, detail="大纲尚未确认")
         if req.outline_version <= 0:
             raise HTTPException(status_code=409, detail="大纲版本无效")
-        if not req.outline_nodes:
+        if not req.outline_nodes and not instruction_outline_nodes:
             raise HTTPException(status_code=409, detail="已确认大纲缺少节点")
 
     task_id = f"gen_{uuid.uuid4().hex[:12]}"
@@ -1810,6 +1824,8 @@ async def gen_create(req: GenerationCreateRequest):
             intent.topic = req.title
 
     instruction_set = req.generation_instruction_set.model_dump(mode="json")
+    if not req.outline_nodes and instruction_outline_nodes:
+        req.outline_nodes = instruction_outline_nodes
     instruction_set["schema_version"] = int(instruction_set.get("schema_version") or 1)
     instruction_set["intent"] = intent.model_dump(mode="json")
     instruction_set["confirmed_evidence"] = (

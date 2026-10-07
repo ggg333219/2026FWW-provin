@@ -74,7 +74,7 @@ export const useContentStore = defineStore('content', {
      * 启动内容生成（创建任务并开始轮询）
      * 对应后端 POST /api/v1/gen/content
      */
-    async startGeneration({ nodes, context_markdown, course_name, mode, enhanced, outline_id, outline_version }) {
+    async startGeneration({ nodes, context_markdown, course_name, mode, enhanced, outline_id, outline_version, generation_instruction_set }) {
       this.error = ''
       this.status = 'pending'
       this.progress_pct = 0
@@ -90,7 +90,8 @@ export const useContentStore = defineStore('content', {
           mode: mode || 'llm',
           enhanced: enhanced || false,
           outline_id: outline_id || '',
-          outline_version: outline_version || 0
+          outline_version: outline_version || 0,
+          generation_instruction_set: generation_instruction_set || {},
         })
 
         const data = resp?.data || resp || {}

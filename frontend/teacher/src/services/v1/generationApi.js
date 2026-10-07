@@ -75,7 +75,7 @@ export const teacherGenerationApi = {
     }),
 
   /** 将当前内容、样式和证据引用固化为新的正式版本快照 */
-  finalize: ({ generation_id, nodes, course_name, summary, outline_id, outline_version, page_bindings, presentation } = {}) =>
+  finalize: ({ generation_id, nodes, course_name, summary, outline_id, outline_version, page_bindings, presentation, generation_instruction_set } = {}) =>
     requestJson('/api/v1/gen/finalize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -87,7 +87,8 @@ export const teacherGenerationApi = {
         outline_id: outline_id || '',
         outline_version: outline_version || 0,
         page_bindings: page_bindings || [],
-        presentation: presentation || {}
+        presentation: presentation || {},
+        generation_instruction_set: generation_instruction_set || {},
       })
     }),
 
@@ -190,6 +191,8 @@ export const teacherGenerationApi = {
     enhanced = false,
     outline_id = "",
     outline_version = 0,
+    outline_nodes = [],
+    generation_instruction_set = {},
   } = {}) =>
     requestJson("/api/v1/gen/content", {
       method: "POST",
@@ -202,6 +205,8 @@ export const teacherGenerationApi = {
         enhanced,
         outline_id,
         outline_version,
+        outline_nodes: outline_nodes || [],
+        generation_instruction_set: generation_instruction_set || {},
       }),
     }),
 

@@ -687,7 +687,7 @@ const selectedEvidencePacket = computed(() => {
 });
 
 function draftSnapshot() {
-  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value }, generation_instruction_set: buildGenerationInstructionSet(selectedEvidencePacket.value, generationScope.value) };
+  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, forked_from_version: outlineStore.forked_from_version, editable_after_rollback: outlineStore.forked_from_version > 0, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value }, generation_instruction_set: buildGenerationInstructionSet(selectedEvidencePacket.value, generationScope.value) };
 }
 
 function versionPageBindings() {
@@ -769,8 +769,13 @@ onMounted(async () => {
         savedDraft = readResumeDraft(projectStore.projectId) || null;
         if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
       }
-      if (savedDraft?.outline?.outline_id) {
-        if (savedDraft.outline.editable_after_rollback || route.query.from_rollback_version) {
+      const editableFork = Boolean(
+        savedDraft?.outline?.editable_after_rollback
+        || route.query.from_rollback_version
+        || route.query.editable_outline,
+      );
+      if (savedDraft?.outline && (savedDraft.outline.outline_id || savedDraft.outline.nodes?.length || editableFork)) {
+        if (editableFork) {
           outlineStore.restoreEditableSnapshot(savedDraft.outline);
         } else {
           outlineStore._applyOutlineData(savedDraft.outline);
@@ -829,6 +834,18 @@ onMounted(async () => {
       { genId: "" },
     ).catch(() => {});
   }
+  // 回滚/基于旧版本新建版本时，项目草稿、localStorage 和最新上下文可能
+  // 按不同顺序恢复。初始化末尾再次明确切换为可编辑分支，避免旧的
+  // confirmed 状态覆盖前面的 restoreEditableSnapshot。
+  const editableForkRoute = Boolean(route.query.from_rollback_version || route.query.editable_outline);
+  if (editableForkRoute && outlineStore.nodes.length) {
+    outlineStore.restoreEditableSnapshot({
+      outline_id: outlineStore.outline_id,
+      outline_version: outlineStore.outline_version || Number(route.query.base_version || 0),
+      title: outlineStore.title,
+      nodes: outlineStore.nodes,
+    });
+  }
   if (route.query.phase === "outline") currentPhase.value = "outline";
   const evidenceReady = await ensureAutomaticEvidence();
   outlineReady.value = evidenceReady || !requiresAutomaticEvidence.value;
@@ -841,6 +858,7 @@ function buildGenerationInstructionSet(evidence, mode) {
   return {
     schema_version: 1,
     intent: intentStore.intentSummary || {},
+    outline_nodes: (outlineStore.nodes || []).map((node) => ({ ...node })),
     reference_materials: (evidence?.relevant_chunks || []).map((chunk) => ({
       chunk_id: chunk.chunk_id,
       source_ref: chunk.source_ref || chunk.source?.file_name || '',
@@ -1010,6 +1028,7 @@ async function handleStartContentGeneration() {
       enhanced: false,
       outline_id: outlineStore.outline_id,
       outline_version: outlineStore.outline_version,
+      generation_instruction_set: buildGenerationInstructionSet(selectedEvidencePacket.value, "content_only"),
     });
   } catch (err) {
     handleError("启动内容生成失败: " + (err?.message || ""));
@@ -1109,6 +1128,7 @@ async function handleStartGeneration() {
       intent: intentStore.intentSummary || undefined,
       evidence_packet: evidence,
       generation_instruction_set: buildGenerationInstructionSet(evidence, generationScope.value),
+      outline_nodes: outlineStore.nodes,
     });
 
     const task = resp?.data || resp || {};
@@ -1126,7 +1146,9 @@ async function handleStartGeneration() {
     generationStore.setGenerateProgress(25, "正在生成内容");
     const status = await generationStore.waitForCoursewareGeneration(taskId, {
       intervalMs: 800,
-      maxAttempts: 300,
+      // LLM 节点生成可能超过 4 分钟；保留较长轮询窗口，避免前端
+      // 提前超时后任务虽在后端完成，页面却永远收不到结果。
+      maxAttempts: 4500,
     });
 
     // 加载生成状态（页面列表）
@@ -1157,7 +1179,35 @@ async function loadGenerationStatus() {
   try {
     const resp = await teacherV1Api.generation.getGenerationStatus(taskId);
     const data = resp?.data || resp || {};
-    generationPages.value = (Array.isArray(data.nodes) ? data.nodes : []).map((node, index) => ({
+    const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+
+    // 状态轮询既用于展示页面列表，也用于刷新/恢复 S3 编辑状态。
+    // 之前这里只更新 generationPages，导致后端已 done 但
+    // currentScriptNodes 仍为空，预览和“保存新版本”按钮都不会出现。
+    if (data.task_id) generationStore.setLastTaskId(data.task_id);
+    if (data.generation_id) generationStore.setLastGenId(data.generation_id);
+    if (['done', 'completed', 'success'].includes(data.status) && nodes.length) {
+      generationStore.setNodes(nodes);
+      generationStore.setScript(
+        nodes
+          .map((node) => node.script || node.content || node.summary || '')
+          .filter(Boolean)
+          .join('\n\n'),
+      );
+      generationStore.setGenerateProgress(100, '生成完成');
+      generationStore.setGenerating(false);
+      currentPhase.value = 'pages';
+      await generationStore.renderCoursewarePreview(
+        outlineStore.title || intentStore.intentSummary?.topic || '课件预览',
+        { genId: data.generation_id || generationStore.lastGenId, backfillNodes: true },
+      ).catch((previewError) => {
+        console.warn('[S3StudioPage] 已完成任务预览恢复失败', previewError);
+      });
+      bindEvidenceToWholeDraft();
+      projectStore.scheduleSave(draftSnapshot(), 0);
+    }
+
+    generationPages.value = nodes.map((node, index) => ({
       ...node,
       page_id: node.page_id || node.node_id || `page_${index + 1}`,
       page_order: Number(node.page_order || node.order || index + 1),

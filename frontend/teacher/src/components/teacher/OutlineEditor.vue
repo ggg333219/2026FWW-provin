@@ -299,6 +299,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useOutlineStore } from '../../stores/outlineStore'
 import OutlineRevisionDialog from './OutlineRevisionDialog.vue'
 
@@ -323,6 +324,7 @@ const props = defineProps({
 const emit = defineEmits(['confirm-complete', 'outline-created', 'error'])
 
 const outlineStore = useOutlineStore()
+const route = useRoute()
 
 const showReviseDialog = ref(false)
 const showReviseInput = ref(false)
@@ -348,7 +350,13 @@ if (props.autoRestore) {
 // 多标签页编辑或其他操作已经创建了新版本）。进入 S3 后先同步一次，
 // 避免第一次 AI 修订直接因为过期 base_version 返回 409。
 onMounted(async () => {
-  if (!outlineStore.outline_id) return
+  // 基于历史版本创建的新分支已经由 S3 页面恢复为本地 draft。
+  // 此时不能再次从后端读取原 outline，否则会把 draft 覆盖回 confirmed，
+  // 编辑器就会重新变成只读。
+  const isEditableFork = Boolean(
+    route.query.from_rollback_version || route.query.editable_outline || outlineStore.forked_from_version > 0,
+  )
+  if (!outlineStore.outline_id || isEditableFork) return
   try {
     await outlineStore.loadOutline(outlineStore.outline_id)
     outlineStore._persist()

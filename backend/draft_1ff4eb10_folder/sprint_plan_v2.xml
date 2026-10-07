@@ -1,0 +1,200 @@
+<title>AI智能课件生成系统 冲刺排期方案 v2（3人×3天）</title>
+
+<h1 seq="auto">目标与范围</h1>
+
+<p>依据技术方案工作量评估和"展示优先"原则，3 人 × 3 天不做完整系统，集中完成一条<b>真实可展示链路</b>：</p>
+
+<p><b>课程主题输入 → 生成课件内容 → 展示课件预览 → 导出 Word 教案 → 打开并验证 Word 格式 → 录制视频</b></p>
+
+<p>资源分配：Word 硬性交付 40% + 课件视觉展示 35% + 联调录制与验收 25%。</p>
+
+<h1 seq="auto">三人分工</h1>
+
+<h2 seq="auto">人员 A：Word 教案与导出交付</h2>
+
+<p><b>对应：</b>H6 + H7，优先级最高。</p>
+
+<p><b>负责：</b></p>
+<ul>
+<li>Word 教案增加三个硬性板块：教学方法、课堂活动设计、课后作业</li>
+<li>调整 Word 标题、字号、加粗、段落层级，三个板块大字号突出</li>
+<li>修复导出任务状态——确保生成成功后有 file_url，不再卡在"导出中"</li>
+<li>准备一份可重复生成的课程测试数据</li>
+</ul>
+
+<p><b>涉及模块：</b></p>
+<ul>
+<li><code>ai_engine/gen/export_doc.py</code></li>
+<li><code>backend/internal/handler/export_handler.go</code></li>
+<li><code>ai_engine/export</code></li>
+</ul>
+
+<p><b>最终成果：</b></p>
+<ul>
+<li>一个真实生成的 .docx 文件，能正常打开</li>
+<li>三个硬性板块内容存在</li>
+<li>页面格式基本符合验收要求</li>
+<li>不再出现"任务完成但一直卡在生成中"</li>
+</ul>
+
+<h2 seq="auto">人员 B：课件视觉展示与内容质量</h2>
+
+<p><b>对应：</b>M3、M4、M5，少量 L4。</p>
+
+<p><b>负责：</b></p>
+<ul>
+<li>默认生成封面页</li>
+<li>大纲节点超过阈值时自动生成目录页</li>
+<li>增加总结页</li>
+<li>PPT 正文不重复展示冗余 summary</li>
+<li>明确"内容生成"和"全流程生成"的演示含义，不让老师误解</li>
+<li>调整页面生成状态、预览入口和下载入口</li>
+<li>顺手处理 L4 html5 mock 残留</li>
+</ul>
+
+<p><b>涉及模块：</b></p>
+<ul>
+<li><code>ai_engine/gen/outline.py</code></li>
+<li><code>ai_engine/gen/page_spec.py</code></li>
+<li><code>frontend/S3StudioPage.vue</code></li>
+<li>frontend 登录页或相关入口</li>
+</ul>
+
+<p><b>最终成果：</b></p>
+<ul>
+<li>视频中有完整的封面、目录、正文、总结</li>
+<li>页面内容层级清楚</li>
+<li>生成模式不会让老师产生误解</li>
+<li>预览效果像完整课件，不是调试页面</li>
+</ul>
+
+<h2 seq="auto">人员 C：演示编排、联调与视频录制</h2>
+
+<p>不承担大规模业务开发，把 A、B 的结果包装成可展示成果。</p>
+
+<p><b>负责：</b></p>
+<ul>
+<li>准备固定演示课程（例如"初中物理：浮力"）</li>
+<li>固定输入内容、测试账号和演示顺序</li>
+<li>配置演示环境</li>
+<li>串联生成、预览、下载、打开 Word 全流程</li>
+<li>检查 PPT 和 Word 最终文件</li>
+<li>录制演示视频</li>
+<li>整理一页成果说明和已完成/未完成清单</li>
+<li>必要时添加演示模式或固定 Fixture</li>
+</ul>
+
+<p><b>最终成果：</b></p>
+<ul>
+<li>3-5 分钟演示视频</li>
+<li>一份最终生成的 Word 教案</li>
+<li>一份最终生成的 PPT</li>
+<li>一份演示步骤说明</li>
+<li>一份风险和后续事项清单</li>
+</ul>
+
+<h1 seq="auto">三天时间安排</h1>
+
+<table>
+<colgroup><col width="110"/><col width="220"/><col width="220"/><col width="220"/></colgroup>
+<thead><tr>
+<th background-color="light-gray"><p>时间</p></th>
+<th background-color="light-gray"><p>A：Word 教案与导出</p></th>
+<th background-color="light-gray"><p>B：课件视觉展示</p></th>
+<th background-color="light-gray"><p>C：联调与录制</p></th>
+</tr></thead>
+<tbody>
+<tr>
+<td><p><b>第1天 上午</b></p></td>
+<td><p>确认 Word 当前结构和导出链路</p></td>
+<td><p>确认当前课件预览和生成模式</p></td>
+<td><p>准备课程数据、账号、演示脚本</p></td>
+</tr>
+<tr>
+<td><p><b>第1天 下午</b></p></td>
+<td><p>加入三个 Word 必需板块</p></td>
+<td><p>完成封面、目录、总结页的数据结构</p></td>
+<td><p>做第一次端到端冒烟测试</p></td>
+</tr>
+<tr>
+<td><p><b>第2天 上午</b></p></td>
+<td><p>调整 Word 格式和标题层级</p></td>
+<td><p>去除 summary 冗余、完善预览入口</p></td>
+<td><p>连接真实接口，记录问题</p></td>
+</tr>
+<tr>
+<td><p><b>第2天 下午</b></p></td>
+<td><p>修复导出状态和下载链接</p></td>
+<td><p>修复页面展示、状态和下载按钮</p></td>
+<td><p>生成第一版 Word/PPT，检查结果</p></td>
+</tr>
+<tr>
+<td><p><b>第3天 上午</b></p></td>
+<td><p>修复 Word 格式问题</p></td>
+<td><p>修复视觉问题</p></td>
+<td><p>完整回归测试</p></td>
+</tr>
+<tr>
+<td><p><b>第3天 下午</b></p></td>
+<td><p>协助确认导出结果</p></td>
+<td><p>协助确认课件展示</p></td>
+<td><p>录制视频、整理交付材料</p></td>
+</tr>
+</tbody>
+</table>
+
+<h1 seq="auto">本轮明确不做的内容</h1>
+
+<p>以下项目暂时不纳入本轮，原因是涉及多模块联动或工作量超过 3 天，容易挤压 Word 硬要求和视频交付：</p>
+
+<table>
+<colgroup><col width="80"/><col width="200"/><col width="380"/></colgroup>
+<thead><tr>
+<th background-color="light-gray"><p>编号</p></th>
+<th background-color="light-gray"><p>不做项</p></th>
+<th background-color="light-gray"><p>原因</p></th>
+</tr></thead>
+<tbody>
+<tr><td><p>H0</p></td><td><p>LLM 降级日志和 degraded 体系</p></td><td><p>纯内部可观测性，不影响演示效果</p></td></tr>
+<tr><td><p>H1</p></td><td><p>三层超时统一</p></td><td><p>演示环境稳定，不需要调超时</p></td></tr>
+<tr><td><p>H2</p></td><td><p>语音输入</p></td><td><p>依赖浏览器 API，演示用文字输入即可</p></td></tr>
+<tr><td><p>H3</p></td><td><p>大纲 SSE 流式生成</p></td><td><p>跨三层改造，3 天做不完</p></td></tr>
+<tr><td><p>H4</p></td><td><p>大纲拖拽、增删、手动编辑</p></td><td><p>纯交互增强，不影响核心展示链路</p></td></tr>
+<tr><td><p>H5</p></td><td><p>PPT 疏密排版三处联动</p></td><td><p>工作量 5-6 人天，远超本轮容量</p></td></tr>
+<tr><td><p>H8</p></td><td><p>HTML5 互动页集成 PPT</p></td><td><p>跨模块，留后续迭代</p></td></tr>
+<tr><td><p>M6</p></td><td><p>PPT 图文并茂</p></td><td><p>依赖图源和多处渲染改造</p></td></tr>
+<tr><td><p>L1-L3</p></td><td><p>知识库持久化、证据筛选、逐页生成</p></td><td><p>低优先级长尾</p></td></tr>
+<tr><td><p>—</p></td><td><p>瑞士教育风专项</p></td><td><p>17-18 人天，本轮不碰</p></td></tr>
+</tbody>
+</table>
+
+<h1 seq="auto">本轮验收标准</h1>
+
+<p>三天结束时，现场或视频中应能看到：</p>
+<ol>
+<li>输入一个课程主题</li>
+<li>生成包含封面、目录、正文、总结的课件</li>
+<li>课件预览页面正常展示</li>
+<li>点击导出 Word</li>
+<li>Word 能正常打开</li>
+<li>Word 中有教学方法、课堂活动、课后作业三个板块</li>
+<li>Word 下载地址有效</li>
+<li>整个过程可以按固定脚本重复演示</li>
+</ol>
+
+<h1 seq="auto">接口冻结约定</h1>
+
+<p>为了后续补稳定性时不产生大冲突，本轮只冻结以下字段：</p>
+
+<pre lang="json"><code>{
+  "status": "success",
+  "file_url": "...",
+  "message": "...",
+  "data": {}
+}</code></pre>
+
+<p>本轮可以使用固定演示数据，但固定数据必须遵守真实接口结构。后续补充超时、重试、降级日志时，尽量只改后端内部逻辑，不改变前端展示字段。</p>
+
+<callout emoji="📌" background-color="light-blue">
+<p><b>本轮重心：</b>Word 硬性交付 40% + 课件视觉展示 35% + 联调录制与验收 25%。保留后续补稳定性和完整交互的空间。</p>
+</callout>

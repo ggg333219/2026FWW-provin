@@ -8,6 +8,7 @@ from ai_engine.core.schema import GenerationCreateRequest
 
 INSTRUCTIONS = {
     "schema_version": 1,
+    "outline_nodes": [{"node_id": "n1", "title": "排序", "summary": "排序方法"}],
     "output_requirements": {"formats": ["ppt", "docx"], "with_interactive": True},
     "presentation": {"template_id": "swiss-edu", "density": "standard"},
     "generation_mode": "full_pipeline",
@@ -77,3 +78,16 @@ def test_generation_request_keeps_scope_separate_from_page_strategy():
     assert request.generation_scope == "full_pipeline"
     assert request.generate_mode == "page_parallel"
     assert request.generation_instruction_set.page_generation_mode == "page_parallel"
+    assert request.generation_instruction_set.outline_nodes == []
+
+
+def test_generation_request_preserves_edited_outline_nodes_in_instruction_set():
+    request = GenerationCreateRequest(
+        outline_id="outline_1",
+        outline_version=2,
+        outline_confirmed=True,
+        outline_nodes=INSTRUCTIONS["outline_nodes"],
+        generation_instruction_set=INSTRUCTIONS,
+    )
+
+    assert request.generation_instruction_set.outline_nodes == INSTRUCTIONS["outline_nodes"]
