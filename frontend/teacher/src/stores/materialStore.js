@@ -98,6 +98,7 @@ export const useMaterialStore = defineStore('material', {
 
     /** RAG 检索结果 */
     ragResults: [],
+    ragTotalResults: 0,
     // ragResults[i] 结构参考：
     // {
     //   chunk_id: string,
@@ -195,6 +196,7 @@ export const useMaterialStore = defineStore('material', {
         this.chunks = []
         this.parseTasks = []
         this.ragResults = []
+        this.ragTotalResults = 0
         this.evidencePackets = []
       }
       this.activeSessionId = requestedSessionId
@@ -230,21 +232,18 @@ export const useMaterialStore = defineStore('material', {
      *   1. params.texts / params.files —— 显式传入（调用方指定）
      *   2. allChunks —— 前端 store 中已解析的切片文本（S2 解析产出）
      *
-     * 说明：AI 引擎的向量库是进程内存存储，重启后 session 关联的解析 chunks 会
-     * 丢失。这里把前端已有切片文本一并上传，保证「索引知识库」不依赖 S2 解析
-     * 会话状态，重启后也能重新灌入数据。
+     * 前端解析得到的完整切片文本一并上传，不能静默截断候选资料；生产环境由
+     * AI Engine 配置的持久化向量存储负责跨重启保留索引。
      *
      * @returns {Promise<Object|null>} 后端响应 { task_id, status, chunk_count, document_id }
      */
     async indexKnowledgeBase(params = {}) {
       this.indexing = true
       try {
-        // 前端已解析切片文本兜底（按顺序截断超长，避免单个 chunk 过大）
+        // S2 已解析的切片是当前资料的完整索引输入，不能按数量或字符数静默丢弃。
         const chunkTexts = this.allChunks
           .map((c) => (typeof c?.content === 'string' ? c.content.trim() : ''))
           .filter((t) => t.length > 0)
-          .slice(0, 200)
-          .map((t) => t.slice(0, 3000))
 
         const resp = await teacherV1Api.rag.knowledgeUpload({
           sessionId: params.sessionId || '',
@@ -263,7 +262,7 @@ export const useMaterialStore = defineStore('material', {
 
     /**
      * RAG 检索
-     * @param {Object} params { query, topK, minScore }
+     * @param {Object} params { query, topK, offset, minScore }
      * @returns {Promise<Array>} 检索结果列表
      */
     async searchRag(params = {}) {
@@ -273,14 +272,17 @@ export const useMaterialStore = defineStore('material', {
         const resp = await teacherV1Api.rag.search({
           query: params.query,
           topK: params.topK || 10,
+          offset: params.offset || 0,
           minScore: params.minScore ?? 0.6
         })
         const results = resp?.data?.results || []
+        this.ragTotalResults = Number(resp?.data?.total_results ?? results.length)
         this.setRagResults(results)
         return results
       } catch (err) {
         console.warn('RAG 检索失败', err)
         this.error = String(err?.message || err)
+        this.ragTotalResults = 0
         this.setRagResults([])
         return []
       } finally {
@@ -290,7 +292,7 @@ export const useMaterialStore = defineStore('material', {
 
     /**
      * 证据融合（KB → S3 证据包）
-     * @param {Object} params { query, context }
+     * @param {Object} params { query, context, selectedChunkIds }
      * @returns {Promise<Object|null>} EvidencePacket
      */
     async generateEvidence(params = {}) {
@@ -299,7 +301,8 @@ export const useMaterialStore = defineStore('material', {
       try {
         const resp = await teacherV1Api.rag.evidence({
           query: params.query,
-          context: params.context || {}
+          context: params.context || {},
+          selectedChunkIds: params.selectedChunkIds || []
         })
         const packet = resp?.data?.evidence_packet || null
         if (isEvidencePacketUsable(packet)) {
@@ -414,6 +417,7 @@ export const useMaterialStore = defineStore('material', {
 
     clearRagResults() {
       this.ragResults = []
+      this.ragTotalResults = 0
     },
 
     /** 保存一个证据融合包 */
@@ -457,6 +461,7 @@ export const useMaterialStore = defineStore('material', {
       this.chunks = []
       this.parseTasks = []
       this.ragResults = []
+      this.ragTotalResults = 0
       this.evidencePackets = []
       this.uploading = false
       this.loading = false

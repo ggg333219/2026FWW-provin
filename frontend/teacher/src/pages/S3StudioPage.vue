@@ -128,6 +128,9 @@
           :intent-id="intentStore.intentId"
           :intent-summary="intentStore.intentSummary"
           :evidence-packet="selectedEvidencePacket"
+          :presentation="{ template_id: templateId, palette, layout: layoutMode, font_family: fontFamily, density }"
+          generation-mode="full_pipeline"
+          :page-generation-mode="generateMode"
           :ready="outlineReady"
           :auto-restore="true"
           @confirm-complete="handleOutlineConfirmed"
@@ -314,7 +317,12 @@
                 outlineStore.outline_version
               }}</span
             >
-            <span class="gen-label" style="margin-left: 12px">生成模式</span>
+            <span class="gen-label" style="margin-left: 12px">生成范围</span>
+            <select v-model="generationScope" class="gen-mode-select">
+              <option value="content_only">仅生成内容（沿用已确认大纲）</option>
+              <option value="full_pipeline">全流程（重建大纲并生成内容）</option>
+            </select>
+            <span class="gen-label" style="margin-left: 12px">页面策略</span>
             <select v-model="generateMode" class="gen-mode-select">
               <option value="page_incremental">逐页增量生成</option>
               <option value="page_parallel">全页面并行生成</option>
@@ -605,6 +613,7 @@ const router = useRouter();
 const currentPhase = ref("outline");
 const generationMode = ref("");
 const generateMode = ref("page_incremental");
+const generationScope = ref("content_only");
 const genError = ref("");
 const generationPages = ref([]);
 const regeneratingPageId = ref("");
@@ -678,7 +687,7 @@ const selectedEvidencePacket = computed(() => {
 });
 
 function draftSnapshot() {
-  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value } };
+  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value }, generation_instruction_set: buildGenerationInstructionSet(selectedEvidencePacket.value, generationScope.value) };
 }
 
 function versionPageBindings() {
@@ -712,7 +721,9 @@ onMounted(async () => {
 	let restoredProjectOutline = false;
   // 恢复 S1 会话/意图（刷新或直接进入 S3 时 store 内存为空，
   // 不恢复会导致 sessionId 缺失 → AI 生成大纲被 "缺少 session_id" 拦截）
-  intentStore.initialize();
+  const projectId = String(route.query.project_id || projectStore.projectId || projectStore.restoreActiveId() || '');
+  projectStore.setActive(projectId);
+  intentStore.initialize(projectId);
   materialStore.activeSessionId = intentStore.sessionId || projectStore.projectId || "";
   if (typeof window !== "undefined") {
     generationMode.value =
@@ -726,7 +737,14 @@ onMounted(async () => {
   }
 
   // project_id 才是 AI 对话、草稿与版本的边界；generation_id 只是该项目的生成结果。
-  projectStore.setActive(String(route.query.project_id || projectStore.restoreActiveId() || ""));
+  const previousProjectId = projectStore.projectId || projectStore.restoreActiveId() || "";
+  projectStore.setActive(String(route.query.project_id || previousProjectId));
+  const hasProject = Boolean(projectStore.projectId);
+  if (!hasProject || previousProjectId !== projectStore.projectId) {
+    outlineStore.reset();
+    generationStore.reset();
+    contentStore.reset();
+  }
   if (projectStore.projectId) {
     // 契约 v1.0 §3.2：按 project_id 拉 /latest-generation-context 作为权威读源，
     // 一次性拿到项目 + 最新版本 + 当前所有页绑定，避免"切 PPT 不重置 AI 对话"
@@ -738,7 +756,7 @@ onMounted(async () => {
     // 刷新或直接打开 S3 时以后端草稿为准，不能只依赖页面跳转留下的本地缓存。
     await projectStore.resume(projectStore.projectId).catch(() => {});
     await projectStore.updateStep("s3_studio").catch(() => {});
-    // 后端草稿优先；只有后端没有可用草稿时才回退到统一恢复入口留下的本地缓存。
+    // 项目身份明确时只恢复服务端项目草稿，不读无项目归属的旧全局缓存。
     try {
       const backendDraft = projectStore.draft;
       let savedDraft = backendDraft;
@@ -792,17 +810,11 @@ onMounted(async () => {
       if (savedDraft?.presentation) { templateId.value = savedDraft.presentation.template_id || "default"; palette.value = savedDraft.presentation.palette || "classic"; layoutMode.value = savedDraft.presentation.layout || "balanced"; fontFamily.value = savedDraft.presentation.font_family || "system"; density.value = savedDraft.presentation.density || "comfortable"; }
     } catch {}
   }
-  // 尝试从 localStorage 恢复大纲
-  const restored = restoredProjectOutline ? true : outlineStore.restore();
-  if (!restoredProjectOutline && restored && outlineStore.session_id && intentStore.sessionId
-      && outlineStore.session_id !== intentStore.sessionId) {
-    outlineStore.reset();
-  }
-  if (!restoredGenerationNodes && restored && outlineStore.isConfirmed) {
+  if (!restoredGenerationNodes && restoredProjectOutline && outlineStore.isConfirmed) {
     currentPhase.value = "generating";
   }
   // 恢复最近生成记录
-  generationStore.restoreLastGenId();
+  if (projectStore.projectId) generationStore.restoreLastGenId();
   if (generationStore.lastGenId) {
     interactiveStore.setGenerationId(generationStore.lastGenId);
     // 项目草稿已经包含完整节点时直接使用，避免全局缓存中的旧 task_id
@@ -823,12 +835,33 @@ onMounted(async () => {
   } finally {
     initializing.value = false;
   }
-  // 恢复内容生成状态
-  const contentRestored = contentStore.restore();
-  if (contentRestored && contentStore.hasContent) {
-    currentPhase.value = "content";
-  }
 });
+
+function buildGenerationInstructionSet(evidence, mode) {
+  return {
+    schema_version: 1,
+    intent: intentStore.intentSummary || {},
+    reference_materials: (evidence?.relevant_chunks || []).map((chunk) => ({
+      chunk_id: chunk.chunk_id,
+      source_ref: chunk.source_ref || chunk.source?.file_name || '',
+      page_ref: chunk.page_ref || chunk.source?.page || null,
+    })),
+    confirmed_evidence: evidence || null,
+    output_requirements: {
+      formats: intentStore.intentSummary?.output_format || ['ppt'],
+      with_interactive: Boolean(intentStore.intentSummary?.with_interactive),
+    },
+    presentation: {
+      template_id: templateId.value,
+      palette: palette.value,
+      layout: layoutMode.value,
+      font_family: fontFamily.value,
+      density: density.value,
+    },
+    generation_mode: mode,
+    page_generation_mode: generateMode.value,
+  };
+}
 
 watch(() => [outlineStore.nodes, generationStore.currentScriptNodes, templateId.value, palette.value, layoutMode.value, fontFamily.value, density.value], () => projectStore.scheduleSave(draftSnapshot()), { deep: true });
 watch(() => generationStore.currentScriptNodes, (nodes) => {
@@ -1036,8 +1069,12 @@ async function handleModifyApplied({ allNodes = [] } = {}) {
 
 // 开始生成内容
 async function handleStartGeneration() {
-  if (!outlineStore.outline_id || !outlineStore.isConfirmed) {
+  if (generationScope.value === "content_only" && (!outlineStore.outline_id || !outlineStore.isConfirmed)) {
     handleError("请先确认大纲");
+    return;
+  }
+  if (!intentStore.sessionId || !intentStore.intentSummary) {
+    handleError("缺少有效的 S1 意图会话，请返回 S1 完成意图确认");
     return;
   }
   genError.value = "";
@@ -1046,6 +1083,18 @@ async function handleStartGeneration() {
 
   try {
     const evidence = selectedEvidencePacket.value;
+
+    if (generationScope.value === "full_pipeline") {
+      generationStore.setGenerateProgress(10, "根据当前意图与已确认资料重新生成大纲");
+      await outlineStore.createOutline({
+        session_id: intentStore.sessionId,
+        intent_id: intentStore.intentId,
+        intent: intentStore.intentSummary,
+        evidence_packet: evidence,
+        generation_instruction_set: buildGenerationInstructionSet(evidence, "full_pipeline"),
+      });
+      await outlineStore.confirmOutline();
+    }
 
     generationStore.setGenerateProgress(15, "创建生成任务");
     const resp = await teacherV1Api.generation.createGeneration({
@@ -1056,8 +1105,10 @@ async function handleStartGeneration() {
       template_id: templateId.value,
       project_id: projectStore.projectId,
       generate_mode: generateMode.value,
+      generation_scope: generationScope.value,
       intent: intentStore.intentSummary || undefined,
       evidence_packet: evidence,
+      generation_instruction_set: buildGenerationInstructionSet(evidence, generationScope.value),
     });
 
     const task = resp?.data || resp || {};
@@ -1434,6 +1485,7 @@ async function handleSaveNewVersion() {
       outline_version: outlineStore.outline_version,
       page_bindings: versionPageBindings(),
       presentation: draftSnapshot().presentation,
+      generation_instruction_set: draftSnapshot().generation_instruction_set,
     });
     const data = response?.data || response || {};
     if (data.generation_id) generationStore.setLastGenId(data.generation_id);
@@ -1450,11 +1502,13 @@ async function handleSaveNewVersion() {
         content: generationStore.currentScriptNodes,
         page_bindings: versionPageBindings(),
         style: draftSnapshot().presentation,
+        generation_instruction_set: draftSnapshot().generation_instruction_set,
       };
       const projectResponse = await projectModifyApi.createVersion(projectStore.projectId, {
         nodes: generationStore.currentScriptNodes,
         presentation: draftSnapshot().presentation,
         page_bindings: versionPageBindings(),
+        generation_instruction_set: draftSnapshot().generation_instruction_set,
         version_summary: summary,
         version_no: Math.max(baseVersion.value + 1, generationVersion || 1),
         snapshot,

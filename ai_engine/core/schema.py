@@ -352,6 +352,18 @@ class EvidencePacket(BaseModel):
     """触发此次检索的原始查询"""
 
 
+class GenerationInstructionSet(BaseModel):
+    """Immutable, versioned input contract shared by S3 generation stages."""
+    schema_version: int = 1
+    intent: IntentSummary = Field(default_factory=IntentSummary)
+    reference_materials: list[dict[str, Any]] = Field(default_factory=list)
+    confirmed_evidence: Optional[EvidencePacket] = None
+    output_requirements: dict[str, Any] = Field(default_factory=dict)
+    presentation: dict[str, Any] = Field(default_factory=dict)
+    generation_mode: str = "full_pipeline"
+    page_generation_mode: str = "page_incremental"
+
+
 class DocumentIndex(BaseModel):
     """KB 知识库文档索引记录。"""
     doc_id: str = ""
@@ -512,6 +524,7 @@ class GenerationTask(BaseModel):
     current_node: str = ""
     intent: IntentSummary = Field(default_factory=IntentSummary)
     evidence: Optional[EvidencePacket] = None
+    generation_instruction_set: GenerationInstructionSet = Field(default_factory=GenerationInstructionSet)
     template_id: str = "default"
     nodes: list[TeachingNode] = Field(default_factory=list)
     node_count: int = 0
@@ -601,6 +614,7 @@ class ExportJob(BaseModel):
 class IntentExtractRequest(BaseModel):
     """POST /api/v1/intent/extract 请求"""
     session_id: str = ""
+    request_id: str = ""
     messages: list[DialogueTurn] = Field(default_factory=list)
 
 
@@ -660,7 +674,8 @@ class ParseStatusResponse(BaseModel):
 class SearchRequest(BaseModel):
     query: str = ""
     knowledge_base_ids: list[str] = Field(default_factory=list)
-    top_k: int = 5
+    top_k: int = Field(default=5, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
     min_score: float = 0.2
     """相似度阈值，低于此分数的 chunk 不返回。默认 0.2（之前为 0.6 偏高，在 bm25
     兜底路径或弱 embedding 场景下会把所有候选过滤掉，导致 RAG 静默失效）。"""
@@ -678,12 +693,14 @@ class SearchRequest(BaseModel):
 class SearchResponse(BaseModel):
     results: list[SearchResult] = Field(default_factory=list)
     total_chunks: int = 0
+    total_results: int = 0
 
 
 class EvidenceRequest(BaseModel):
     query: str = ""
     context: dict[str, Any] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list)
+    selected_chunk_ids: list[str] = Field(default_factory=list)
 
 
 class EvidenceResponse(BaseModel):
@@ -699,12 +716,14 @@ class GenerationCreateRequest(BaseModel):
     markdown: str = ""
     intent: IntentSummary = Field(default_factory=IntentSummary)
     evidence_packet: Optional[EvidencePacket] = None
+    generation_instruction_set: GenerationInstructionSet = Field(default_factory=GenerationInstructionSet)
     template_id: str = "default"
     outline_id: str = ""
     outline_version: int = 0
     outline_confirmed: bool = False
     outline_nodes: list[dict[str, Any]] = Field(default_factory=list)
     generate_mode: str = "page_incremental"
+    generation_scope: str = "content_only"
 
 
 class GenerationCreateResponse(BaseModel):
@@ -726,6 +745,7 @@ class GenerationStatusResponse(BaseModel):
     progress_pct: float = 0.0
     current_node: str = ""
     nodes: list[TeachingNode] = Field(default_factory=list)
+    generation_instruction_set: GenerationInstructionSet = Field(default_factory=GenerationInstructionSet)
     preview_url: Optional[str] = None
     error: Optional[str] = None
     # 前端兼容字段（由后端填充）
@@ -760,6 +780,7 @@ class ExportRequest(BaseModel):
     # S4 项目版本导出时，Go 端的项目快照是权威数据源；允许直接传入
     # 当前版本节点，避免依赖 AI Engine 进程本地的旧版本目录。
     nodes: list[dict[str, Any]] = Field(default_factory=list)
+    generation_instruction_set: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExportStatusResponse(BaseModel):

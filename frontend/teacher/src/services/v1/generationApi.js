@@ -22,12 +22,14 @@ export const teacherGenerationApi = {
     markdown,
     intent,
     evidence_packet,
+    generation_instruction_set,
     template_id,
     // S3 规范 3.6 参数
     outline_id,
     outline_version,
     outline_confirmed,
     generate_mode,
+    generation_scope,
     project_id
   } = {}) =>
     requestJson("/api/v1/gen/create", {
@@ -40,6 +42,7 @@ export const teacherGenerationApi = {
         markdown: markdown || "",
         intent: intent || undefined,
         evidence_packet: evidence_packet || null,
+        generation_instruction_set: generation_instruction_set || {},
         project_id: project_id || '',
         template_id: template_id || 'default',
         // 规范 3.6：确认大纲后必须传递完整 outline 上下文
@@ -49,6 +52,7 @@ export const teacherGenerationApi = {
               outline_version,
               outline_confirmed: !!outline_confirmed,
               generate_mode: generate_mode || "page_incremental",
+              generation_scope: generation_scope || "content_only",
             }
           : {}),
       }),

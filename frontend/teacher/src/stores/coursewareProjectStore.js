@@ -18,7 +18,7 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
     error: '',
     _timer: 0,
     _lastDraft: null,
-    _pendingSave: false,
+    _saveQueue: Promise.resolve(),
   }),
   getters: {
     saveLabel: (state) => ({
@@ -34,6 +34,16 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
     },
     setActive(project) {
       const id = String(project?.id || project?.project_id || project || '')
+      if (id !== this.projectId) {
+        if (this._timer) clearTimeout(this._timer)
+        this._timer = 0
+        this.project = null
+        this.draft = null
+        this._lastDraft = null
+        this.saveState = 'idle'
+        this.savedAt = ''
+        this.error = ''
+      }
       this.projectId = id
       if (project && typeof project === 'object') this.project = project
       if (typeof window !== 'undefined' && id) window.localStorage.setItem(PROJECT_KEY, id)
@@ -60,8 +70,9 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
         if (typeof window !== 'undefined') window.localStorage.removeItem(PROJECT_KEY)
       }
     },
-    async resume(projectId) {
+    async resume(projectId, isCurrent = () => true) {
       const data = unwrap(await projectModifyApi.context(projectId))
+      if (!isCurrent()) return data
       this.setActive(data.project || { id: projectId })
       this.draft = data.draft || data.draft_json || null
       return data
@@ -79,27 +90,32 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
     },
     async saveNow(draft = this._lastDraft) {
       if (!this.projectId || !draft) return
-      this._lastDraft = draft
-      if (this.saving) {
-        this._pendingSave = true
-        this.saveState = 'dirty'
-        return
-      }
+      const projectId = this.projectId
       if (this._timer) { clearTimeout(this._timer); this._timer = 0 }
-      this.saving = true; this.saveState = 'saving'; this.error = ''
-      try {
-        const data = unwrap(await projectModifyApi.saveDraft(this.projectId, draft))
-        this.draft = draft
-        this.savedAt = data.saved_at || data.project?.updated_at || new Date().toISOString()
-        this.saveState = 'saved'
-      } catch (error) { this.error = error?.message || '草稿保存失败'; this.saveState = 'error'; throw error }
-      finally {
-        this.saving = false
-        if (this._pendingSave) {
-          this._pendingSave = false
-          await this.saveNow(this._lastDraft)
+      this._lastDraft = draft
+      const save = async () => {
+        this.saving = true
+        if (this.projectId === projectId) { this.saveState = 'saving'; this.error = '' }
+        try {
+          const data = unwrap(await projectModifyApi.saveDraft(projectId, draft))
+          if (this.projectId === projectId) {
+            this.draft = draft
+            this.savedAt = data.saved_at || data.project?.updated_at || new Date().toISOString()
+            this.saveState = 'saved'
+          }
+        } catch (error) {
+          if (this.projectId === projectId) {
+            this.error = error?.message || '草稿保存失败'
+            this.saveState = 'error'
+          }
+          throw error
+        } finally {
+          this.saving = false
         }
       }
+      const queued = this._saveQueue.catch(() => {}).then(save)
+      this._saveQueue = queued
+      return queued
     },
   },
 })

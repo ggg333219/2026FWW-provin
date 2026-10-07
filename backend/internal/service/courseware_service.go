@@ -389,19 +389,21 @@ type coursewareStore interface {
 
 // CoursewareVersionSnapshot 是模块3的完整版本边界，显式保留页面证据绑定。
 type CoursewareVersionSnapshot struct {
-	Nodes        []TeachingNodeItem `json:"nodes"`
-	Presentation map[string]string  `json:"presentation,omitempty"`
-	PageBindings interface{}        `json:"page_bindings,omitempty"`
+	Nodes                    []TeachingNodeItem `json:"nodes"`
+	Presentation             map[string]string  `json:"presentation,omitempty"`
+	PageBindings             interface{}        `json:"page_bindings,omitempty"`
+	GenerationInstructionSet map[string]any     `json:"generation_instruction_set,omitempty"`
 }
 
 // ContractVersionSnapshot is the public v1 version snapshot shape. The
 // internal nodes/presentation representation remains supported while callers
 // migrate to this canonical contract.
 type ContractVersionSnapshot struct {
-	Outline      interface{} `json:"outline"`
-	Content      interface{} `json:"content"`
-	PageBindings interface{} `json:"page_bindings"`
-	Style        interface{} `json:"style"`
+	Outline                  interface{}    `json:"outline"`
+	Content                  interface{}    `json:"content"`
+	PageBindings             interface{}    `json:"page_bindings"`
+	Style                    interface{}    `json:"style"`
+	GenerationInstructionSet map[string]any `json:"generation_instruction_set,omitempty"`
 }
 
 func NewCoursewareService(aiClient modifyClient) *CoursewareService {

@@ -1,8 +1,9 @@
 import json
 import unittest
+from unittest.mock import patch
 
 from ai_engine.core import DialogueTurn, IntentSummary, LLMClient, SessionStatus, TurnType
-from ai_engine.intent.intent_engine import IntentEngine
+from ai_engine.intent.intent_engine import IntentEngine, LLMIntentEngine
 from ai_engine.intent.service import (
     IntentNotReady,
     IntentSessionNotFound,
@@ -143,6 +144,91 @@ class IntentUnderstandingTests(unittest.TestCase):
         self.assertEqual(summary.style, "活泼")
         self.assertEqual(summary.knowledge_points, [])
         self.assertTrue(summary.with_interactive)
+
+    def test_failed_llm_engine_returns_safe_fallback_reason(self):
+        class FailedEngine:
+            @staticmethod
+            def extract_intent(_messages):
+                return {"error": "llm_call_failed", "reason": "secret-bearing provider details"}
+
+        service = IntentUnderstandingService(engine=FailedEngine())
+        with self.assertLogs("ai_engine.intent.service", level="WARNING") as captured:
+            result = service.extract_intent(
+                "session_fallback_reason",
+                [self._turn("我想讲快速排序，45分钟")],
+                request_id="req-s1-test",
+            )
+
+        self.assertTrue(result["used_fallback"])
+        self.assertEqual(result["fallback_reason"], "model_error")
+        self.assertNotIn("secret-bearing", str(result))
+        # H0 详细降级日志（含 raw_output）与安全降级日志（含 request_id、无 secret）并存：
+        # request_id 出现在 extract 的降级 WARNING 中，raw_output 只出现在详细日志里。
+        degraded_logs = [line for line in captured.output if "request_id=" in line or "req-s1-test" in line]
+        self.assertTrue(degraded_logs, "降级日志应包含 request_id 以便追踪")
+        self.assertNotIn("secret-bearing", " ".join(degraded_logs))
+
+    def test_timeout_engine_failure_has_specific_safe_category(self):
+        class TimedOutEngine:
+            @staticmethod
+            def extract_intent(_messages):
+                return {"error": "llm_call_failed", "reason": "ReadTimeout provider token=secret"}
+
+        service = IntentUnderstandingService(engine=TimedOutEngine())
+        result = service.extract_intent("session_timeout_reason", [self._turn("排序算法45分钟")])
+
+        self.assertTrue(result["used_fallback"])
+        self.assertEqual(result["fallback_reason"], "timeout")
+        self.assertNotIn("secret", str(result))
+
+    def test_connection_failure_has_specific_safe_category(self):
+        class DisconnectedEngine:
+            @staticmethod
+            def extract_intent(_messages):
+                return {"error": "llm_call_failed", "reason": "Connection refused: secret"}
+
+        service = IntentUnderstandingService(engine=DisconnectedEngine())
+        result = service.extract_intent("session_connection_reason", [self._turn("排序算法45分钟")])
+
+        self.assertEqual(result["fallback_reason"], "engine_unavailable")
+        self.assertNotIn("secret", str(result))
+
+    def test_successful_extraction_has_no_fallback_reason(self):
+        result = self.service.extract_intent("session_success_reason", [self._turn("我想讲快速排序，45分钟")])
+
+        self.assertFalse(result["used_fallback"])
+        self.assertIsNone(result["fallback_reason"])
+
+    def test_intent_llm_uses_bounded_single_attempt_client(self):
+        with patch("ai_engine.intent.intent_engine.LLMClient") as client_type, patch(
+            "ai_engine.intent.intent_engine.resolve_llm_timeout", return_value=120
+        ):
+            LLMIntentEngine()
+
+        client_type.assert_called_once()
+        self.assertEqual(client_type.call_args.kwargs["timeout"], 90)
+        self.assertEqual(client_type.call_args.kwargs["max_attempts"], 1)
+        self.assertTrue(client_type.call_args.kwargs["disable_sdk_retries"])
+
+    def test_intent_llm_respects_lower_operator_timeout(self):
+        with patch("ai_engine.intent.intent_engine.LLMClient") as client_type, patch(
+            "ai_engine.intent.intent_engine.resolve_llm_timeout", return_value=25
+        ):
+            LLMIntentEngine()
+
+        self.assertEqual(client_type.call_args.kwargs["timeout"], 25)
+
+    def test_incomplete_model_response_is_reported_as_degraded(self):
+        class IncompleteEngine:
+            @staticmethod
+            def extract_intent(_messages):
+                return {"topic": None, "duration_minutes": None}
+
+        service = IntentUnderstandingService(engine=IncompleteEngine())
+        result = service.extract_intent("session_invalid_response", [self._turn("帮我设计课件")])
+
+        self.assertTrue(result["used_fallback"])
+        self.assertEqual(result["fallback_reason"], "invalid_model_response")
 
     def test_confirm_unknown_session_raises(self):
         with self.assertRaises(IntentSessionNotFound):

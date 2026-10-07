@@ -314,7 +314,10 @@ const props = defineProps({
   /** S1 意图自动检索形成的整份课件证据包 */
   evidencePacket: { type: Object, default: null },
   /** 等待父级完成自动检索后再创建大纲，避免先生成后补证据 */
-  ready: { type: Boolean, default: true }
+  ready: { type: Boolean, default: true },
+  presentation: { type: Object, default: () => ({}) },
+  generationMode: { type: String, default: 'full_pipeline' },
+  pageGenerationMode: { type: String, default: 'page_incremental' }
 })
 
 const emit = defineEmits(['confirm-complete', 'outline-created', 'error'])
@@ -402,6 +405,23 @@ async function handleGenerateOutline() {
       intent_id: props.intentId,
       intent: props.intentSummary || {},
       evidence_packet: evidence,
+      generation_instruction_set: {
+        schema_version: 1,
+        intent: props.intentSummary || {},
+        reference_materials: (evidence?.relevant_chunks || []).map((chunk) => ({
+          chunk_id: chunk.chunk_id,
+          source_ref: chunk.source_ref || chunk.source?.file_name || '',
+          page_ref: chunk.page_ref || chunk.source?.page || null
+        })),
+        confirmed_evidence: evidence,
+        output_requirements: {
+          formats: props.intentSummary?.output_format || ['ppt'],
+          with_interactive: Boolean(props.intentSummary?.with_interactive)
+        },
+        presentation: props.presentation || {},
+        generation_mode: props.generationMode || 'full_pipeline',
+        page_generation_mode: props.pageGenerationMode || 'page_incremental'
+      },
       markdown
     })
     emit('outline-created', {

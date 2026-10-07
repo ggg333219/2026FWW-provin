@@ -26,7 +26,7 @@ func TestProjectVersionContractAndCloneRollback(t *testing.T) {
 	r.GET("/api/v1/coursewares/:project_id/versions/:version_id", h.VersionDetail)
 	r.POST("/api/v1/coursewares/:project_id/rollback", h.Rollback)
 
-	createBody := `{"version_no":1,"change_note":"首版","snapshot":{"outline":{"title":"TCP"},"content":[{"node_id":"node_tcp","title":"TCP 三次握手"}],"style":{"template_id":"forest"},"page_bindings":[{"page_id":"page_1"}]}}`
+	createBody := `{"version_no":1,"change_note":"首版","snapshot":{"outline":{"title":"TCP"},"content":[{"node_id":"node_tcp","title":"TCP 三次握手"}],"style":{"template_id":"forest"},"page_bindings":[{"page_id":"page_1"}],"generation_instruction_set":{"intent":{"topic":"TCP"},"confirmed_evidence":{"synthesized_context":"三次握手"}}}}`
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/coursewares/"+project.ProjectID+"/versions", strings.NewReader(createBody))
 	createReq.Header.Set("Content-Type", "application/json")
 	createRec := httptest.NewRecorder()
@@ -47,7 +47,7 @@ func TestProjectVersionContractAndCloneRollback(t *testing.T) {
 	detailReq := httptest.NewRequest(http.MethodGet, "/api/v1/coursewares/"+project.ProjectID+"/versions/"+versionID, nil)
 	detailRec := httptest.NewRecorder()
 	r.ServeHTTP(detailRec, detailReq)
-	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), `"change_note":"首版"`) || !strings.Contains(detailRec.Body.String(), `"snapshot"`) {
+	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), `"change_note":"首版"`) || !strings.Contains(detailRec.Body.String(), `"snapshot"`) || !strings.Contains(detailRec.Body.String(), `"generation_instruction_set"`) {
 		t.Fatalf("detail contract missing canonical snapshot: %s", detailRec.Body.String())
 	}
 

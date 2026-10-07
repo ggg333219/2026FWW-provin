@@ -13,7 +13,10 @@ import (
 	"time"
 )
 
-const outlineRequestTimeout = 120 * time.Second
+const (
+	intentExtractRequestTimeout = 120 * time.Second
+	outlineRequestTimeout       = 120 * time.Second
+)
 
 // AIEngine 定义所有向后端 AI Engine 的调用契约。
 // 旧接口继续保持向后兼容，新 Skill 接口按功能域分组。
@@ -354,23 +357,25 @@ type DialogueTurn struct {
 
 type IntentExtractRequest struct {
 	SessionID string         `json:"session_id"`
+	RequestID string         `json:"request_id,omitempty"`
 	Messages  []DialogueTurn `json:"messages,omitempty"`
 }
 
 type IntentExtractResponse struct {
-	SessionID     string         `json:"session_id"`
-	IntentSummary *IntentSummary `json:"intent_summary"`
-	SessionStatus SessionStatus  `json:"session_status"`
-	Response      string         `json:"response,omitempty"`
-	NeedFollowup  bool           `json:"need_followup"`
-	FollowupQs    []string       `json:"followup_questions,omitempty"`
-	HumanSummary  string         `json:"human_summary,omitempty"`
-	CompletionPct int            `json:"completion_pct"`
-	TurnCount     int            `json:"turn_count"`
-	MaxTurns      int            `json:"max_turns"`
-	CanConfirm    bool           `json:"can_confirm"`
-	Engine        string         `json:"engine,omitempty"`
-	UsedFallback  bool           `json:"used_fallback"`
+	SessionID      string         `json:"session_id"`
+	IntentSummary  *IntentSummary `json:"intent_summary"`
+	SessionStatus  SessionStatus  `json:"session_status"`
+	Response       string         `json:"response,omitempty"`
+	NeedFollowup   bool           `json:"need_followup"`
+	FollowupQs     []string       `json:"followup_questions,omitempty"`
+	HumanSummary   string         `json:"human_summary,omitempty"`
+	CompletionPct  int            `json:"completion_pct"`
+	TurnCount      int            `json:"turn_count"`
+	MaxTurns       int            `json:"max_turns"`
+	CanConfirm     bool           `json:"can_confirm"`
+	Engine         string         `json:"engine,omitempty"`
+	UsedFallback   bool           `json:"used_fallback"`
+	FallbackReason string         `json:"fallback_reason,omitempty"`
 }
 
 type IntentConfirmRequest struct {
@@ -439,12 +444,14 @@ type RAGSearchRequest struct {
 	Query            string   `json:"query"`
 	KnowledgeBaseIDs []string `json:"knowledge_base_ids,omitempty"`
 	TopK             int      `json:"top_k,omitempty"`
+	Offset           int      `json:"offset,omitempty"`
 	MinScore         float64  `json:"min_score,omitempty"`
 }
 
 type RAGSearchResponse struct {
-	Results     []SearchResultItem `json:"results"`
-	TotalChunks int                `json:"total_chunks"`
+	Results      []SearchResultItem `json:"results"`
+	TotalChunks  int                `json:"total_chunks"`
+	TotalResults int                `json:"total_results"`
 }
 
 type SearchResultItem struct {
@@ -459,6 +466,7 @@ type RAGEvidenceRequest struct {
 	Query            string         `json:"query"`
 	Context          map[string]any `json:"context,omitempty"`
 	KnowledgeBaseIDs []string       `json:"knowledge_base_ids,omitempty"`
+	SelectedChunkIDs []string       `json:"selected_chunk_ids,omitempty"`
 }
 
 type EvidencePacket struct {
@@ -555,12 +563,13 @@ type OutlineNode struct {
 
 // OutlineGenerateRequest —— POST /gen/outline 请求（Python GenOutlineRequest 镜像）。
 type OutlineGenerateRequest struct {
-	SessionID      string          `json:"session_id,omitempty"`
-	IntentID       string          `json:"intent_id,omitempty"`
-	Intent         *IntentSummary  `json:"intent,omitempty"`
-	EvidencePacket *EvidencePacket `json:"evidence_packet,omitempty"`
-	Markdown       string          `json:"markdown,omitempty"`
-	CourseName     string          `json:"course_name,omitempty"`
+	SessionID                string          `json:"session_id,omitempty"`
+	IntentID                 string          `json:"intent_id,omitempty"`
+	Intent                   *IntentSummary  `json:"intent,omitempty"`
+	EvidencePacket           *EvidencePacket `json:"evidence_packet,omitempty"`
+	GenerationInstructionSet map[string]any  `json:"generation_instruction_set,omitempty"`
+	Markdown                 string          `json:"markdown,omitempty"`
+	CourseName               string          `json:"course_name,omitempty"`
 }
 
 // OutlineGenerateResponse —— POST /gen/outline 响应（Python 返回裸 {"nodes": [...], "used_fallback": ...}）。
@@ -630,19 +639,21 @@ type TeachingNodeItem struct {
 }
 
 type GenerationCreateRequest struct {
-	SessionID        string          `json:"session_id"`
-	CourseID         string          `json:"course_id,omitempty"`
-	Title            string          `json:"title,omitempty"`
-	Markdown         string          `json:"markdown,omitempty"`
-	Intent           *IntentSummary  `json:"intent,omitempty"`
-	EvidencePacket   *EvidencePacket `json:"evidence_packet,omitempty"`
-	TemplateID       string          `json:"template_id,omitempty"`
-	OutlineID        string          `json:"outline_id,omitempty"`
-	OutlineVersion   int             `json:"outline_version,omitempty"`
-	OutlineConfirmed bool            `json:"outline_confirmed,omitempty"`
-	OutlineNodes     []OutlineNode   `json:"outline_nodes,omitempty"`
-	GenerateMode     string          `json:"generate_mode,omitempty"`
-	ProjectID        string          `json:"project_id,omitempty"`
+	SessionID                string          `json:"session_id"`
+	CourseID                 string          `json:"course_id,omitempty"`
+	Title                    string          `json:"title,omitempty"`
+	Markdown                 string          `json:"markdown,omitempty"`
+	Intent                   *IntentSummary  `json:"intent,omitempty"`
+	EvidencePacket           *EvidencePacket `json:"evidence_packet,omitempty"`
+	GenerationInstructionSet map[string]any  `json:"generation_instruction_set,omitempty"`
+	TemplateID               string          `json:"template_id,omitempty"`
+	OutlineID                string          `json:"outline_id,omitempty"`
+	OutlineVersion           int             `json:"outline_version,omitempty"`
+	OutlineConfirmed         bool            `json:"outline_confirmed,omitempty"`
+	OutlineNodes             []OutlineNode   `json:"outline_nodes,omitempty"`
+	GenerateMode             string          `json:"generate_mode,omitempty"`
+	GenerationScope          string          `json:"generation_scope,omitempty"`
+	ProjectID                string          `json:"project_id,omitempty"`
 }
 
 type GenerationCreateResponse struct {
@@ -659,17 +670,18 @@ type GenerationCreateResponse struct {
 // 进度 canonical 为 ProgressPct（0~100 百分制，前端 generationStore 优先读它）；
 // Progress 为引擎历史遗留的 0~1 小数副本，仅作前端兼容保留，禁止新逻辑读写。
 type GenerationStatusResponse struct {
-	TaskID         string             `json:"task_id"`
-	GenerationID   string             `json:"generation_id,omitempty"`
-	OutlineID      string             `json:"outline_id,omitempty"`
-	OutlineVersion int                `json:"outline_version,omitempty"`
-	Status         string             `json:"status"`
-	Stage          string             `json:"stage,omitempty"`
-	ProgressPct    float64            `json:"progress_pct"`
-	CurrentNode    string             `json:"current_node,omitempty"`
-	Nodes          []TeachingNodeItem `json:"nodes,omitempty"`
-	PreviewURL     string             `json:"preview_url,omitempty"`
-	Error          string             `json:"error,omitempty"` // 失败原因纯文本（结构化 error_code/message 属 P1，暂不引入）
+	TaskID                   string             `json:"task_id"`
+	GenerationID             string             `json:"generation_id,omitempty"`
+	OutlineID                string             `json:"outline_id,omitempty"`
+	OutlineVersion           int                `json:"outline_version,omitempty"`
+	Status                   string             `json:"status"`
+	Stage                    string             `json:"stage,omitempty"`
+	ProgressPct              float64            `json:"progress_pct"`
+	CurrentNode              string             `json:"current_node,omitempty"`
+	Nodes                    []TeachingNodeItem `json:"nodes,omitempty"`
+	GenerationInstructionSet map[string]any     `json:"generation_instruction_set,omitempty"`
+	PreviewURL               string             `json:"preview_url,omitempty"`
+	Error                    string             `json:"error,omitempty"` // 失败原因纯文本（结构化 error_code/message 属 P1，暂不引入）
 	// 引擎侧前端兼容字段（progress 为 0~1 小数、stage_text 为阶段文案），透传给前端。
 	Progress  float64 `json:"progress,omitempty"`
 	StageText string  `json:"stage_text,omitempty"`
@@ -742,6 +754,7 @@ type VersionSnapshot struct {
 	NodesSnapshot []TeachingNodeItem `json:"nodes_snapshot,omitempty"`
 	PageBindings  []map[string]any   `json:"page_bindings,omitempty"`
 	Presentation  map[string]any     `json:"presentation,omitempty"`
+	Metadata      map[string]any     `json:"metadata,omitempty"`
 	Summary       string             `json:"summary,omitempty"`
 	Locked        bool               `json:"locked"`
 	CreatedAt     string             `json:"created_at"`
@@ -770,12 +783,13 @@ type VersionLockResponse struct {
 }
 
 type ExportCreateRequest struct {
-	Format          string             `json:"format"`
-	Version         int                `json:"version"`
-	VersionID       string             `json:"version_id,omitempty"`
-	Formats         []string           `json:"formats,omitempty"`
-	CoursewareTitle string             `json:"courseware_title,omitempty"`
-	Nodes           []TeachingNodeItem `json:"nodes,omitempty"`
+	Format                   string             `json:"format"`
+	Version                  int                `json:"version"`
+	VersionID                string             `json:"version_id,omitempty"`
+	Formats                  []string           `json:"formats,omitempty"`
+	CoursewareTitle          string             `json:"courseware_title,omitempty"`
+	Nodes                    []TeachingNodeItem `json:"nodes,omitempty"`
+	GenerationInstructionSet map[string]any     `json:"generation_instruction_set,omitempty"`
 }
 
 type ExportCreateResponse struct {
@@ -824,14 +838,15 @@ type ExportQualityReport struct {
 // =============================================================================
 
 type GenerationFinalizeRequest struct {
-	GenerationID   string             `json:"generation_id,omitempty"`
-	Nodes          []TeachingNodeItem `json:"nodes"`
-	CourseName     string             `json:"course_name,omitempty"`
-	Summary        string             `json:"summary,omitempty"`
-	OutlineID      string             `json:"outline_id,omitempty"`
-	OutlineVersion int                `json:"outline_version,omitempty"`
-	PageBindings   []map[string]any   `json:"page_bindings,omitempty"`
-	Presentation   map[string]any     `json:"presentation,omitempty"`
+	GenerationID             string             `json:"generation_id,omitempty"`
+	Nodes                    []TeachingNodeItem `json:"nodes"`
+	CourseName               string             `json:"course_name,omitempty"`
+	Summary                  string             `json:"summary,omitempty"`
+	OutlineID                string             `json:"outline_id,omitempty"`
+	OutlineVersion           int                `json:"outline_version,omitempty"`
+	PageBindings             []map[string]any   `json:"page_bindings,omitempty"`
+	Presentation             map[string]any     `json:"presentation,omitempty"`
+	GenerationInstructionSet map[string]any     `json:"generation_instruction_set,omitempty"`
 }
 
 type GenerationFinalizeResponse struct {
@@ -1068,7 +1083,7 @@ func (c *aiEngineClient) ParseKnowledge(ctx context.Context, req ParseKnowledgeR
 
 func (c *aiEngineClient) IntentExtract(ctx context.Context, req IntentExtractRequest) (*IntentExtractResponse, error) {
 	var result IntentExtractResponse
-	if err := c.postJSON(ctx, "/api/v1/intent/extract", req, &result); err != nil {
+	if err := c.postJSONWithTimeout(ctx, "/api/v1/intent/extract", req, &result, intentExtractRequestTimeout); err != nil {
 		return nil, err
 	}
 	return &result, nil

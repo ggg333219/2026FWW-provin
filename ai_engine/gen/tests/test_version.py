@@ -82,6 +82,22 @@ class TestVersionManagerIsolation(unittest.TestCase):
         v = self.vm.save_snapshot(gen_id, nodes, metadata=meta)
         self.assertEqual(v.metadata.get("author"), "test")
 
+    def test_new_version_inherits_immutable_generation_instruction_snapshot(self):
+        gen_id = _test_gen_id("instruction_snapshot")
+        instruction_set = {"schema_version": 1, "intent": {"topic": "原主题"}}
+        self.vm.save_snapshot(
+            gen_id,
+            [{"node_id": "n1", "title": "初始页"}],
+            metadata={"generation_instruction_set": instruction_set},
+            presentation={"template_id": "swiss-edu"},
+        )
+
+        instruction_set["intent"]["topic"] = "外部篡改"
+        next_version = self.vm.save_snapshot(gen_id, [{"node_id": "n1", "title": "修改页"}])
+
+        self.assertEqual(next_version.metadata["generation_instruction_set"]["intent"]["topic"], "原主题")
+        self.assertEqual(next_version.presentation["template_id"], "swiss-edu")
+
     def test_save_snapshot_empty_nodes(self):
         """空节点列表应当也能保存"""
         gen_id = _test_gen_id("save_empty")

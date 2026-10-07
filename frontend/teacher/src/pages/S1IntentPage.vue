@@ -9,16 +9,24 @@
         <div class="page-header-right">
           <div class="step-pills">
             <span class="pill active">S1 意图</span>
-            <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="pill">资料上传（可选）</router-link>
-            <router-link :to="{ name: 'S3Studio', query: { project_id: projectStore.projectId } }" class="pill">S3 生成</router-link>
-            <router-link :to="{ name: 'S4Version', query: { project_id: projectStore.projectId } }" class="pill">S4 版本</router-link>
+            <router-link v-if="activationReady" :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="pill">资料上传（可选）</router-link>
+            <span v-else class="pill pill-disabled" aria-disabled="true">资料上传（可选）</span>
+            <router-link v-if="activationReady" :to="{ name: 'S3Studio', query: { project_id: projectStore.projectId } }" class="pill">S3 生成</router-link>
+            <span v-else class="pill pill-disabled" aria-disabled="true">S3 生成</span>
+            <router-link v-if="activationReady" :to="{ name: 'S4Version', query: { project_id: projectStore.projectId } }" class="pill">S4 版本</router-link>
+            <span v-else class="pill pill-disabled" aria-disabled="true">S4 版本</span>
             <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
           </div>
         </div>
       </div>
-      <TeacherIntentPanel />
+      <p v-if="activationError" class="activation-error" role="alert">{{ activationError }}</p>
+      <div v-if="!activationReady" class="activation-loading" role="status">
+        <span>{{ activationError || '正在恢复课件意图…' }}</span>
+        <button v-if="activationError" type="button" @click="activateProject(String(route.query.project_id || projectStore.projectId || ''))">重试加载</button>
+      </div>
+      <TeacherIntentPanel v-else :defer-initialize="true" />
       <!-- 主流程：S1 → S3；资料上传保留为可选入口 -->
-      <div class="next-step-bar">
+      <div v-if="activationReady" class="next-step-bar">
         <router-link :to="{ name: 'S3Studio', query: { project_id: projectStore.projectId, auto_evidence: '1' } }" class="next-step-btn">
           下一步：自动检索并生成课件 →
         </router-link>
@@ -28,17 +36,21 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, watch } from 'vue'
-import { onBeforeRouteLeave, useRoute } from 'vue-router'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import AppShell from '../components/layout/AppShell.vue'
 import TeacherIntentPanel from '../components/teacher/TeacherIntentPanel.vue'
-import { useIntentStore } from '../stores/intentStore'
+import { intentStorageKey, useIntentStore } from '../stores/intentStore'
 import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
 
-const INTENT_HANDOFF_KEY = 'fuww_intent_parsed'
 const intentStore = useIntentStore()
 const projectStore = useCoursewareProjectStore()
 const route = useRoute()
+const router = useRouter()
+const activationError = ref('')
+const activationReady = ref(false)
+let activationEpoch = 0
+const handoffKey = () => intentStorageKey('fuww_intent_parsed', intentStore.projectId || route.query.project_id || projectStore.projectId)
 const intentDraft = () => ({
   ...(projectStore.draft || {}),
   intent: intentStore.intentSummary,
@@ -50,14 +62,48 @@ const intentDraft = () => ({
   },
 })
 
+const activateProject = async (projectId) => {
+  const epoch = ++activationEpoch
+  activationReady.value = false
+  activationError.value = ''
+  const currentProjectId = projectStore.projectId || projectStore.restoreActiveId() || ''
+  if (currentProjectId && currentProjectId !== projectId) {
+    try {
+      await projectStore.saveNow(intentDraft())
+    } catch {
+      if (epoch === activationEpoch) {
+        activationError.value = '当前课件草稿保存失败，已取消切换。请检查网络后重试。'
+        activationReady.value = true
+        await router.replace({ name: 'S1Intent', query: { project_id: currentProjectId } })
+      }
+      return
+    }
+    if (epoch !== activationEpoch) return
+  }
+  projectStore.setActive(projectId)
+  if (projectId && !projectStore.draft) {
+    try {
+      await projectStore.resume(projectId, () => epoch === activationEpoch && String(route.query.project_id || projectStore.projectId || '') === projectId)
+    } catch {
+      if (epoch === activationEpoch) activationError.value = '课件恢复失败，已暂停编辑以避免覆盖已有草稿。请检查网络后重试。'
+      return
+    }
+    if (epoch !== activationEpoch) return
+  }
+  intentStore.initialize(projectId)
+  activationReady.value = true
+}
 onMounted(async () => {
   const projectId = String(route.query.project_id || projectStore.restoreActiveId() || '')
-  projectStore.setActive(projectId)
-  if (projectId && !projectStore.draft) await projectStore.resume(projectId).catch(() => {})
-  await projectStore.updateStep('s1_intent').catch(() => {})
+  await activateProject(projectId)
+  if (activationReady.value) await projectStore.updateStep('s1_intent').catch(() => {})
 })
-onBeforeUnmount(() => projectStore.saveNow(intentDraft()).catch(() => {}))
-onBeforeRouteLeave(async () => { await projectStore.saveNow(intentDraft()).catch(() => {}) })
+watch(() => route.query.project_id, (value) => {
+  const projectId = String(value || '')
+  if (projectId && projectId !== projectStore.projectId) void activateProject(projectId)
+})
+onBeforeUnmount(() => { if (activationReady.value) projectStore.saveNow(intentDraft()).catch(() => {}) })
+onBeforeRouteLeave(async () => { if (activationReady.value) await projectStore.saveNow(intentDraft()).catch(() => {}) })
 
 /**
  * S1 → S3 的冻结交接契约（S2 资料上传为可选补充入口）。
@@ -73,7 +119,7 @@ const persistConfirmedIntent = (summary, status, intentId) => {
     // “重新开始”会生成新 session 并清空摘要；同步清理旧交接，避免 S2 误用上一次意图。
     if (intentStore.sessionId && status === 'collecting' && !summary) {
       try {
-        window.localStorage.removeItem(INTENT_HANDOFF_KEY)
+        window.localStorage.removeItem(handoffKey())
       } catch {
         // localStorage 不可用时不阻塞 S1 初始化。
       }
@@ -97,8 +143,8 @@ const persistConfirmedIntent = (summary, status, intentId) => {
 
   try {
     const serialized = JSON.stringify(payload)
-    if (window.localStorage.getItem(INTENT_HANDOFF_KEY) !== serialized) {
-      window.localStorage.setItem(INTENT_HANDOFF_KEY, serialized)
+    if (window.localStorage.getItem(handoffKey()) !== serialized) {
+      window.localStorage.setItem(handoffKey(), serialized)
     }
   } catch {
     // localStorage 不可用时不阻塞确认与页面跳转主流程。
@@ -113,12 +159,16 @@ watch(
 
 watch(
   () => [intentStore.intentSummary, intentStore.messages, intentStore.sessionStatus, intentStore.intentId],
-  () => projectStore.scheduleSave(intentDraft()),
+  () => { if (activationReady.value) projectStore.scheduleSave(intentDraft()) },
   { deep: true }
 )
 </script>
 
 <style scoped>
+.activation-error { margin: 0 0 14px; padding: 10px 12px; border: 1px solid #f2b7b7; border-radius: 6px; color: #a52b2b; background: #fff5f5; }
+.activation-loading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 120px; padding: 20px; border: 1px solid #dce9e3; border-radius: 8px; color: #607a71; background: #fff; }
+.activation-loading button { padding: 8px 12px; border: 1px solid #c8ded4; border-radius: 6px; color: #244f49; background: #f5faf7; cursor: pointer; }
+.pill-disabled { opacity: .55; cursor: not-allowed; }
 .s1-page {
   --ink: #18231f;
   --muted: #718078;

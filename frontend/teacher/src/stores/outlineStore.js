@@ -153,7 +153,7 @@ export const useOutlineStore = defineStore('outline', {
      * 创建新大纲（调用 AI 生成初始节点树）
      * 对应规范 3.1 POST /api/v1/outlines
      */
-    async createOutline({ session_id, intent_id, intent, evidence_packet, markdown }) {
+    async createOutline({ session_id, intent_id, intent, evidence_packet, markdown, generation_instruction_set }) {
       this.loading = true
       this.error = ''
       try {
@@ -162,6 +162,7 @@ export const useOutlineStore = defineStore('outline', {
           intent_id,
           intent,
           evidence_packet,
+          generation_instruction_set,
           markdown
         })
         const data = resp?.data || resp || {}

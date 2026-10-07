@@ -42,12 +42,12 @@ from ai_engine.gen.patch import NodePatcher
 from ai_engine.gen.interactive import InteractiveBuilder
 from ai_engine.intent.router import router as intent_router
 # RAG 内联调用支持（S2→KB 证据自动注入 S3 管线）
-from ai_engine.rag.router import _get_retriever, _reranker, _synthesizer
 from ai_engine.core.config import settings
 from ai_engine.core.schema import (
     GenerationCreateRequest, GenerationCreateResponse,
     GenerationStatusResponse, GenerationStatus, GenerationStage,
     GenerationTask, TeachingNode, IntentSummary,
+    GenerationInstructionSet,
     ExportRequest, ExportFormat,
     ExportStatusResponse, ExportStatus, ExportJob,
     ExportQualityReport,
@@ -626,6 +626,7 @@ class GenOutlineRequest(BaseModel):
     """构建大纲请求"""
     intent: dict[str, Any] = Field(default_factory=dict)
     evidence_packet: dict[str, Any] | None = None
+    generation_instruction_set: dict[str, Any] = Field(default_factory=dict)
     markdown: str | None = None
     course_name: str | None = None
 
@@ -708,9 +709,15 @@ async def generate_outline(req: GenOutlineRequest):
     builder = OutlineBuilder()
     try:
         if req.markdown:
-            result = await asyncio.to_thread(builder.build_from_markdown, req.markdown, req.course_name)
+            result = await asyncio.to_thread(
+                builder.build_from_markdown, req.markdown, req.course_name,
+                req.generation_instruction_set,
+            )
         else:
-            result = await asyncio.to_thread(builder.build, req.intent, req.evidence_packet)
+            result = await asyncio.to_thread(
+                builder.build, req.intent, req.evidence_packet,
+                req.generation_instruction_set,
+            )
         return result
     except Exception as e:
         raise _llm_endpoint_error(e, "大纲构建失败")
@@ -864,7 +871,12 @@ async def generate_content(req: GenContentRequest):
     )
 
 
-def _plan_deck_safe(intent: Any, nodes: list[dict], evidence: str) -> dict[str, dict]:
+def _plan_deck_safe(
+    intent: Any,
+    nodes: list[dict],
+    evidence: str,
+    generation_instruction_set: dict[str, Any] | None = None,
+) -> dict[str, dict]:
     """规划整份课件的教学表达；任何失败都退回「没有规划」，绝不拖垮内容生成。
 
     规划是**加分项**：拿不到 plan 时，节点上就没有 teaching_plan / figure /
@@ -872,7 +884,10 @@ def _plan_deck_safe(intent: Any, nodes: list[dict], evidence: str) -> dict[str, 
     """
     try:
         from ai_engine.gen.teaching_plan import plan_deck
-        return plan_deck(intent, nodes, evidence=evidence)
+        return plan_deck(
+            intent, nodes, evidence=evidence,
+            generation_instruction_set=generation_instruction_set,
+        )
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).warning(
             "[Content Pipeline] 教学表达规划失败，本批不挂规划：%s", exc
@@ -1266,6 +1281,7 @@ class GenFinalizeRequest(BaseModel):
     outline_version: int = 0
     page_bindings: list[dict[str, Any]] = Field(default_factory=list)
     presentation: dict[str, Any] = Field(default_factory=dict)
+    generation_instruction_set: dict[str, Any] = Field(default_factory=dict)
 
 
 class GenFinalizeResponse(BaseModel):
@@ -1324,6 +1340,7 @@ async def gen_finalize(req: GenFinalizeRequest):
         metadata={
             "outline_id": req.outline_id,
             "outline_version": req.outline_version,
+            "generation_instruction_set": req.generation_instruction_set,
         },
         page_bindings=req.page_bindings,
         presentation=req.presentation,
@@ -1792,6 +1809,24 @@ async def gen_create(req: GenerationCreateRequest):
         if not intent.topic and req.title:
             intent.topic = req.title
 
+    instruction_set = req.generation_instruction_set.model_dump(mode="json")
+    instruction_set["schema_version"] = int(instruction_set.get("schema_version") or 1)
+    instruction_set["intent"] = intent.model_dump(mode="json")
+    instruction_set["confirmed_evidence"] = (
+        req.evidence_packet.model_dump(mode="json") if req.evidence_packet else None
+    )
+    instruction_set.setdefault("reference_materials", [])
+    if not instruction_set.get("output_requirements"):
+        instruction_set["output_requirements"] = {
+            "formats": intent.output_format or ["ppt"],
+            "with_interactive": intent.with_interactive,
+        }
+    if not instruction_set.get("presentation"):
+        instruction_set["presentation"] = {"template_id": req.template_id}
+    instruction_set["generation_mode"] = req.generation_scope or instruction_set.get("generation_mode") or "content_only"
+    instruction_set["page_generation_mode"] = req.generate_mode or instruction_set.get("page_generation_mode") or "page_incremental"
+    req.generation_instruction_set = GenerationInstructionSet.model_validate(instruction_set)
+
     task = GenerationTask(
         task_id=task_id,
         session_id=req.session_id or req.course_id,
@@ -1803,6 +1838,7 @@ async def gen_create(req: GenerationCreateRequest):
         progress_pct=0.0,
         intent=intent,
         evidence=req.evidence_packet,
+        generation_instruction_set=req.generation_instruction_set,
         template_id=req.template_id,
         nodes=[],
         created_at=datetime.now(),
@@ -1871,33 +1907,10 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         evidence_dict = None
         if req.evidence_packet:
             evidence_dict = req.evidence_packet.model_dump() if hasattr(req.evidence_packet, "model_dump") else req.evidence_packet
-        elif req.session_id:
-            # 自动从 RAG 获取证据：检索 session 对应的已解析 chunks
-            try:
-                retriever = _get_retriever()
-                candidates = retriever.search(
-                    query=req.intent.topic or "",
-                    top_k=20,
-                    min_score=0.3,
-                    knowledge_base_ids=None,
-                )
-                if candidates:
-                    reranked = _reranker.rerank(
-                        query=req.intent.topic or "",
-                        candidates=candidates,
-                        top_k=5,
-                    )
-                    synthesized = _synthesizer.synthesize_to_response(
-                        search_results=reranked,
-                        query=req.intent.topic or "",
-                        context={},
-                    )
-                    evidence_dict = synthesized.model_dump() if hasattr(synthesized, "model_dump") else dict(synthesized)
-            except Exception as e:
-                logging.getLogger(__name__).warning(
-                    "[S3 Evidence] 自动证据获取失败，改为无证据生成: session_id=%s, error=%s",
-                    req.session_id, str(e)
-                )
+        instruction_set = task.generation_instruction_set.model_dump(mode="json")
+        instruction_set["confirmed_evidence"] = evidence_dict
+        task.generation_instruction_set = GenerationInstructionSet.model_validate(instruction_set)
+        _persist_task_sync(task)
 
         # Stage 3: 构建大纲
         task.stage = GenerationStage.STRUCTURING
@@ -1919,10 +1932,12 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             # 兼容旧调用：未携带 outline_id 时仍执行原有一键生成流程。
             builder = OutlineBuilder()
             if req.markdown:
-                outline = builder.build_from_markdown(req.markdown, req.intent.topic or "课件")
+                outline = builder.build_from_markdown(
+                    req.markdown, req.intent.topic or "课件", instruction_set
+                )
             else:
                 intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
-                outline = builder.build(intent_dict, evidence_dict)
+                outline = builder.build(intent_dict, evidence_dict, instruction_set)
             nodes = outline.get("nodes", [])
         # Outline responses may use the legacy Go-facing `content` type. The
         # generation pipeline must validate only the internal TeachingNode
@@ -1939,7 +1954,9 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         # 这是老师端真正在走的链路（/api/v1/gen/create），与 /gen/content 那条链路共用
         # 同一套规划器。规划结果不在这里落盘，而是随写稿结果一起经 _attach_teaching_plan
         # 挂到节点上（见下方合并段）—— 表达决策只发生一次，不让模型复述。
-        plans = _plan_deck_safe(req.intent, nodes, _evidence_brief(evidence_dict))
+        plans = _plan_deck_safe(
+            req.intent, nodes, _evidence_brief(evidence_dict), instruction_set
+        )
 
         # Stage 4: 讲稿生成（增强版）
         # 有 markdown 时用 LessonGenerator（已验证 LLM 路径正确），无 markdown 时降级为 NodeGenerator
@@ -1948,6 +1965,13 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         course_name = req.intent.topic or "课件"
         if req.markdown:
             lesson_gen = LessonGenerator(GenerationConfig(mode="llm"))
+            markdown_context = req.markdown
+            evidence_brief = _evidence_brief(evidence_dict)
+            if evidence_brief:
+                markdown_context += f"\n\n## 已确认参考资料\n{evidence_brief}"
+            instruction_context = NodeGenerator._generation_instruction_context(instruction_set)
+            if instruction_context:
+                markdown_context += f"\n\n## 本次统一生成指令\n{instruction_context}"
 
             def _stage_progress_cb(pct: float, message: str = "") -> None:
                 # Stage3 分块并行的 worker 线程会并发回调本函数：
@@ -1963,7 +1987,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
                     pass
 
             result = lesson_gen.generate_from_markdown_enhanced(
-                req.markdown, course_name, progress_cb=_stage_progress_cb,
+                markdown_context, course_name, progress_cb=_stage_progress_cb,
                 preset_nodes=nodes,
             )
             scripts_list = result.get("scripts", [])
@@ -1971,7 +1995,10 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             scripts_dict = {"scripts": scripts_list}
         else:
             generator = NodeGenerator()
-            scripts_dict = generator.generate_all(nodes, "", course_name, plans=plans)
+            scripts_dict = generator.generate_all(
+                nodes, _evidence_brief(evidence_dict), course_name, plans=plans,
+                generation_instruction_set=instruction_set,
+            )
             scripts_list = scripts_dict.get("scripts", [])
             node_ids = {n["node_id"] for n in nodes}
         task.progress_pct = 80.0
@@ -2019,6 +2046,7 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
                 # 否则「改一页」这条路径上的规划看不见教学主题/风格/对象，
                 # 与整份课件的意图脱节。见 modify_nodes 里的 intent 取数。
                 "intent": req.intent.model_dump(),
+                "generation_instruction_set": instruction_set,
             },
         )
 
@@ -2089,6 +2117,7 @@ async def gen_status(task_id: str):
         stage_text=stage_map.get(task.stage.value if hasattr(task.stage, 'value') else str(task.stage or ""), ""),
         current_node=task.current_node or "",
         nodes=task.nodes,
+        generation_instruction_set=task.generation_instruction_set,
         preview_url=None,
         error=task.error,
     )
@@ -2189,6 +2218,7 @@ async def export_create(gen_id: str, req: ExportRequest):
     if req.nodes:
         nodes = req.nodes
         selected_version = requested_version if requested_version > 0 else 1
+        snapshot = None
     else:
         # 兼容旧调用：按 generation_id 从 AI Engine 版本存储加载。
         vm = get_version_manager()
@@ -2197,6 +2227,7 @@ async def export_create(gen_id: str, req: ExportRequest):
             raise HTTPException(status_code=404, detail="版本不存在")
         nodes = selected.nodes_snapshot
         selected_version = selected.version_number
+        snapshot = selected
     courseware_title = (req.courseware_title or "课件").strip() or "课件"
 
     # 创建导出任务
@@ -2219,20 +2250,27 @@ async def export_create(gen_id: str, req: ExportRequest):
     await _persist_export_job(job)
 
     # 教案导出（lesson_plan）需要意图摘要补充课时/授课对象等，从内存生成任务查找（找不到则 fallback 全靠节点）
-    intent_dict = None
+    instruction_set = req.generation_instruction_set or {}
+    if not instruction_set and snapshot is not None:
+        instruction_set = (snapshot.metadata or {}).get("generation_instruction_set") or {}
+    intent_dict = instruction_set.get("intent") if isinstance(instruction_set, dict) else None
     with _gen_tasks_lock:
         for _task in _gen_tasks.values():
             if _task.generation_id == gen_id:
-                intent_dict = (
+                task_intent = (
                     _task.intent.model_dump()
                     if hasattr(_task.intent, "model_dump") else dict(_task.intent)
                 )
+                intent_dict = intent_dict or task_intent
+                if not instruction_set:
+                    instruction_set = _task.generation_instruction_set.model_dump(mode="json")
                 break
 
     # 后台执行导出
     asyncio.create_task(
         _run_export(
             job_id, nodes, req.format, intent=intent_dict,
+            generation_instruction_set=instruction_set,
             courseware_title=courseware_title, version=selected_version,
         )
     )
@@ -2251,6 +2289,7 @@ async def export_create(gen_id: str, req: ExportRequest):
 
 async def _run_export(
     job_id: str, nodes: list[dict], fmt: ExportFormat, intent: dict | None = None,
+    generation_instruction_set: dict[str, Any] | None = None,
     courseware_title: str = "课件", version: int = 1,
 ):
     """后台导出任务"""
@@ -2272,9 +2311,11 @@ async def _run_export(
 
         # Word 标准教案（A12 赛题 4b）：LLM 生成 + 确定性 fallback，导出永不空。
         # 产物存 doc_path（.docx），复用既有上传/下载链路，无需改动 upload 循环。
-        if fmt == ExportFormat.LESSON_PLAN:
+        if fmt in (ExportFormat.LESSON_PLAN, ExportFormat.DOCX, ExportFormat.BOTH):
             generator = LessonPlanGenerator()
-            plan = await asyncio.to_thread(generator.generate, nodes, intent or {}, None)
+            plan = await asyncio.to_thread(
+                generator.generate, nodes, intent or {}, None, generation_instruction_set or {},
+            )
             exporter = LessonPlanDOCExporter()
             buf = exporter.export_to_bytes(plan)
             doc_path = export_dir / f"{job_id}.docx"
@@ -2314,15 +2355,6 @@ async def _run_export(
                         _export_tasks[job_id] = job
                     await _persist_export_job(job)
                     return
-
-        if fmt in (ExportFormat.BOTH, ExportFormat.DOCX):
-            exporter = DOCExporter()
-            buf = exporter.export_to_bytes(nodes, course_name)
-            doc_path = export_dir / f"{job_id}.docx"
-            doc_path.write_bytes(buf.getvalue())
-            job.metadata = job.metadata or {}
-            job.metadata["doc_path"] = str(doc_path)
-            job.file_size = doc_path.stat().st_size
 
         # HTML5 互动小游戏（A12 赛题 4c/5c）：both/interactive 模式下随 pptx/docx 一起产出
         if fmt in (ExportFormat.BOTH, ExportFormat.INTERACTIVE):

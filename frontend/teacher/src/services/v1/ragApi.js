@@ -18,7 +18,9 @@ export const teacherRagApi = {
    * @param {Object} params
    * @param {string} params.query - 检索关键词
    * @param {string[]} params.knowledgeBaseIds - 限定知识库（可选）
+   * @param {string[]} params.selectedChunkIds - 教师明确确认的候选切片
    * @param {number} params.topK - 返回结果数
+   * @param {number} params.offset - 分页偏移
    * @param {number} params.minScore - 相似度阈值
    * @returns {Promise<Object>} { code, data: { results, total_chunks } }
    */
@@ -30,6 +32,7 @@ export const teacherRagApi = {
         query: params.query || '',
         knowledge_base_ids: params.knowledgeBaseIds || [],
         top_k: params.topK || 10,
+        offset: params.offset || 0,
         min_score: params.minScore ?? 0.6
       })
     }),
@@ -52,7 +55,8 @@ export const teacherRagApi = {
       body: JSON.stringify({
         query: params.query || '',
         context: params.context || {},
-        knowledge_base_ids: params.knowledgeBaseIds || []
+        knowledge_base_ids: params.knowledgeBaseIds || [],
+        selected_chunk_ids: params.selectedChunkIds || []
       })
     }),
 

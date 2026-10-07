@@ -286,15 +286,7 @@ func runS1Standalone(mode string, preferredPort int, runtimeDir string, aiClient
 		parse.GET("/status/:task_id", parseHandler.ParseStatus)
 		parse.POST("/video", parseHandler.ProcessVideo)
 	}
-	rag := r.Group("/api/v1/rag")
-	{
-		rag.POST("/search", knowledgeHandler.Search)
-		rag.POST("/evidence", knowledgeHandler.Evidence)
-	}
-	knowledge := r.Group("/api/v1/knowledge")
-	{
-		knowledge.POST("/upload", knowledgeHandler.Upload)
-	}
+	router.RegisterKnowledgeRoutes(r.Group("/api/v1"), knowledgeHandler)
 
 	outlines := r.Group("/api/v1/outlines")
 	{

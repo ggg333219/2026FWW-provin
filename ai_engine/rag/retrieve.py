@@ -111,7 +111,7 @@ class BM25Scorer:
 
         self._avgdl = sum(self._doc_len) / max(self._N, 1)
 
-    def search(self, query: str, top_k: int = 20) -> list[tuple[int, float]]:
+    def search(self, query: str, top_k: Optional[int] = 20) -> list[tuple[int, float]]:
         """
         BM25 检索。
 
@@ -130,7 +130,7 @@ class BM25Scorer:
                 scores.append((i, score))
 
         scores.sort(key=lambda x: x[1], reverse=True)
-        return scores[:top_k]
+        return scores if top_k is None else scores[:top_k]
 
     def _bm25_score(self, query_tokens: list[str], doc_idx: int) -> float:
         """计算单个文档的 BM25 分数。"""
@@ -196,12 +196,33 @@ class HybridRetriever:
         node_id: Optional[str] = None,
         page_id: Optional[str] = None,
     ) -> list[SearchResult]:
+        results, _ = self.search_page(
+            query=query, top_k=top_k, min_score=min_score,
+            knowledge_base_ids=knowledge_base_ids, source_type=source_type,
+            scope=scope, node_id=node_id, page_id=page_id,
+        )
+        return results
+
+    def search_page(
+        self,
+        query: str,
+        top_k: int = 5,
+        offset: int = 0,
+        min_score: float = 0.6,
+        knowledge_base_ids: Optional[list[str]] = None,
+        source_type: Optional[SourceType] = None,
+        scope: str = "course",
+        node_id: Optional[str] = None,
+        page_id: Optional[str] = None,
+    ) -> tuple[list[SearchResult], int]:
+        """Return one page from the complete, filtered and ranked result set."""
         """
         混合检索：向量 + BM25 融合打分。
 
         Args:
             query: 查询文本。
-            top_k: 返回结果数。
+            top_k: 每页结果数。
+            offset: 起始结果偏移。
             min_score: 最低分数阈值（低于此值丢弃）。
             knowledge_base_ids: 限定知识库范围。
             source_type: 限定来源类型。
@@ -209,7 +230,8 @@ class HybridRetriever:
         Returns:
             list[SearchResult]: 按融合分数降序排列。
         """
-        # 1. 向量检索（召回 top_k × 4 作为候选池）
+        # Retrieve the complete vector candidate set before scope/KB filtering;
+        # a bounded top-k pool can silently hide valid results on later pages.
         query_vec = self.embed.embed_text(query)
         # Embedding 可用性检测：query 向量非零才认为向量侧有效。
         # 当 AI_API_KEY 缺失/占位符或 embed API 失败时，LLMClient.embed 回退为
@@ -219,7 +241,7 @@ class HybridRetriever:
 
         vector_hits = self.store.search(
             query_vec,
-            top_k=min(top_k * 4, 200),
+            top_k=None,
             min_score=0.0,  # 向量侧不过滤，留给融合后统一阈值
             source_type=source_type,
         )
@@ -231,10 +253,11 @@ class HybridRetriever:
 
         # 向量不可用 → 纯 BM25 检索
         if not vector_available:
-            return self._bm25_only_search(query, top_k, min_score, source_type, scope, node_id, page_id, knowledge_base_ids)
+            all_results = self._bm25_only_search(query, min_score, source_type, scope, node_id, page_id, knowledge_base_ids)
+            return all_results[offset:offset + top_k], len(all_results)
 
         if not vector_hits:
-            return []
+            return [], 0
 
         # 2. 归一化向量分数到 [0, 1]
         v_scores = self._normalize_scores(
@@ -242,7 +265,7 @@ class HybridRetriever:
         )
 
         # 3. BM25 关键词检索
-        b_scores = self._bm25_scores(query)
+        b_scores = self._bm25_scores(query, top_k=None)
 
         # 4. 融合打分
         fused: list[tuple[SearchHit, float]] = []
@@ -255,7 +278,8 @@ class HybridRetriever:
                 fused.append((hit, score))
 
         fused.sort(key=lambda x: x[1], reverse=True)
-        top = fused[:top_k]
+        total = len(fused)
+        top = fused[offset:offset + top_k]
 
         # 5. 构建 SearchResult
         return [
@@ -275,7 +299,7 @@ class HybridRetriever:
                 },
             )
             for hit, score in top
-        ]
+        ], total
 
     def rebuild_bm25(self) -> None:
         """重建 BM25 索引（数据变更后调用）。"""
@@ -303,14 +327,14 @@ class HybridRetriever:
         # 后直接返回空 → BM25 索引为空，混合检索静默退化为纯向量（带 cache）。
         return self.store.list_chunk_ids(doc_id)
 
-    def _bm25_scores(self, query: str) -> dict[str, float]:
+    def _bm25_scores(self, query: str, top_k: Optional[int] = 100) -> dict[str, float]:
         """计算 BM25 分数，返回 {chunk_id: normalized_score}。"""
         if self._bm25 is None or self._bm25._N == 0:
             self.rebuild_bm25()
         if self._bm25 is None or self._bm25._N == 0:
             return {}
 
-        raw = self._bm25.search(query, top_k=100)
+        raw = self._bm25.search(query, top_k=top_k)
         if not raw:
             return {}
 
@@ -324,7 +348,6 @@ class HybridRetriever:
     def _bm25_only_search(
         self,
         query: str,
-        top_k: int,
         min_score: float,
         source_type: Optional[SourceType] = None,
         scope: str = "course",
@@ -338,7 +361,7 @@ class HybridRetriever:
         与混合路径构造完全一致的 SearchResult，分数为归一化 BM25 分数（[0,1]），
         因此 min_score 语义不变（0.6 阈值对精确匹配仍可通过）。
         """
-        b_scores = self._bm25_scores(query)
+        b_scores = self._bm25_scores(query, top_k=None)
         if not b_scores:
             return []
 
@@ -371,8 +394,6 @@ class HybridRetriever:
                     **indexed.metadata,
                 },
             ))
-            if len(results) >= top_k:
-                break
         return results
 
     @staticmethod

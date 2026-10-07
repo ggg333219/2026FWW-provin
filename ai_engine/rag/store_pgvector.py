@@ -271,7 +271,7 @@ class PGVectorStore(VectorStore):
     def search(
         self,
         query_vec: list[float],
-        top_k: int = 5,
+        top_k: Optional[int] = 5,
         min_score: float = 0.0,
         source_type: Optional[SourceType] = None,
     ) -> list[SearchHit]:
@@ -283,11 +283,16 @@ class PGVectorStore(VectorStore):
 
         try:
             # 构建参数列表（注意: 查询中有 2 个 %s 用于向量）
-            params: list[Any] = [vec_str, vec_str, top_k]
+            params: list[Any] = [vec_str, vec_str]
             where = ""
             if source_type is not None:
                 where = "AND source_type = %s"
-                params = [vec_str, source_type.value, vec_str, top_k]
+                params = [vec_str, source_type.value, vec_str]
+
+            limit_clause = ""
+            if top_k is not None:
+                limit_clause = "LIMIT %s"
+                params.append(top_k)
 
             # 使用余弦距离算子 <=>（1 - cosine_similarity）
             cur.execute(
@@ -298,7 +303,7 @@ class PGVectorStore(VectorStore):
                 FROM {self._t('rag_chunks')}
                 WHERE embedding IS NOT NULL {where}
                 ORDER BY embedding <=> %s
-                LIMIT %s
+                {limit_clause}
                 """,
                 params,
             )
