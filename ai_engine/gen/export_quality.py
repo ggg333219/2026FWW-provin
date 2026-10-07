@@ -65,13 +65,15 @@ def validate_pptx(data: bytes) -> dict[str, Any]:
             )
             has_text = bool(getattr(shape, "has_text_frame", False) and shape.text.strip())
             if outside:
-                findings.append(_finding(
-                    "text_outside_slide" if has_text else "shape_outside_slide",
-                    "error" if has_text else "warning",
-                    "Text content extends beyond the slide canvas."
-                    if has_text else "A shape extends beyond the slide canvas.",
-                    slide_number,
-                ))
+                if has_text:
+                    findings.append(_finding(
+                        "text_outside_slide",
+                        "error",
+                        "Text content extends beyond the slide canvas.",
+                        slide_number,
+                    ))
+                # 非文本形状的越界是有意的装饰出血（封面/致谢页的几何圆形），
+                # 模块文档约定允许；不计入 findings，避免默认结构导出永远带 warning。
                 continue
             if has_text and _may_overflow_text(shape):
                 findings.append(_finding(

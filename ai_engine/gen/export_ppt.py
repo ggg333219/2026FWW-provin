@@ -34,6 +34,7 @@ from .page_spec import (
     build_page_spec,
     resolve_export_key_points,
 )
+from .deck_structure import TOC_MIN_CONTENT_NODES, expand_deck_pages
 from .presentation import presentation_from_nodes, presentation_to_theme
 from .templates import get_theme
 
@@ -140,10 +141,15 @@ class ExportPPTConfig:
     template_dir: str = ""
     default_template: str = "default"
     output_dir: str = "data/exports"
-    include_auto_cover: bool = False
-    # 图文并茂增强（默认关闭，保持既有导出页数与预览节点同源）：
-    include_auto_toc: bool = False      # 封面后自动插入目录页（条目=节点标题列表）
-    include_closing_slide: bool = False # 末节点为 summary 时追加"感谢聆听"结束页
+    # M3：默认结构 = 封面 / 目录（内容节点数超阈值时）/ 总结页。
+    # 注入由 deck_structure.expand_deck_pages 在装配层完成（预览端同源调用），
+    # 教师编辑的大纲不受污染。
+    include_auto_cover: bool = True
+    include_auto_toc: bool = True       # 内容节点数超阈值时自动插入目录页（条目=节点标题）
+    include_auto_summary: bool = True   # 末节点非 summary 时自动追加"本节小结"
+    include_closing_slide: bool = True  # 末节点为 summary 时追加"感谢聆听"结束页
+    # 目录页阈值：内容节点数超过该值才加目录
+    toc_min_content_nodes: int = TOC_MIN_CONTENT_NODES
 
 
 class PPTExporter:
@@ -202,25 +208,21 @@ class PPTExporter:
         warnings = check_result.get('warnings', [])
         if warnings:
             print(f'[PPT导出] 质量检查警告: {warnings}')
-        auto_cover = self.config.include_auto_cover or not normalized
-        toc_entries = self._toc_entries(normalized) if self.config.include_auto_toc else []
-        leading_cover = auto_cover or (normalized and resolve_node_type(normalized[0]) == "cover")
-        if toc_entries and not leading_cover:
-            # 全程无封面时，目录作为首页
-            self._add_auto_toc_slides(prs, toc_entries)
-            toc_entries = []
-        if auto_cover:
-            self._add_cover_slide(prs, {"title": course_name, "content": "AI 智能生成课件"})
-            if toc_entries:
-                self._add_auto_toc_slides(prs, toc_entries)
-                toc_entries = []
-        for index, node in enumerate(normalized, start=1):
+        # M3 默认结构：封面 / 目录（内容节点超阈值时）/ 总结 —— 与预览端共用同一扩展器，
+        # 在润色之后注入，合成页不参与内容润色。
+        expanded = expand_deck_pages(
+            normalized,
+            course_name,
+            # 兜底"导出永不空白"：节点为空时即使关掉封面开关也注入封面
+            include_cover=self.config.include_auto_cover or not normalized,
+            include_toc=self.config.include_auto_toc,
+            include_summary=self.config.include_auto_summary,
+            toc_min_content_nodes=self.config.toc_min_content_nodes,
+        )
+        for index, node in enumerate(expanded, start=1):
             self._get_slide_handler(resolve_node_type(node))(prs, node, index)
-            if toc_entries and index == 1 and resolve_node_type(node) == "cover":
-                self._add_auto_toc_slides(prs, toc_entries)
-                toc_entries = []
-        if self.config.include_closing_slide and normalized \
-                and resolve_node_type(normalized[-1]) == "summary":
+        if self.config.include_closing_slide and expanded \
+                and resolve_node_type(expanded[-1]) == "summary":
             self._add_ending_slide(prs)
         prs.core_properties.title = str(course_name or "课件")
         prs.core_properties.subject = "多模态 AI 互动式教学课件"

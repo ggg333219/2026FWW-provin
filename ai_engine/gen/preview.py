@@ -43,6 +43,7 @@ from .page_spec import (
     build_page_spec,
     resolve_kind,
 )
+from .deck_structure import expand_deck_pages
 from .polish import polish_nodes
 from .presentation import (
     DENSITY_PADDING,
@@ -119,7 +120,16 @@ class PreviewRenderer:
         polished_nodes = polish_nodes(nodes)
         presentation = self._presentation_from_nodes(polished_nodes)
         self._theme = self._theme_from_presentation(presentation)
-        slides_html = self._build_slides(polished_nodes)
+        # M3 默认结构：封面 / 目录 / 总结 —— 与导出端共用同一扩展器（deck_structure），
+        # 保证预览页面序列与导出 PPTX 同源。合成页不参与内容润色，故在润色后注入。
+        expanded_nodes = expand_deck_pages(
+            polished_nodes,
+            course_name,
+            include_cover=True,
+            include_toc=True,
+            include_summary=True,
+        )
+        slides_html = self._build_slides(expanded_nodes)
         return self._wrap_html(course_name, slides_html, presentation)
 
     @staticmethod
@@ -171,6 +181,10 @@ class PreviewRenderer:
 
     def _render_slide(self, node: dict[str, Any], index: int) -> str:
         node_type = self._resolve_type(node)
+        # 目录页（合成节点 node_type=agenda）在预览端借用 section 版式：
+        # 带编号的条目列表正是目录的视觉形态；导出端有原生 agenda 目录页。
+        if node_type == "agenda":
+            node_type = "section"
         slide_class = _SLIDE_CLASSES.get(node_type, _SLIDE_CLASSES["content"])
         # 页型同步传给 build_page_spec，避免在这里与 _resolve_type 各判一次
         spec = build_page_spec(node, index, node_type)
