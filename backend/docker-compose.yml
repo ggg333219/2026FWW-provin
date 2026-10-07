@@ -23,7 +23,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:15
+    image: pgvector/pgvector:0.8.6-pg15-trixie
     container_name: teaching-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-teaching}

@@ -19,6 +19,7 @@ minio>=7.2.0
 # P3 KB 知识库 RAG 依赖（按需安装）
 psycopg2-binary>=2.9.9     # PostgreSQL 驱动（RAG_STORE_BACKEND=pgvector 时使用）
 pgvector>=0.3.6            # pgvector Python 适配器（RAG_STORE_BACKEND=pgvector 时使用）
+redis>=5.0.0                # Redis 任务与会话跨进程持久化
 # sentence-transformers  # Cross-encoder 重排序模型（可选，无则透传）
 # minio               # MinIO 对象存储客户端（minio:// 文件下载需要）
 # python-docx         # DOCX 解析（知识库上传需要）

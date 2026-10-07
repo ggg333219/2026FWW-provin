@@ -28,6 +28,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 
 from ai_engine.core import LLMClient
+from ai_engine.core.redis_client import get_redis_task_store
 from ai_engine.core.schema import (
     Chunk,
     EvidenceRequest,
@@ -343,11 +344,23 @@ def register_session_chunks(session_id: str, chunks: list[Chunk], intent_id: Opt
     if intent_id:
         entry["intent_id"] = intent_id
     _session_parsed_chunks[session_id] = entry
+    get_redis_task_store().save_session_data(session_id, {
+        "chunks": [chunk.model_dump(mode="json") for chunk in entry["chunks"]],
+        "intent_id": entry["intent_id"],
+    })
 
 
 def _find_session_chunks(session_id: str) -> list[Chunk]:
     """查找某 session 的已解析 chunks。"""
-    return _session_parsed_chunks.get(session_id, {}).get("chunks", [])
+    entry = _session_parsed_chunks.get(session_id)
+    if entry is None:
+        entry = get_redis_task_store().load_session_data(session_id)
+        if not entry:
+            return []
+        chunks = [Chunk.model_validate(item) for item in entry.get("chunks", [])]
+        entry = {"chunks": chunks, "intent_id": entry.get("intent_id")}
+        _session_parsed_chunks[session_id] = entry
+    return entry.get("chunks", [])
 
 
 def _process_file(file_url: str) -> list[Chunk]:

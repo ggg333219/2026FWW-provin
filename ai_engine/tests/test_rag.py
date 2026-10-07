@@ -873,6 +873,17 @@ class TestChunkIdDeterminism(unittest.TestCase):
         for c in chunks:
             self.assertLessEqual(len(c.chunk_id), 64, msg=f"超长 chunk_id: {c.chunk_id!r}")
 
+    def test_unicode_source_refs_that_sanitize_identically_remain_distinct(self):
+        """中文来源名不能因清洗成相同下划线而共享 chunk 主键。"""
+        chunker = self.DocumentChunker()
+        refs = ["信息系统的搭建实例.pdf", "信息系统的支撑技术.pdf"]
+        ids = [
+            chunker.chunk_text("同页内容", source_ref=ref, source_type=SourceType.PDF)[0].chunk_id
+            for ref in refs
+        ]
+        self.assertEqual(len(set(ids)), len(refs))
+        self.assertTrue(all("::s0000" in chunk_id for chunk_id in ids))
+
     def test_chunk_id_no_random_per_call(self):
         """两次调用不应出现 chunk_{uuid} 形式的随机 ID（旧版格式）。"""
         import re as _re
