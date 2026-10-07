@@ -137,6 +137,7 @@ class _InMemoryTaskStore:
     def __init__(self):
         self._tasks: dict[str, str] = {}
         self._exports: dict[str, str] = {}
+        self._session_data: dict[str, str] = {}
         self._lock = threading.Lock()
 
     @staticmethod
@@ -172,6 +173,14 @@ class _InMemoryTaskStore:
         with self._lock:
             return self._parse(self._exports.get(job_id))
 
+    def save_session_data(self, session_id: str, data: dict) -> None:
+        with self._lock:
+            self._session_data[session_id] = self._json_str(data)
+
+    def load_session_data(self, session_id: str) -> Optional[dict]:
+        with self._lock:
+            return self._parse(self._session_data.get(session_id))
+
 
 # =============================================================================
 # Redis 任务存储（异步 API，内部用线程池调用同步 redis-py）
@@ -199,6 +208,9 @@ class RedisTaskStore:
 
     def _key_export(self, job_id: str) -> str:
         return f"{_EXPORT_KEY_PREFIX}:{job_id}"
+
+    def _key_session_data(self, session_id: str) -> str:
+        return f"sessions:{session_id}"
 
     # ── 序列化 ────────────────────────────────────────────────────────────────
 
@@ -283,6 +295,27 @@ class RedisTaskStore:
                         data[field] = None
                 return data
         return self._mem.load_export(job_id)
+
+    def save_session_data(self, session_id: str, data: dict) -> None:
+        """Persist S2 session artifacts for access across workers and restarts."""
+        payload = {"data": json.dumps(data, ensure_ascii=False, default=str)}
+        if self._use_redis:
+            ok = self._redis.hmset(self._key_session_data(session_id), payload)
+            if not ok:
+                self._use_redis = False
+        if not self._use_redis:
+            self._mem.save_session_data(session_id, data)
+
+    def load_session_data(self, session_id: str) -> Optional[dict]:
+        """Load S2 session artifacts from Redis, falling back to local memory."""
+        if self._use_redis:
+            raw = self._redis.hgetall(self._key_session_data(session_id))
+            if raw.get("data"):
+                try:
+                    return json.loads(raw["data"])
+                except (json.JSONDecodeError, TypeError):
+                    return None
+        return self._mem.load_session_data(session_id)
 
 
 # =============================================================================
