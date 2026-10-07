@@ -42,7 +42,9 @@ _DEFAULT_MODEL = "qwen-turbo"
 _DEFAULT_TEMPERATURE = 0.2
 _DEFAULT_MODE = "llm"
 _DEFAULT_MAX_CONTENT_CHARS = 3500
-_DEFAULT_LLM_TIMEOUT = 120
+# H1 三层超时统一：单次 LLM 调用 60s，重试 1 次（见 core/llm.py），
+# 最坏 60s×2+退避 < Go 网关 90s / 前端 90s，保证重试周期不被上层切断。
+_DEFAULT_LLM_TIMEOUT = 60
 # Stage3 讲稿分块并行：每块节点数 / 最大并行 worker 数
 # 提速改造（S3 一分钟量级）：默认每块 1 个节点（每节点独立 LLM 调用，粒度最细、
 # 失败影响面最小），并行 worker 提到 4。均可通过环境变量覆盖。

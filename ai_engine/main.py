@@ -43,6 +43,7 @@ from ai_engine.gen.interactive import InteractiveBuilder
 from ai_engine.intent.router import router as intent_router
 # RAG 内联调用支持（S2→KB 证据自动注入 S3 管线）
 from ai_engine.rag.router import _get_retriever, _reranker, _synthesizer
+from ai_engine.core.config import settings
 from ai_engine.core.schema import (
     GenerationCreateRequest, GenerationCreateResponse,
     GenerationStatusResponse, GenerationStatus, GenerationStage,
@@ -54,7 +55,24 @@ from ai_engine.core.schema import (
     normalize_generation_nodes,
 )
 
-app = FastAPI(title="泛雅 AI 智课系统后端", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
+
+def _warn_missing_llm_key() -> None:
+    """H9 冷启动可观测性：未配置 AI_API_KEY 时打印显式警告。
+
+    此时所有 LLM 调用会在 core/llm.py 中静默回退 mock 输出（topic 全空、
+    内容为占位文案），用户侧表现为“生成质量差/意图提取退化”。启动时把
+    该状态讲清楚，避免全新环境无密钥部署后被误判为链路故障。
+    """
+    if not settings.is_mock and not settings.API_KEY:
+        logging.getLogger(__name__).warning(
+            "未配置 AI_API_KEY（且 AI_GEN_MODE != mock）：所有 LLM 调用将回退本地 mock 模式，"
+            "生成内容为占位输出。请复制 .env.example 为 .env，填入有效密钥后重启服务。"
+        )
+
+
+_warn_missing_llm_key()
+
+app = FastAPI(title="多模态 AI 互动式教学智能体 AI 引擎", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
 app.include_router(recommendation_router)
 # 保留旧的 /intent/* 供历史调试工具使用，同时提供 Go Backend 约定的 /api/v1/intent/*。
 app.include_router(intent_router)
@@ -2451,13 +2469,46 @@ async def export_download(job_id: str, extension: str):
 
 
 # =============================================================================
+# ASR 语音识别（服务端转写 — 前端 MediaRecorder 录音上传，替代浏览器绑定的 Web Speech API）
+# =============================================================================
+
+from ai_engine.asr import ASRError, asr_provider_name, transcribe_bytes
+
+
+@app.post("/api/v1/asr/transcribe")
+async def asr_transcribe(file: UploadFile = File(...), language: str = "zh"):
+    """
+    POST /api/v1/asr/transcribe — 上传短音频（≤20MB / ≤60s），返回识别文本。
+
+    前端链路：MediaRecorder 录音 → multipart 上传（经 /ai/ 前缀反代到引擎）→ 回填输入框。
+    provider 链见 ai_engine/asr.py：dashscope（有 key）→ local_whisper（ASR_ALLOW_LOCAL_WHISPER=1）→ 501。
+    """
+    data = await file.read()
+    content_type = file.content_type or ""
+    try:
+        result = transcribe_bytes(data, content_type, language)
+    except ASRError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={
+            "error_code": exc.error_code, "message": exc.message,
+        })
+    return {"code": 200, "data": result, "error": "", "ok": True}
+
+
+@app.get("/api/v1/asr/status")
+def asr_status():
+    """ASR 能力自检：前端可据此决定提示文案。"""
+    return {"code": 200, "data": {"provider": asr_provider_name()}, "ok": True}
+
+
+# =============================================================================
 # 健康检查
 # =============================================================================
 
 @app.get("/health")
 def health_check():
     """健康检查接口，供前端联调测试"""
-    return {"status": "running", "version": "v1.0.0", "llm": _llm_health_payload()}
+    return {"status": "running", "version": "v1.0.0",
+            "llm": _llm_health_payload(), "asr": {"provider": asr_provider_name()}}
 
 
 # =============================================================================

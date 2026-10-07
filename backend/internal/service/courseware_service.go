@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -203,6 +204,108 @@ type coursewarePageBindingRow struct {
 func (coursewarePageBindingRow) TableName() string { return "courseware_page_bindings" }
 
 // =============================================================================
+// AI 对话消息持久化（契约 v1.0 §3.2 — 切 PPT / 刷新后 AI 对话不丢失）
+//
+// 表 courseware_ai_messages：每条消息一行，按 (project_id, message_id) 去重。
+// 之所以不用 JSON blob 整段存储，是为了让前端可以按 message_id 幂等 upsert（
+// 同一会话中途断网重连不会因为重发导致重复），并保留按 created_at 排序的版本链
+// 审计能力。
+// =============================================================================
+
+// AIMessageItem —— C6 对话气泡的服务端表示，与前端 modifyStore._pushMessage 对齐。
+type AIMessageItem struct {
+	MessageID       string        `json:"message_id"` // 前端生成（msg_<ts>_<rand>）
+	Role            string        `json:"role"`       // "teacher" | "ai"
+	Text            string        `json:"text"`
+	Intent          *ModifyIntent `json:"intent,omitempty"` // role=ai 时挂在意图
+	IsClarification bool          `json:"is_clarification,omitempty"`
+	IsSummary       bool          `json:"is_summary,omitempty"`
+	IsError         bool          `json:"is_error,omitempty"`
+	VersionNo       int           `json:"version_no,omitempty"`
+	CreatedAt       time.Time     `json:"created_at"`
+}
+
+// Validate —— 校验必填字段，避免垃圾数据进库。
+func (m AIMessageItem) Validate() error {
+	if strings.TrimSpace(m.MessageID) == "" {
+		return fmt.Errorf("message_id 不能为空")
+	}
+	if m.Role != "teacher" && m.Role != "ai" {
+		return fmt.Errorf("role 必须是 teacher|ai，实际 %q", m.Role)
+	}
+	if strings.TrimSpace(m.Text) == "" {
+		return fmt.Errorf("message_id=%s 的 text 不能为空", m.MessageID)
+	}
+	return nil
+}
+
+// coursewareAIMessageRow —— gorm 表映射（courseware_ai_messages）。
+// 自增 id 用于按时间排序；(project_id, message_id) 复合唯一用于幂等 upsert。
+type coursewareAIMessageRow struct {
+	ID              int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	ProjectID       string    `gorm:"column:project_id;size:64;index:idx_ai_msg_project_created,priority:1"`
+	MessageID       string    `gorm:"column:message_id;size:64;uniqueIndex:uniq_ai_msg_project_msg,priority:2"`
+	Role            string    `gorm:"column:role;size:16"`
+	Text            string    `gorm:"column:text;type:text"`
+	IntentJSON      string    `gorm:"column:intent_json;type:text"`
+	IsClarification bool      `gorm:"column:is_clarification"`
+	IsSummary       bool      `gorm:"column:is_summary"`
+	IsError         bool      `gorm:"column:is_error"`
+	VersionNo       int       `gorm:"column:version_no"`
+	CreatedAt       time.Time `gorm:"column:created_at;index:idx_ai_msg_project_created,priority:2,sort:asc"`
+}
+
+func (coursewareAIMessageRow) TableName() string { return "courseware_ai_messages" }
+
+// toRow / toItem —— 行 ↔ 业务对象互转，intent 用 JSON 字符串。
+func aimToRow(projectID string, m AIMessageItem) (*coursewareAIMessageRow, error) {
+	createdAt := m.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	row := &coursewareAIMessageRow{
+		ProjectID:       projectID,
+		MessageID:       m.MessageID,
+		Role:            m.Role,
+		Text:            m.Text,
+		IsClarification: m.IsClarification,
+		IsSummary:       m.IsSummary,
+		IsError:         m.IsError,
+		VersionNo:       m.VersionNo,
+		CreatedAt:       createdAt,
+	}
+	if m.Intent != nil {
+		buf, err := json.Marshal(m.Intent)
+		if err != nil {
+			return nil, fmt.Errorf("intent 序列化失败: %w", err)
+		}
+		row.IntentJSON = string(buf)
+	}
+	return row, nil
+}
+
+func aimFromRow(r *coursewareAIMessageRow) (*AIMessageItem, error) {
+	item := &AIMessageItem{
+		MessageID:       r.MessageID,
+		Role:            r.Role,
+		Text:            r.Text,
+		IsClarification: r.IsClarification,
+		IsSummary:       r.IsSummary,
+		IsError:         r.IsError,
+		VersionNo:       r.VersionNo,
+		CreatedAt:       r.CreatedAt,
+	}
+	if strings.TrimSpace(r.IntentJSON) != "" {
+		var intent ModifyIntent
+		if err := json.Unmarshal([]byte(r.IntentJSON), &intent); err != nil {
+			return nil, fmt.Errorf("intent 反序列化失败: %w", err)
+		}
+		item.Intent = &intent
+	}
+	return item, nil
+}
+
+// =============================================================================
 // ModifyIntent —— B5 解析结果（与 Python /api/v1/ai/parse_modify 响应对齐）
 // =============================================================================
 
@@ -278,6 +381,10 @@ type coursewareStore interface {
 
 	SetPageBindings(ctx context.Context, projectID string, bindings []PageEvidenceBinding) ([]string, error)
 	GetPageBindings(ctx context.Context, projectID string) (map[string]PageEvidenceBinding, error)
+
+	UpsertAIMessages(ctx context.Context, projectID string, msgs []AIMessageItem) (int, error)
+	ListAIMessages(ctx context.Context, projectID string) ([]AIMessageItem, error)
+	ClearAIMessages(ctx context.Context, projectID string) (int, error)
 }
 
 // CoursewareVersionSnapshot 是模块3的完整版本边界，显式保留页面证据绑定。
@@ -317,7 +424,7 @@ func AutoMigrateCourseware(db *gorm.DB) error {
 	// schema uses a UUID id primary key. Do not let the legacy A6/A7 row model
 	// rewrite that table; only create the version/draft/binding tables here.
 	// coursewarePageBindingRow is added by 模块 1（契约 v1.0 页面级资料绑定）。
-	return db.AutoMigrate(&coursewareVersionRow{}, &coursewareDraftRow{}, &coursewarePageBindingRow{})
+	return db.AutoMigrate(&coursewareVersionRow{}, &coursewareDraftRow{}, &coursewarePageBindingRow{}, &coursewareAIMessageRow{})
 }
 
 // ---- A1 最小基础 ----
@@ -457,6 +564,36 @@ func (s *CoursewareService) GetPageBindings(ctx context.Context, projectID strin
 		return nil, err
 	}
 	return s.store.GetPageBindings(ctx, projectID)
+}
+
+// ---- AI 对话消息（C6 持久化 — 契约 v1.0 §3.2） ----
+
+// UpsertAIMessages 幂等写入一批 AI 对话气泡。按 (project_id, message_id) 去重，
+// 适合前端 modifyStore._pushMessage 在每条消息落内存后立即落库。
+func (s *CoursewareService) UpsertAIMessages(ctx context.Context, projectID string, msgs []AIMessageItem) (int, error) {
+	if len(msgs) == 0 {
+		return 0, nil
+	}
+	if _, err := s.store.GetProject(ctx, projectID); err != nil {
+		return 0, err
+	}
+	return s.store.UpsertAIMessages(ctx, projectID, msgs)
+}
+
+// ListAIMessages 按时间升序读出项目的全部 AI 对话气泡。
+func (s *CoursewareService) ListAIMessages(ctx context.Context, projectID string) ([]AIMessageItem, error) {
+	if _, err := s.store.GetProject(ctx, projectID); err != nil {
+		return nil, err
+	}
+	return s.store.ListAIMessages(ctx, projectID)
+}
+
+// ClearAIMessages 清空项目全部 AI 对话气泡（modifyStore.reset 时调用）。
+func (s *CoursewareService) ClearAIMessages(ctx context.Context, projectID string) (int, error) {
+	if _, err := s.store.GetProject(ctx, projectID); err != nil {
+		return 0, err
+	}
+	return s.store.ClearAIMessages(ctx, projectID)
 }
 
 // targetEvidenceRefs 收集目标页在页面级绑定里的证据 chunk_id（契约 v1.0 模块1）。
@@ -1369,6 +1506,8 @@ type memCoursewareStore struct {
 	versions map[string][]*CoursewareVersion // project_id → 按 version_no 升序
 	// pageBindings[project_id][page_id] → PageEvidenceBinding
 	pageBindings map[string]map[string]PageEvidenceBinding
+	// aiMessages[project_id][message_id] → AIMessageItem（按 created_at 升序）
+	aiMessages map[string]map[string]AIMessageItem
 }
 
 func newMemCoursewareStore() *memCoursewareStore {
@@ -1377,6 +1516,7 @@ func newMemCoursewareStore() *memCoursewareStore {
 		drafts:       make(map[string]string),
 		versions:     make(map[string][]*CoursewareVersion),
 		pageBindings: make(map[string]map[string]PageEvidenceBinding),
+		aiMessages:   make(map[string]map[string]AIMessageItem),
 	}
 }
 
@@ -1586,6 +1726,54 @@ func (m *memCoursewareStore) GetPageBindings(_ context.Context, projectID string
 		out[pageID] = cp
 	}
 	return out, nil
+}
+
+// ---- AI 对话消息（mem 降级模式） ----
+
+func (m *memCoursewareStore) UpsertAIMessages(_ context.Context, projectID string, msgs []AIMessageItem) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	bucket := m.aiMessages[projectID]
+	if bucket == nil {
+		bucket = make(map[string]AIMessageItem, len(msgs))
+		m.aiMessages[projectID] = bucket
+	}
+	for _, item := range msgs {
+		if err := item.Validate(); err != nil {
+			return 0, err
+		}
+		cp := item
+		if cp.CreatedAt.IsZero() {
+			cp.CreatedAt = time.Now().UTC()
+		}
+		bucket[cp.MessageID] = cp
+	}
+	return len(msgs), nil
+}
+
+func (m *memCoursewareStore) ListAIMessages(_ context.Context, projectID string) ([]AIMessageItem, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	bucket := m.aiMessages[projectID]
+	out := make([]AIMessageItem, 0, len(bucket))
+	for _, item := range bucket {
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].MessageID < out[j].MessageID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (m *memCoursewareStore) ClearAIMessages(_ context.Context, projectID string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := len(m.aiMessages[projectID])
+	delete(m.aiMessages, projectID)
+	return n, nil
 }
 
 // =============================================================================
@@ -1843,4 +2031,71 @@ func (g *gormCoursewareStore) GetPageBindings(ctx context.Context, projectID str
 		out[r.PageID] = b
 	}
 	return out, nil
+}
+
+// ---- AI 对话消息（gorm 完整模式） ----
+
+func (g *gormCoursewareStore) UpsertAIMessages(ctx context.Context, projectID string, msgs []AIMessageItem) (int, error) {
+	if len(msgs) == 0 {
+		return 0, nil
+	}
+	// 一次事务内逐条 upsert，message_id 冲突则覆盖（用于重发同一会话不产生重复）。
+	return len(msgs), g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, item := range msgs {
+			if err := item.Validate(); err != nil {
+				return err
+			}
+			row, err := aimToRow(projectID, item)
+			if err != nil {
+				return err
+			}
+			if err := tx.Exec(`
+				INSERT INTO courseware_ai_messages
+					(project_id, message_id, role, text, intent_json,
+					 is_clarification, is_summary, is_error, version_no, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (project_id, message_id) DO UPDATE SET
+					role            = EXCLUDED.role,
+					text            = EXCLUDED.text,
+					intent_json     = EXCLUDED.intent_json,
+					is_clarification= EXCLUDED.is_clarification,
+					is_summary      = EXCLUDED.is_summary,
+					is_error        = EXCLUDED.is_error,
+					version_no      = EXCLUDED.version_no,
+					created_at      = EXCLUDED.created_at
+			`,
+				row.ProjectID, row.MessageID, row.Role, row.Text, row.IntentJSON,
+				row.IsClarification, row.IsSummary, row.IsError, row.VersionNo, row.CreatedAt,
+			).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (g *gormCoursewareStore) ListAIMessages(ctx context.Context, projectID string) ([]AIMessageItem, error) {
+	var rows []coursewareAIMessageRow
+	if err := g.db.WithContext(ctx).Where("project_id = ?", projectID).
+		Order("created_at ASC, id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]AIMessageItem, 0, len(rows))
+	for i := range rows {
+		item, err := aimFromRow(&rows[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *item)
+	}
+	return out, nil
+}
+
+func (g *gormCoursewareStore) ClearAIMessages(ctx context.Context, projectID string) (int, error) {
+	res := g.db.WithContext(ctx).Where("project_id = ?", projectID).
+		Delete(&coursewareAIMessageRow{})
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return int(res.RowsAffected), nil
 }

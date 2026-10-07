@@ -727,7 +727,12 @@ onMounted(async () => {
   // project_id 才是 AI 对话、草稿与版本的边界；generation_id 只是该项目的生成结果。
   projectStore.setActive(String(route.query.project_id || projectStore.restoreActiveId() || ""));
   if (projectStore.projectId) {
-    modifyStore.bindProject(projectStore.projectId);
+    // 契约 v1.0 §3.2：按 project_id 拉 /latest-generation-context 作为权威读源，
+    // 一次性拿到项目 + 最新版本 + 当前所有页绑定，避免"切 PPT 不重置 AI 对话"
+    // 和"左侧资料绑定打开 PPT 不显示"。loadLatestContext 内部会先 bindProject
+    // 把内存对话清空，再用响应填回 version_no / pageBindings。
+    await modifyStore.loadLatestContext(projectStore.projectId);
+    // loadLatestContext 只播下最新一条版本摘要，完整时间线仍要单独拉。
     await modifyStore.loadVersionHistory();
     // 刷新或直接打开 S3 时以后端草稿为准，不能只依赖页面跳转留下的本地缓存。
     await projectStore.resume(projectStore.projectId).catch(() => {});
@@ -838,7 +843,57 @@ watch(() => generationStore.currentScriptNodes, (nodes) => {
       status: node.status || existing.status || 'done',
     };
   });
+  // 节点变化时再把后端 page_bindings 套上去——避免 onMounted 里 loadLatestContext
+  // 先于 localStorage 节点恢复执行，导致首次绑定写入被覆盖。
+  if (modifyStore.pageBindings?.length) applyPageBindingsToUI(modifyStore.pageBindings)
 }, { deep: true });
+
+/**
+ * 契约 v1.0 §3.2：把后端 /latest-generation-context 拉来的 page_bindings
+ * 应用到当前 generationPages 与证据侧栏选中态。
+ *
+ * - 每个 node 上 citation_refs / source_chunk_ids 同步为该页绑定的 evidence_refs，
+ *   让页面编辑器立刻显示"哪些证据绑到了这页"（不用等用户点"应用"）；
+ * - selectedEvidenceIds 合并所有绑定里的 chunk_id，让左侧资料栏在打开 PPT 但
+ *   还没点"生成"时就显示已绑定证据的选中态。
+ *
+ * 只在 projectId 匹配时应用，避免 A 项目的绑定误刷到 B 项目的页面上。
+ */
+function applyPageBindingsToUI(bindings) {
+  const list = Array.isArray(bindings) ? bindings : []
+  const byPageId = new Map(list.map((item) => [String(item.page_id || item.node_id || ''), item]))
+  // 1) 写回每个生成节点的 citation_refs / source_chunk_ids
+  if (generationStore.currentScriptNodes?.length) {
+    const nextNodes = generationStore.currentScriptNodes.map((node) => {
+      const key = String(node.page_id || node.node_id || '')
+      const binding = byPageId.get(key)
+      if (!binding) return node
+      const refs = Array.isArray(binding.evidence_refs) ? binding.evidence_refs : []
+      return {
+        ...node,
+        citation_refs: refs,
+        source_chunk_ids: refs,
+      }
+    })
+    generationStore.setNodes(nextNodes)
+  }
+  // 2) 把所有绑定的 chunk_id 并入 selectedEvidenceIds（已勾选的优先保留）
+  const boundChunkIds = []
+  for (const item of list) {
+    if (Array.isArray(item.evidence_refs)) boundChunkIds.push(...item.evidence_refs)
+  }
+  if (boundChunkIds.length) {
+    const merged = new Set(selectedEvidenceIds.value.map(String))
+    for (const id of boundChunkIds) merged.add(String(id))
+    selectedEvidenceIds.value = [...merged]
+    evidenceSelectionInitialized.value = true
+  }
+  projectStore.scheduleSave(draftSnapshot())
+}
+watch(() => modifyStore.pageBindings, (bindings) => {
+  if (!projectStore.projectId) return
+  applyPageBindingsToUI(bindings)
+})
 /**
  * 把新渲染的预览交给 iframe。
  *

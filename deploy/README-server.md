@@ -1,0 +1,96 @@
+# A12 教学智能体 — 阿里云服务器部署手册
+
+> 首次部署完成：2026-10-07 · 服务器 114.55.31.135（杭州，2C/1.9G，与其他项目共用）
+> 访问入口：**http://114.55.31.135:8098**（安全组已放行 TCP 8098）
+
+## 1. 部署形态（原生进程，无 Docker）
+
+| 组件 | 端口 | 说明 |
+|------|------|------|
+| nginx（独立实例） | **8098** | 公网唯一入口：静态前端 + `/api/`→后端 + `/ai/`→引擎 + `/download/`→引擎 |
+| Go 后端（teacher-server-linux） | 18082 | 完整模式（PG+MinIO 均连上）；仅监听 127.0.0.1 之外的本机 |
+| Python AI 引擎（uvicorn） | 18000 | 无 LLM key 时自动降级 mock（响应带 degraded 标记） |
+| PostgreSQL（独立实例） | 15433 | 复用系统 `/usr/bin` 二进制，数据目录 `/var/lib/pgsql/a12_data`，库 teaching |
+| MinIO（独立实例） | 19000 | 复用系统 `/usr/local/bin/minio`，数据目录 `/opt/a12teaching/data/minio`，bucket teaching |
+| Redis | 6379/db3 | **复用服务器现有实例**（无密码），键空间隔离 |
+
+⚠️ 服务器上 80/8090/8095 等端口被其他项目占用，本套服务全部避让，互不影响。
+
+## 2. 目录与关键文件
+
+```
+/opt/a12teaching/                 代码（git，分支 server-deploy，来源 gitcode 镜像）
+├── deploy/
+│   ├── teacher-server-linux      linux amd64 后端二进制（本地交叉编译，随分支分发）
+│   ├── nginx/a12.conf            独立 nginx 配置（pid/日志均在 deploy/nginx/）
+│   ├── ai.pid / backend.pid / minio.pid   各进程 PID
+│   └── entry_port                入口端口记录（当前 8098）
+├── backend/config/config.server.yaml   后端部署配置（CONFIG_FILE=config.server.yaml）
+├── ai_engine/.venv               python3.11 虚拟环境（阿里云 pip 镜像安装）
+└── data/{minio,redis}            独立数据目录
+```
+
+## 3. 启停命令（SSH/Workbench/云助手执行）
+
+```bash
+# 停止
+pkill -f teacher-server-linux; pkill -f "uvicorn main:app"
+nginx -s stop -c /opt/a12teaching/deploy/nginx/a12.conf
+
+# 启动引擎
+cd /opt/a12teaching/ai_engine && setsid nohup env PYTHONPATH=/opt/a12teaching \
+  MINIO_ENDPOINT=127.0.0.1:19000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin MINIO_BUCKET=teaching \
+  .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 18000 < /dev/null > /tmp/ai_a12.log 2>&1 &
+
+# 启动后端（A12_PROJECT_ROOT 必配：覆盖交叉编译烧入的构建期路径）
+cd /opt/a12teaching/backend && setsid nohup env \
+  A12_PROJECT_ROOT=/opt/a12teaching/backend CONFIG_FILE=config.server.yaml \
+  /opt/a12teaching/deploy/teacher-server-linux < /dev/null > /tmp/backend_a12.log 2>&1 &
+
+# 启动 nginx（独立实例，不碰系统 nginx）
+nginx -c /opt/a12teaching/deploy/nginx/a12.conf
+
+# 启动自建 PG / MinIO（若服务器重启后未随系统拉起）
+su -s /bin/bash postgres -c "/usr/bin/pg_ctl -D /var/lib/pgsql/a12_data -o '-p 15433 -c listen_addresses=127.0.0.1 -k /tmp' -l /tmp/pg_a12.log start"
+MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin setsid nohup /usr/local/bin/minio server /opt/a12teaching/data/minio --address :19000 --console-address :19001 < /dev/null > /tmp/minio_a12.log 2>&1 &
+```
+
+## 4. 更新部署流程
+
+```bash
+# 本地（改代码后）：
+cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o deploy/teacher-server-linux ./cmd/teacher
+cd frontend/teacher && VITE_API_BASE='' VITE_AI_API_BASE='/ai' npm run build   # 相对地址，换端口无需重建
+git add -f deploy/teacher-server-linux frontend/teacher/dist && git commit -m "deploy: 产物更新"
+git push gitcode server-deploy          # 产物经 gitcode 分发（服务器直连 GitHub 不稳）
+
+# 服务器：
+cd /opt/a12teaching && git fetch origin server-deploy && git reset --hard FETCH_HEAD
+chmod +x deploy/teacher-server-linux
+pkill -f teacher-server-linux; pkill -f "uvicorn main:app"
+# …按第 3 节重启，curl 验收
+```
+
+## 5. 健康验收清单
+
+| 检查 | 命令/URL | 期望 |
+|------|---------|------|
+| 前端 | `curl -I http://114.55.31.135:8098/` | 200 text/html |
+| 引擎 | `curl http://114.55.31.135:8098/ai/health` | running（llm.degraded=true 表示无 key 降级，正常） |
+| 后端 API | `curl http://114.55.31.135:8098/api/health` | {"status":"UP"} |
+| 全链路 | 注册登录→建项目→大纲→生成→导出→下载 | 拿到合法 .pptx（`file` 识别 Microsoft PowerPoint 2007+） |
+
+验收账号：`acceptance / a12demo123`（已注册）。
+
+## 6. 降级容错说明（无 LLM key）
+
+- 引擎启动即打印 `missing_api_key` 警告，`/health` 返回 `degraded:true`；
+- S1 意图解析走本地规则引擎（结构化字段/追问照常产出），S3 大纲/内容走模板化 mock（大纲结构完整、可确认、可生成）；
+- 导出链路完整：PPTX/DOCX/HTML5 真实文件生成；MinIO 可用时上传，不可用时保留本地文件，下载不受影响；
+- 配置 key 的方法：在 `/opt/a12teaching/ai_engine/.env` 写 `AI_API_KEY=...`（可选 `AI_BASE_URL`/`AI_MODEL`）后重启引擎即可回到真实 LLM。
+
+## 7. 已知限制
+
+- 内存约剩 600MB：不要在服务器再叠加重型服务（本地 embedding/whisper 等均未装）；
+- Redis 复用现有实例 db3：如对方项目重置 Redis，重启后端即可（无持久化依赖）；
+- 前端 dist 内置相对地址，改入口端口只需改 nginx conf 的 listen，无需重建前端。

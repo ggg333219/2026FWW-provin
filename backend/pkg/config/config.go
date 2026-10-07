@@ -145,7 +145,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ai.base_url", "http://127.0.0.1:8000")
 	v.SetDefault("ai.api_key", "")
 	v.SetDefault("ai.model", "")
-	v.SetDefault("ai.timeout", "30s")
+	// H1 三层超时统一：网关 90s ≥ AI 引擎 LLM 60s×2（首次+一次重试），
+	// 保证引擎重试周期不会被网关提前切断。
+	v.SetDefault("ai.timeout", "90s")
 	v.SetDefault("ai.use_dify", false)
 	v.SetDefault("ai.dify_base_url", "http://127.0.0.1:18001")
 	v.SetDefault("ai.dify_api_key", "")

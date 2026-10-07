@@ -163,9 +163,11 @@ class DOCExporter:
 # （ascii/hAnsi/eastAsia 三处同时设置）。
 # =============================================================================
 
-# 统一字体规范：中文正文宋体，西文/数字Times New Roman，标题黑体
-FONT_CN_BODY = "宋体"
-FONT_CN_HEADING = "黑体"
+# 统一字体规范：中文微软雅黑（与本文件头"WPS 兼容红线"及 PPT/HTML5 导出的
+# EA 字体一致，scripts/verify_lesson_plan.py T6/T7 按此校验），
+# 西文/数字 Times New Roman。正文与标题同族，靠字号/加粗区分层级。
+FONT_CN_BODY = "微软雅黑"
+FONT_CN_HEADING = "微软雅黑"
 FONT_EN_BODY = "Times New Roman"
 
 

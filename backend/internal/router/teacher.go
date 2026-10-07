@@ -155,6 +155,10 @@ func RegisterNewSkillRoutes(
 		projects.GET("/:project_id/page-bindings", coursewareHandler.PageBindingsGet)
 		// 契约 v1.0 §3.2：最新生成上下文（切 PPT / 刷新页面权威读源）
 		projects.GET("/:project_id/latest-generation-context", coursewareHandler.LatestGenerationContext)
+		// 契约 v1.0 §3.2：AI 对话消息持久化（切 PPT / 刷新后对话不丢失）
+		projects.GET("/:project_id/ai-messages", coursewareHandler.AIMessagesList)
+		projects.POST("/:project_id/ai-messages", coursewareHandler.AIMessagesUpsert)
+		projects.DELETE("/:project_id/ai-messages", coursewareHandler.AIMessagesClear)
 	} else if coursewareHandler != nil {
 		// S1 standalone（无 JWT、无持久化 handler）
 		projects := v1.Group("/coursewares")
@@ -175,6 +179,10 @@ func RegisterNewSkillRoutes(
 		projects.PUT("/:project_id/page-bindings", coursewareHandler.PageBindingsPut)
 		projects.GET("/:project_id/page-bindings", coursewareHandler.PageBindingsGet)
 		projects.GET("/:project_id/latest-generation-context", coursewareHandler.LatestGenerationContext)
+		// 契约 v1.0 §3.2：AI 对话消息持久化
+		projects.GET("/:project_id/ai-messages", coursewareHandler.AIMessagesList)
+		projects.POST("/:project_id/ai-messages", coursewareHandler.AIMessagesUpsert)
+		projects.DELETE("/:project_id/ai-messages", coursewareHandler.AIMessagesClear)
 	}
 	// ---- S1: 意图理解 ----
 	intent := v1.Group("/intent")
@@ -251,6 +259,7 @@ func RegisterNewSkillRoutes(
 
 	// ---- S4: 导出 ----
 	exp := v1.Group("/export")
+	exp.Use(handler.JWTAuthMiddleware())
 	{
 		exp.POST("/:gen_id", exportHandler.Create)
 		exp.GET("/status/:job_id", exportHandler.Status)
@@ -258,6 +267,7 @@ func RegisterNewSkillRoutes(
 	}
 	// S2S3 新功能接口契约 v1.0：/exp 为规范路径；/export 保留一个迭代周期兼容旧前端。
 	contractExp := v1.Group("/exp")
+	contractExp.Use(handler.JWTAuthMiddleware())
 	{
 		contractExp.POST("/:gen_id", exportHandler.Create)
 		contractExp.GET("/status/:job_id", exportHandler.Status)

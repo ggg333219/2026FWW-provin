@@ -1,6 +1,7 @@
 <template>
-  <div class="voice-input" :class="{ listening: isListening }">
-    <!-- 语音识别错误提示条（自动消失，也可手动关闭） -->
+  <!-- 特性检测不通过（极老的浏览器缺 MediaRecorder/getUserMedia）时整组件隐藏 -->
+  <div v-if="isSupported" class="voice-input">
+    <!-- 错误提示条（自动消失，也可手动关闭） -->
     <div v-if="errorMessage" class="voice-error" role="alert">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.1"/></svg>
       <span>{{ errorMessage }}</span>
@@ -9,25 +10,30 @@
       </button>
     </div>
 
-    <!-- 实时转写预览气泡（中间结果，最终结果会写入输入框） -->
-    <div v-if="isListening" class="voice-live" aria-live="polite">
+    <!-- 录音中 / 识别中状态气泡 -->
+    <div v-if="isListening || isTranscribing" class="voice-live" aria-live="polite">
       <i></i>
-      <span>{{ interimText || '正在聆听，请说话…' }}</span>
+      <span v-if="isListening">正在聆听，请说话…（{{ recordedSeconds }}s，再次点击结束）</span>
+      <span v-else>正在识别语音，请稍候…</span>
     </div>
 
     <button
       type="button"
       class="voice-button"
-      :class="{ recording: isListening, unsupported: !isSupported }"
-      :disabled="disabled || !isSupported"
+      :class="{ recording: isListening, transcribing: isTranscribing }"
+      :disabled="disabled || isTranscribing"
       :title="buttonTitle"
       :aria-pressed="isListening"
       :aria-label="buttonTitle"
-      @click="toggleListening"
+      @click="toggleRecording"
     >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
+      <svg v-if="!isTranscribing" viewBox="0 0 24 24" aria-hidden="true">
         <rect x="9" y="3" width="6" height="11" rx="3"/>
         <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8.5 21h7"/>
+      </svg>
+      <svg v-else class="voice-spinner" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="8" opacity="0.25"/>
+        <path d="M20 12a8 8 0 0 0-8-8"/>
       </svg>
     </button>
   </div>
@@ -35,14 +41,18 @@
 
 <script setup>
 import { computed, onBeforeUnmount, ref } from 'vue'
+import { AI_API_BASE } from '../../config/api'
 
 /**
- * VoiceInputButton · 基于 Web Speech API 的语音输入按钮。
+ * VoiceInputButton · 服务端 ASR 语音输入按钮。
  *
- * - 点击开始 / 再次点击结束（桌面端比按住说话更稳，不受鼠标移出丢失事件影响）。
- * - 中间结果仅在气泡内预览；每个最终片段通过 transcript 事件交给父组件追加。
- * - 浏览器不支持时按钮置灰并通过 title 提示，不影响页面其他功能。
- * - 权限被拒 / 无麦克风 / 网络错误时显示可关闭的提示条，并通过 error 事件上报。
+ * 链路：MediaRecorder 录音（浏览器通用能力，Chrome/Edge/Firefox/Safari 均可）
+ *      → multipart 上传 AI 引擎 /api/v1/asr/transcribe（经同源 /ai/ 反代）
+ *      → 服务端转写（dashscope 云端 / 服务器本地 whisper）→ 文本回填输入框。
+ *
+ * 刻意不用 Web Speech API：它绑定 Chrome/Edge 且依赖 Google 识别服务，国内不可用。
+ * - 点击开始录音 / 再次点击结束并上传；最长 MAX_RECORD_SECONDS 自动截断。
+ * - 转写文本通过 transcript 事件交给父组件追加；错误通过 error 事件上报。
  */
 const props = defineProps({
   /** 外部禁用（例如正在分析或意图已确认时） */
@@ -54,145 +64,199 @@ const props = defineProps({
 const emit = defineEmits(['transcript', 'error', 'state-change'])
 
 const isListening = ref(false)
-const interimText = ref('')
+const isTranscribing = ref(false)
+const recordedSeconds = ref(0)
 const errorMessage = ref('')
 
-const RecognitionCtor = typeof window !== 'undefined'
-  ? window.SpeechRecognition || window.webkitSpeechRecognition
-  : null
-const isSupported = Boolean(RecognitionCtor)
+const isSupported = typeof navigator !== 'undefined'
+  && Boolean(navigator.mediaDevices?.getUserMedia)
+  && typeof window.MediaRecorder !== 'undefined'
 
 const buttonTitle = computed(() => {
-  if (!isSupported.value) return '当前浏览器不支持语音识别，请使用 Chrome / Edge'
-  return isListening.value ? '停止语音输入' : '语音输入（点击开始）'
+  if (isTranscribing.value) return '正在识别语音…'
+  return isListening.value ? '停止录音并识别' : '语音输入（点击开始）'
 })
 
-let recognition = null
-// 用户意图上“仍在录音”的标记：Chrome 会在静音后自动 onend，需要据此重启会话。
-let shouldListen = false
-let restartTimer = null
+const MAX_RECORD_SECONDS = 60
 
-const clearRestartTimer = () => {
-  if (restartTimer) {
-    clearTimeout(restartTimer)
-    restartTimer = null
+let mediaRecorder = null
+let mediaStream = null
+let chunks = []
+let recordTimer = null
+let secondsTimer = null
+
+const clearTimers = () => {
+  if (recordTimer) {
+    clearTimeout(recordTimer)
+    recordTimer = null
+  }
+  if (secondsTimer) {
+    clearInterval(secondsTimer)
+    secondsTimer = null
   }
 }
 
-const buildRecognition = () => {
-  const instance = new RecognitionCtor()
-  instance.lang = props.lang
-  instance.continuous = true
-  instance.interimResults = true
-  instance.maxAlternatives = 1
-
-  instance.onresult = (event) => {
-    let interim = ''
-    for (let i = event.resultIndex; i < event.results.length; i += 1) {
-      const result = event.results[i]
-      const text = result[0]?.transcript || ''
-      if (result.isFinal) {
-        const trimmed = text.trim()
-        if (trimmed) emit('transcript', trimmed)
-      } else {
-        interim += text
-      }
-    }
-    interimText.value = interim.trim()
+const releaseStream = () => {
+  if (mediaStream) {
+    for (const track of mediaStream.getTracks()) track.stop()
+    mediaStream = null
   }
-
-  instance.onerror = (event) => {
-    // no-speech 属于正常静音，交给 onend 自动重启即可；其余错误提示并停止。
-    if (event.error === 'no-speech' || event.error === 'aborted') return
-    shouldListen = false
-    isListening.value = false
-    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-      errorMessage.value = '无法使用麦克风：请在浏览器地址栏允许麦克风权限后重试。'
-    } else if (event.error === 'audio-capture') {
-      errorMessage.value = '未检测到可用麦克风，请检查设备连接。'
-    } else if (event.error === 'network') {
-      errorMessage.value = '语音识别服务网络异常，请检查网络后重试。'
-    } else {
-      errorMessage.value = `语音识别出错（${event.error}），请重试。`
-    }
-    emit('error', errorMessage.value)
-  }
-
-  instance.onend = () => {
-    // Chrome 在静音或达时长上限后会自动结束，只要用户没有主动停止就续开。
-    if (shouldListen) {
-      clearRestartTimer()
-      restartTimer = setTimeout(() => {
-        if (!shouldListen) return
-        try {
-          instance.start()
-        } catch {
-          // start() 在实例未完全停止时会抛 InvalidStateError，下一轮 onend 再试。
-        }
-      }, 250)
-      return
-    }
-    isListening.value = false
-    interimText.value = ''
-  }
-
-  return instance
 }
 
-const stopListening = () => {
-  shouldListen = false
-  clearRestartTimer()
-  if (recognition) {
+const pickMimeType = () => {
+  if (typeof MediaRecorder === 'undefined') return ''
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
+  for (const type of candidates) {
     try {
-      recognition.stop()
+      if (MediaRecorder.isTypeSupported(type)) return type
     } catch {
-      // 忽略停止时实例已释放的异常。
+      // isTypeSupported 异常时继续尝试下一个
     }
   }
-  isListening.value = false
-  interimText.value = ''
+  return ''
 }
 
-const startListening = () => {
-  if (!isSupported.value) return
+const transcribeBlob = async (blob) => {
+  isTranscribing.value = true
   errorMessage.value = ''
   try {
-    recognition = recognition || buildRecognition()
-    recognition.lang = props.lang
-    recognition.start()
-    shouldListen = true
-    isListening.value = true
-  } catch {
-    // 连续快速点击时 start() 可能抛错，稍后由 onend 兜底重启。
-    errorMessage.value = '语音输入启动失败，请稍候重试。'
+    const form = new FormData()
+    const ext = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm'
+    form.append('file', blob, `voice-input.${ext}`)
+    form.append('language', props.lang)
+    const response = await fetch(`${AI_API_BASE}/api/v1/asr/transcribe`, {
+      method: 'POST',
+      body: form,
+    })
+    const payload = await response.json().catch(() => null)
+    if (!response.ok) {
+      const detail = payload?.detail
+      const code = typeof detail === 'object' ? detail?.error_code : ''
+      const message = typeof detail === 'object' ? detail?.message : (typeof detail === 'string' ? detail : '')
+      if (code === 'ASR_NOT_CONFIGURED') {
+        errorMessage.value = '语音识别服务未在服务器配置，请联系管理员设置 ASR 密钥或本地模型。'
+      } else if (code === 'ASR_AUDIO_TOO_LARGE' || code === 'ASR_EMPTY_AUDIO') {
+        errorMessage.value = message || '录音数据异常，请重试。'
+      } else if (message) {
+        errorMessage.value = `语音识别失败：${message}`
+      } else {
+        errorMessage.value = `语音识别失败（${response.status}），请稍候重试。`
+      }
+      emit('error', errorMessage.value)
+      return
+    }
+    const text = String(payload?.data?.text || '').trim()
+    if (!text) {
+      errorMessage.value = '没有听清内容，请靠近麦克风重说一次。'
+      emit('error', errorMessage.value)
+      return
+    }
+    emit('transcript', text)
+  } catch (err) {
+    errorMessage.value = '语音识别服务连接失败，请检查网络后重试。'
     emit('error', errorMessage.value)
+  } finally {
+    isTranscribing.value = false
   }
 }
 
-const toggleListening = () => {
-  if (isListening.value) {
-    stopListening()
+const stopRecording = () => {
+  clearTimers()
+  isListening.value = false
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    // onstop 回调里统一做转写上传
+    mediaRecorder.stop()
   } else {
-    startListening()
+    releaseStream()
+  }
+}
+
+const startRecording = async () => {
+  errorMessage.value = ''
+  let stream
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  } catch (err) {
+    if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') {
+      errorMessage.value = '无法使用麦克风：请在浏览器地址栏允许麦克风权限后重试。'
+    } else if (err?.name === 'NotFoundError' || err?.name === 'DevicesNotFoundError') {
+      errorMessage.value = '未检测到可用麦克风，请检查设备连接。'
+    } else {
+      errorMessage.value = `麦克风启动失败（${err?.name || 'unknown'}），请重试。`
+    }
+    emit('error', errorMessage.value)
+    return
+  }
+
+  mediaStream = stream
+  chunks = []
+  const mimeType = pickMimeType()
+  try {
+    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+  } catch {
+    mediaRecorder = new MediaRecorder(stream)
+  }
+
+  mediaRecorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) chunks.push(event.data)
+  }
+  mediaRecorder.onstop = () => {
+    releaseStream()
+    const blob = new Blob(chunks, { type: mimeType || mediaRecorder.mimeType || 'audio/webm' })
+    chunks = []
+    if (blob.size > 0) {
+      transcribeBlob(blob)
+    } else {
+      errorMessage.value = '没有录到声音，请重试。'
+      emit('error', errorMessage.value)
+    }
+  }
+  mediaRecorder.onerror = () => {
+    clearTimers()
+    releaseStream()
+    isListening.value = false
+    errorMessage.value = '录音出错，请重试。'
+    emit('error', errorMessage.value)
+  }
+
+  mediaRecorder.start()
+  isListening.value = true
+  recordedSeconds.value = 0
+  secondsTimer = setInterval(() => {
+    recordedSeconds.value += 1
+  }, 1000)
+  recordTimer = setTimeout(() => {
+    if (isListening.value) stopRecording()
+  }, MAX_RECORD_SECONDS * 1000)
+}
+
+const toggleRecording = () => {
+  if (isTranscribing.value) return
+  if (isListening.value) {
+    stopRecording()
+  } else {
+    startRecording()
   }
   emit('state-change', isListening.value)
 }
 
 onBeforeUnmount(() => {
-  shouldListen = false
-  clearRestartTimer()
-  if (recognition) {
+  clearTimers()
+  isListening.value = false
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     try {
-      recognition.abort()
+      mediaRecorder.onstop = null
+      mediaRecorder.stop()
     } catch {
-      // 组件卸载时忽略释放异常。
+      // 组件卸载时忽略释放异常
     }
   }
+  releaseStream()
 })
 
 // isListening 对外可见（父组件如需联动可监听 state-change）
 defineExpose({
-  stop: stopListening,
+  stop: stopRecording,
   isSupported
 })
 </script>
@@ -215,7 +279,7 @@ defineExpose({
   cursor: pointer;
   transition: all 0.18s ease;
 }
-.voice-button:hover:not(:disabled):not(.unsupported) {
+.voice-button:hover:not(:disabled) {
   color: #315e54;
   border-color: #bfd3ca;
   background: #f5faf7;
@@ -228,7 +292,6 @@ defineExpose({
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.voice-button.unsupported,
 .voice-button:disabled {
   opacity: 0.38;
   cursor: not-allowed;
@@ -244,8 +307,20 @@ defineExpose({
   0%, 100% { box-shadow: 0 0 0 0 rgba(210, 106, 95, 0.35); }
   50% { box-shadow: 0 0 0 6px rgba(210, 106, 95, 0.12); }
 }
+/* 识别中：主题色 + 旋转指示 */
+.voice-button.transcribing {
+  color: #315e54;
+  border-color: #bfd3ca;
+  background: #f5faf7;
+}
+.voice-spinner {
+  animation: voice-spin 0.9s linear infinite;
+}
+@keyframes voice-spin {
+  to { transform: rotate(360deg); }
+}
 
-/* 实时转写预览气泡 */
+/* 状态气泡（录音中 / 识别中共用） */
 .voice-live {
   position: absolute;
   right: 0;

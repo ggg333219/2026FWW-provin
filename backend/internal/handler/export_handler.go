@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"strconv"
@@ -26,6 +28,7 @@ type exportAIClient interface {
 }
 
 type coursewareProjectLookup interface {
+	Get(context.Context, string, string) (*model.CoursewareProject, error)
 	FindByGeneration(context.Context, string, string) (*model.CoursewareProject, error)
 }
 
@@ -44,8 +47,11 @@ func (h *ExportHandler) authorizeGeneration(c *gin.Context, genID string) bool {
 		return false
 	}
 	if _, err := h.projectService.FindByGeneration(c.Request.Context(), userID, genID); err != nil {
-		exportContractError(c, http.StatusNotFound, "课件不存在")
-		return false
+		project, projectErr := h.projectService.Get(c.Request.Context(), userID, genID)
+		if projectErr != nil || project == nil || project.ID != genID || strings.TrimSpace(project.GenID) != "" {
+			exportContractError(c, http.StatusNotFound, "课件不存在")
+			return false
+		}
 	}
 	return true
 }
@@ -179,14 +185,38 @@ func (h *ExportHandler) Create(c *gin.Context) {
 		exportContractError(c, http.StatusBadRequest, "缺少 gen_id")
 		return
 	}
-	if !h.authorizeGeneration(c, genID) {
-		return
+	var payload struct {
+		service.ExportCreateRequest
+		ProjectID string `json:"project_id"`
 	}
-	var req service.ExportCreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindJSON(&payload); err != nil {
 		exportContractError(c, http.StatusBadRequest, "参数错误: "+err.Error())
 		return
 	}
+	if payload.ProjectID != "" {
+		userID := c.GetString("userID")
+		if userID == "" || h.projectService == nil {
+			exportContractError(c, http.StatusNotFound, "课件不存在")
+			return
+		}
+		project, err := h.projectService.Get(c.Request.Context(), userID, payload.ProjectID)
+		if err != nil {
+			exportContractError(c, http.StatusNotFound, "课件不存在")
+			return
+		}
+		if strings.TrimSpace(project.GenID) != "" {
+			genID = project.GenID
+		} else {
+			if len(payload.Nodes) == 0 {
+				exportContractError(c, http.StatusBadRequest, "项目版本缺少可导出的节点")
+				return
+			}
+			genID = payload.ProjectID
+		}
+	} else if !h.authorizeGeneration(c, genID) {
+		return
+	}
+	req := payload.ExportCreateRequest
 	resp, err := h.aiClient.ExportCreate(c.Request.Context(), genID, req)
 	if err != nil {
 		exportContractError(c, http.StatusBadGateway, "创建导出任务失败: "+err.Error())
@@ -261,5 +291,32 @@ func (h *ExportHandler) Download(c *gin.Context) {
 	if err != nil || !h.authorizeGeneration(c, status.GenerationID) {
 		return
 	}
-	c.Redirect(http.StatusTemporaryRedirect, provider.ExportDownloadURL(jobID, extension))
+	// 直接代理文件流而非 307 重定向：引擎地址（baseURL）是内网地址，
+	// 重定向会让公网浏览器拿到 127.0.0.1 导致下载失败；网关代流对所有部署形态都成立。
+	upstream, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, provider.ExportDownloadURL(jobID, extension), nil)
+	if err != nil {
+		exportContractError(c, http.StatusInternalServerError, "构造下载请求失败: "+err.Error())
+		return
+	}
+	downstream, err := http.DefaultClient.Do(upstream)
+	if err != nil {
+		exportContractError(c, http.StatusBadGateway, "拉取导出文件失败: "+err.Error())
+		return
+	}
+	defer downstream.Body.Close()
+	if downstream.StatusCode >= 300 {
+		exportContractError(c, http.StatusBadGateway, fmt.Sprintf("拉取导出文件返回异常: %d", downstream.StatusCode))
+		return
+	}
+	if ct := downstream.Header.Get("Content-Type"); ct != "" {
+		c.Header("Content-Type", ct)
+	}
+	if cd := downstream.Header.Get("Content-Disposition"); cd != "" {
+		c.Header("Content-Disposition", cd)
+	}
+	if cl := downstream.Header.Get("Content-Length"); cl != "" {
+		c.Header("Content-Length", cl)
+	}
+	c.Status(downstream.StatusCode)
+	_, _ = io.Copy(c.Writer, downstream.Body)
 }

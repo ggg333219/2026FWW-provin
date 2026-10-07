@@ -18,6 +18,7 @@ import { requestJson } from './request'
  *   POST   /coursewares/:id/versions       保存完整版本快照（模块3）
  *   GET    /coursewares/:id/versions/:vid  读取单版本快照（模块3）
  *   POST   /coursewares/:id/rollback       回滚（A7，克隆式）
+ *   GET    /coursewares/:id/latest-generation-context 权威读端点（契约 v1.0 §3.2）
  */
 const MODIFY_LLM_TIMEOUT_MS = 240000 // 意图解析与局部任务轮询共用一次请求
 
@@ -123,5 +124,56 @@ export const projectModifyApi = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target_version_id }),
+    }),
+
+  /**
+   * 契约 v1.0 §3.2 权威读端点：按 project_id 拉最新生成上下文
+   * （项目 + 最新 CoursewareVersion + 所有 page_bindings）。
+   *
+   * 用于：
+   *  - 切 PPT / 新建课件进入 S3：前端必须用本接口重置本地 AI 对话、版本号、
+   *    资料绑定等状态，避免上一个课件的缓存残留；
+   *  - 打开 PPT 但还没点"生成"：直接读出已绑定的 page_bindings 显示在左侧资料栏。
+   *
+   * 响应 data 形态：
+   *  {
+   *    project_id, generation_id, status, step, updated_at,
+   *    version_id, version_no, generation_id, page_id,
+   *    evidence_refs, citation_refs, evidence_used,
+   *    latest_version, page_bindings
+   *  }
+   */
+  latestGenerationContext: (project_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/latest-generation-context`, {
+      method: 'GET',
+    }),
+
+  /**
+   * 契约 v1.0 §3.2：AI 对话消息持久化——切 PPT / 刷新后对话不丢失。
+   *
+   *  - listAIMessages 按 created_at 升序读出全部对话气泡
+   *  - upsertAIMessages 幂等写入一批气泡（按 message_id 去重，重发不重复）
+   *  - clearAIMessages 清空项目全部对话气泡（modifyStore.reset 时调用）
+   *
+   * 响应 data 形态：
+   *  list   → { messages: AIMessageItem[] }
+   *  upsert → { upserted: number }
+   *  clear  → { cleared:  number }
+   */
+  listAIMessages: (project_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/ai-messages`, {
+      method: 'GET',
+    }),
+
+  upsertAIMessages: (project_id, messages) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/ai-messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: Array.isArray(messages) ? messages : [] }),
+    }),
+
+  clearAIMessages: (project_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/ai-messages`, {
+      method: 'DELETE',
     }),
 }

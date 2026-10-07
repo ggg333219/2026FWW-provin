@@ -25,6 +25,25 @@ beforeEach(() => {
 })
 
 describe('versionStore S4 导出闭环（Mock）', () => {
+  it('项目版本按最新版本显示，即使后端按版本号升序返回', async () => {
+    vi.spyOn(projectModifyApi, 'versions').mockResolvedValue({ data: { items: [
+      { version_id: 'ver_1', version_no: 1 },
+      { version_id: 'ver_2', version_no: 2 },
+    ] } })
+    vi.spyOn(projectModifyApi, 'versionDetail').mockImplementation(async (_projectId, versionId) => ({ data: {
+      version_id: versionId,
+      version_no: versionId === 'ver_2' ? 2 : 1,
+      snapshot: { content: [{ node_id: 'node_1', title: versionId }] },
+    } }))
+
+    const store = useVersionStore()
+    await store.loadProjectVersions('project-1')
+    await store.loadProjectVersion('project-1')
+
+    expect(store.versions.map((version) => version.version)).toEqual([2, 1])
+    expect(store.currentVersionDetail.version).toBe(2)
+  })
+
   it('项目版本可查看并按版本 ID 克隆分叉，保留旧历史', async () => {
     const outline = {
       outline_id: 'outline_tcp',
@@ -110,6 +129,19 @@ describe('versionStore S4 导出闭环（Mock）', () => {
     expect(response.data.filename).toBe('TCP三次握手课件_v3.pptx')
     expect(response.data.courseware_title).toBe('TCP三次握手课件')
     expect(response.data.version_no).toBe(3)
+  })
+
+  it('项目快照导出会将 project_id 传给后端归属校验', async () => {
+    const store = useVersionStore()
+    const create = vi.spyOn(teacherV1Api.version, 'exportCreate').mockResolvedValue({
+      data: { job_id: 'exp_project', status: 'done' }
+    })
+
+    await store.startExport('stale_generation', 'pptx', 2, '高等数学', [{ node_id: 'node_001' }], 'project_1')
+
+    expect(create).toHaveBeenCalledWith(
+      'stale_generation', 'pptx', 2, '高等数学', [{ node_id: 'node_001' }], 'project_1'
+    )
   })
 
   it('同时导出返回 PPTX、DOCX、HTML5 三个独立下载入口', async () => {
