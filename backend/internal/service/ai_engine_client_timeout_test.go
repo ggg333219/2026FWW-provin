@@ -9,6 +9,9 @@ import (
 )
 
 func TestIntentExtractUsesExtendedTimeout(t *testing.T) {
+	if intentExtractRequestTimeout != 120*time.Second {
+		t.Fatalf("intent extract timeout = %s, want 120s", intentExtractRequestTimeout)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/intent/extract" {
 			http.NotFound(w, r)

@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"smart-teaching-backend/internal/service"
 )
@@ -30,12 +33,54 @@ func (h *ConversationHandler) ExtractIntent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": message})
 		return
 	}
+	requestID := strings.TrimSpace(c.GetHeader("X-Request-ID"))
+	if !safeRequestID(requestID) {
+		requestID = ""
+	}
+	if requestID == "" {
+		requestID = uuid.NewString()
+	}
+	req.RequestID = requestID
+	c.Header("X-Request-ID", requestID)
 	resp, err := h.aiClient.IntentExtract(c.Request.Context(), req)
 	if err != nil {
-		writeAIEngineError(c, "意图提取失败", err)
+		status, category, message := intentExtractError(err)
+		log.Printf("S1 intent extraction failed request_id=%s category=%s status=%d", requestID, category, status)
+		c.JSON(status, gin.H{"code": status, "message": message, "request_id": requestID})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
+}
+
+func safeRequestID(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') && char != '-' && char != '_' && char != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func intentExtractError(err error) (int, string, string) {
+	var upstreamErr *service.AIEngineHTTPError
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		return http.StatusGatewayTimeout, "timeout", "意图解析超时。已保留本轮输入，请重试或继续补充。"
+	}
+	if errors.As(err, &upstreamErr) {
+		switch upstreamErr.StatusCode {
+		case http.StatusConflict:
+			return http.StatusConflict, "session_locked", "该意图会话已锁定，请重新开始会话。"
+		case http.StatusGone:
+			return http.StatusGone, "session_expired", "该意图会话已过期，请重新开始会话。"
+		case http.StatusBadRequest, http.StatusUnprocessableEntity:
+			return upstreamErr.StatusCode, "invalid_request", "意图请求不完整，请检查输入后重试。"
+		}
+	}
+	return http.StatusBadGateway, "engine_unavailable", "意图解析服务暂不可用。已保留本轮输入，请稍后重试。"
 }
 
 // ConfirmIntent  POST /api/v1/intent/confirm — 确认意图

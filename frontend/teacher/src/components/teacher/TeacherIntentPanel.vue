@@ -219,7 +219,7 @@
 
       <footer class="intent-footer">
         <template v-if="!store.isConfirmed">
-          <button class="confirm-button" :disabled="!store.canConfirm || store.isConfirming || isEditing" @click="confirm">
+          <button class="confirm-button" :disabled="!store.canConfirm || store.isAnalyzing || store.isConfirming || isEditing" @click="confirm">
             <svg viewBox="0 0 24 24"><path d="M5 12.5l4 4L19 7"/></svg>
             <span>{{ store.isConfirming ? '正在建立意图档案…' : '确认教学意图' }}</span>
           </button>
@@ -245,9 +245,12 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useIntentStore } from '../../stores/intentStore'
+import { useCoursewareProjectStore } from '../../stores/coursewareProjectStore'
 import VoiceInputButton from '../voice/VoiceInputButton.vue'
 
+const props = defineProps({ deferInitialize: { type: Boolean, default: false } })
 const store = useIntentStore()
+const projectStore = useCoursewareProjectStore()
 const router = useRouter()
 const route = useRoute()
 const draft = ref('')
@@ -303,7 +306,9 @@ const coreFields = computed(() => [
 
 const knowledgePoints = computed(() => store.intentSummary?.knowledge_points || [])
 const fallbackReasonLabel = computed(() => ({
+  timeout: 'AI 请求超时',
   engine_unavailable: 'AI 服务暂不可用',
+  model_error: 'AI 服务返回异常',
   invalid_model_response: 'AI 返回内容无法校验'
 }[store.fallbackReason] || '解析服务异常'))
 const ringStyle = computed(() => ({ background: `conic-gradient(#4f8f7b ${store.completionPct}%, #e7efeb 0)` }))
@@ -377,9 +382,10 @@ const send = async () => {
   const content = draft.value.trim()
   if (!content) return
   draft.value = ''
-  await store.sendMessage(content)
+  const sent = await store.sendMessage(content)
+  if (!sent) draft.value = content
   await scrollToLatest()
-  composerInput.value?.focus()
+  if (sent) composerInput.value?.focus()
 }
 
 // 语音输入：把 VoiceInputButton 识别出的最终文本片段追加进输入框。
@@ -426,7 +432,7 @@ const goNext = () => router.push({
 })
 
 onMounted(() => {
-  store.initialize()
+  if (!props.deferInitialize) store.initialize(String(route.query.project_id || projectStore.restoreActiveId() || ''))
   scrollToLatest()
 })
 watch(() => store.messages.length, scrollToLatest)

@@ -1,6 +1,6 @@
 """S1 意图理解 FastAPI 路由。"""
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from ai_engine.core import IntentExtractRequest, IntentConfirmRequest, settings
 from ai_engine.intent.intent_engine import IntentEngine, LLMIntentEngine
@@ -19,6 +19,7 @@ router = APIRouter(prefix="/intent", tags=["S1-Intent"])
 @router.post("/extract")
 async def extract(
     req: IntentExtractRequest,
+    request: Request,
     mode: str | None = Query(None, description="兼容参数：rule 或 llm"),
 ) -> dict[str, object]:
     """一次提取并推进 S1 会话；同一 session_id 支持完整多轮对话。"""
@@ -26,7 +27,8 @@ async def extract(
     engine = IntentEngine() if selected_mode in {"rule", "mock"} else LLMIntentEngine()
     service = IntentUnderstandingService(engine=engine)
     try:
-        return service.extract_intent(req.session_id, req.messages)
+        request_id = req.request_id or request.headers.get("x-request-id", "")
+        return service.extract_intent(req.session_id, req.messages, request_id=request_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except IntentSessionExpired as exc:

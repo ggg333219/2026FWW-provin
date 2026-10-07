@@ -34,7 +34,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { useVoiceRecognition } from './useVoiceRecognition'
 
 /**
  * VoiceInputButton · 基于 Web Speech API 的语音输入按钮。
@@ -53,141 +53,19 @@ const props = defineProps({
 
 const emit = defineEmits(['transcript', 'error', 'state-change'])
 
-const isListening = ref(false)
-const interimText = ref('')
-const errorMessage = ref('')
-
-const RecognitionCtor = typeof window !== 'undefined'
-  ? window.SpeechRecognition || window.webkitSpeechRecognition
-  : null
-const isSupported = Boolean(RecognitionCtor)
-
-const buttonTitle = computed(() => {
-  if (!isSupported) return '当前浏览器不支持语音识别，请使用 Chrome / Edge'
-  return isListening.value ? '停止语音输入' : '语音输入（点击开始）'
-})
-
-let recognition = null
-// 用户意图上“仍在录音”的标记：Chrome 会在静音后自动 onend，需要据此重启会话。
-let shouldListen = false
-let restartTimer = null
-
-const clearRestartTimer = () => {
-  if (restartTimer) {
-    clearTimeout(restartTimer)
-    restartTimer = null
-  }
-}
-
-const buildRecognition = () => {
-  const instance = new RecognitionCtor()
-  instance.lang = props.lang
-  instance.continuous = true
-  instance.interimResults = true
-  instance.maxAlternatives = 1
-
-  instance.onresult = (event) => {
-    let interim = ''
-    for (let i = event.resultIndex; i < event.results.length; i += 1) {
-      const result = event.results[i]
-      const text = result[0]?.transcript || ''
-      if (result.isFinal) {
-        const trimmed = text.trim()
-        if (trimmed) emit('transcript', trimmed)
-      } else {
-        interim += text
-      }
-    }
-    interimText.value = interim.trim()
-  }
-
-  instance.onerror = (event) => {
-    // no-speech 属于正常静音，交给 onend 自动重启即可；其余错误提示并停止。
-    if (event.error === 'no-speech' || event.error === 'aborted') return
-    shouldListen = false
-    isListening.value = false
-    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-      errorMessage.value = '无法使用麦克风：请在浏览器地址栏允许麦克风权限后重试。'
-    } else if (event.error === 'audio-capture') {
-      errorMessage.value = '未检测到可用麦克风，请检查设备连接。'
-    } else if (event.error === 'network') {
-      errorMessage.value = '语音识别服务网络异常，请检查网络后重试。'
-    } else {
-      errorMessage.value = `语音识别出错（${event.error}），请重试。`
-    }
-    emit('error', errorMessage.value)
-  }
-
-  instance.onend = () => {
-    // Chrome 在静音或达时长上限后会自动结束，只要用户没有主动停止就续开。
-    if (shouldListen) {
-      clearRestartTimer()
-      restartTimer = setTimeout(() => {
-        if (!shouldListen) return
-        try {
-          instance.start()
-        } catch {
-          // start() 在实例未完全停止时会抛 InvalidStateError，下一轮 onend 再试。
-        }
-      }, 250)
-      return
-    }
-    isListening.value = false
-    interimText.value = ''
-  }
-
-  return instance
-}
-
-const stopListening = () => {
-  shouldListen = false
-  clearRestartTimer()
-  if (recognition) {
-    try {
-      recognition.stop()
-    } catch {
-      // 忽略停止时实例已释放的异常。
-    }
-  }
-  isListening.value = false
-  interimText.value = ''
-}
-
-const startListening = () => {
-  if (!isSupported) return
-  errorMessage.value = ''
-  try {
-    recognition = recognition || buildRecognition()
-    recognition.lang = props.lang
-    recognition.start()
-    shouldListen = true
-    isListening.value = true
-  } catch {
-    // 连续快速点击时 start() 可能抛错，稍后由 onend 兜底重启。
-    errorMessage.value = '语音输入启动失败，请稍候重试。'
-    emit('error', errorMessage.value)
-  }
-}
-
-const toggleListening = () => {
-  if (isListening.value) {
-    stopListening()
-  } else {
-    startListening()
-  }
-  emit('state-change', isListening.value)
-}
-
-onBeforeUnmount(() => {
-  shouldListen = false
-  clearRestartTimer()
-  if (recognition) {
-    try {
-      recognition.abort()
-    } catch {
-      // 组件卸载时忽略释放异常。
-    }
-  }
+const {
+  isSupported,
+  isListening,
+  interimText,
+  errorMessage,
+  buttonTitle,
+  stop: stopListening,
+  toggle: toggleListening
+} = useVoiceRecognition({
+  lang: () => props.lang,
+  onTranscript: (text) => emit('transcript', text),
+  onError: (message) => emit('error', message),
+  onStateChange: (listening) => emit('state-change', listening)
 })
 
 // isListening 对外可见（父组件如需联动可监听 state-change）

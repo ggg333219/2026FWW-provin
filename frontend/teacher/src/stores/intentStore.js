@@ -6,6 +6,8 @@ const S1_STATE_KEY = 'fuww_s1_conversation'
 const CONFIRMED_INTENT_KEY = 'fuww_s1_confirmed_intent'
 const INTENT_ID_KEY = 'fuww_workflow_intent_id'
 
+export const intentStorageKey = (base, projectId = '') => `${base}:${String(projectId || 'unscoped')}`
+
 const welcomeMessage = () => ({
   role: 'assistant',
   content: '你好，我是你的教学设计智能体。告诉我这节课想讲什么、面向谁，我会通过几轮简短对话把想法整理成可执行的教学方案。'
@@ -48,6 +50,8 @@ const readStorage = (key, fallback = null) => {
 export const useIntentStore = defineStore('intent', {
   state: () => ({
     sessionId: '',
+    projectId: '',
+    _operationEpoch: 0,
     messages: [],
     intentSummary: null,
     sessionStatus: 'collecting',
@@ -74,9 +78,29 @@ export const useIntentStore = defineStore('intent', {
   },
 
   actions: {
-    initialize() {
-      if (this.sessionId) return
-      const saved = readStorage(S1_STATE_KEY)
+    initialize(projectId = '') {
+      const nextProjectId = String(projectId || 'unscoped')
+      if (this.sessionId && this.projectId === nextProjectId) return
+      this._operationEpoch += 1
+      this.projectId = nextProjectId
+      this.sessionId = ''
+      this.intentId = ''
+      this.intentSummary = null
+      this.sessionStatus = 'collecting'
+      this.completionPct = 0
+      this.turnCount = 0
+      this.maxTurns = 8
+      this.canConfirm = false
+      this.followupQuestions = []
+      this.humanSummary = ''
+      this.messages = []
+      this.engine = ''
+      this.usedFallback = false
+      this.fallbackReason = ''
+      this.error = ''
+      this.isAnalyzing = false
+      this.isConfirming = false
+      const saved = readStorage(intentStorageKey(S1_STATE_KEY, nextProjectId))
       if (saved?.sessionId && Array.isArray(saved.messages)) {
         Object.assign(this, {
           ...saved,
@@ -87,7 +111,7 @@ export const useIntentStore = defineStore('intent', {
         return
       }
       const storedSession = typeof window !== 'undefined'
-        ? window.localStorage.getItem(WORKFLOW_SESSION_KEY)
+        ? window.localStorage.getItem(intentStorageKey(WORKFLOW_SESSION_KEY, nextProjectId))
         : ''
       this.sessionId = storedSession || createSessionId()
       this.messages = [welcomeMessage()]
@@ -97,8 +121,12 @@ export const useIntentStore = defineStore('intent', {
     async sendMessage(text) {
       const content = String(text || '').trim()
       if (!content || this.isAnalyzing || this.isConfirmed) return false
+      const operationEpoch = ++this._operationEpoch
       this.error = ''
-      this.messages.push({ role: 'teacher', content })
+      const lastMessage = this.messages[this.messages.length - 1]
+      if (lastMessage?.role !== 'teacher' || lastMessage.content !== content) {
+        this.messages.push({ role: 'teacher', content })
+      }
       this.isAnalyzing = true
       this.persist()
       try {
@@ -106,6 +134,7 @@ export const useIntentStore = defineStore('intent', {
           sessionId: this.sessionId,
           messages: this.messages.map(({ role, content: messageContent }) => ({ role, content: messageContent }))
         })
+        if (operationEpoch !== this._operationEpoch) return false
         this.intentSummary = result.intent_summary || null
         this.sessionStatus = result.session_status || 'clarifying'
         this.completionPct = Number(result.completion_pct || 0)
@@ -124,13 +153,14 @@ export const useIntentStore = defineStore('intent', {
         this.persist()
         return true
       } catch (error) {
+        if (operationEpoch !== this._operationEpoch) return false
         this.error = error?.name === 'AbortError'
           ? '分析超时，AI Engine 可能仍在处理，请稍后重试。'
           : (error?.message || '暂时无法连接意图理解服务，请检查 Go Backend 与 AI Engine。')
         this.persist()
         return false
       } finally {
-        this.isAnalyzing = false
+        if (operationEpoch === this._operationEpoch) this.isAnalyzing = false
       }
     },
 
@@ -139,11 +169,13 @@ export const useIntentStore = defineStore('intent', {
     },
 
     async confirmIntent() {
-      if (!this.canConfirm || this.isConfirming) return false
+      if (!this.canConfirm || this.isAnalyzing || this.isConfirming) return false
+      const operationEpoch = ++this._operationEpoch
       this.isConfirming = true
       this.error = ''
       try {
         const result = await teacherIntentApi.confirm(this.sessionId)
+        if (operationEpoch !== this._operationEpoch) return false
         this.sessionStatus = result.session_status || 'confirmed'
         this.intentSummary = result.intent_summary || this.intentSummary
         this.intentId = result.intent_id || ''
@@ -153,20 +185,22 @@ export const useIntentStore = defineStore('intent', {
           content: '方案已确认并建立意图档案。即将进入课件工作台，系统会依据这份意图自动检索知识库并绑定整份课件；资料上传仍可随时补充。'
         })
         if (typeof window !== 'undefined') {
-          window.localStorage.setItem(CONFIRMED_INTENT_KEY, JSON.stringify(this.intentSummary))
-          window.localStorage.setItem(INTENT_ID_KEY, this.intentId)
+          window.localStorage.setItem(intentStorageKey(CONFIRMED_INTENT_KEY, this.projectId), JSON.stringify(this.intentSummary))
+          window.localStorage.setItem(intentStorageKey(INTENT_ID_KEY, this.projectId), this.intentId)
         }
         this.persist()
         return true
       } catch (error) {
+        if (operationEpoch !== this._operationEpoch) return false
         this.error = error?.message || '确认失败，请补充核心信息后重试。'
         return false
       } finally {
-        this.isConfirming = false
+        if (operationEpoch === this._operationEpoch) this.isConfirming = false
       }
     },
 
     reset() {
+      this._operationEpoch += 1
       this.sessionId = createSessionId()
       this.messages = [welcomeMessage()]
       this.intentSummary = null
@@ -185,16 +219,16 @@ export const useIntentStore = defineStore('intent', {
       this.usedFallback = false
       this.fallbackReason = ''
       if (typeof window !== 'undefined') {
-        window.localStorage.removeItem(CONFIRMED_INTENT_KEY)
-        window.localStorage.removeItem(INTENT_ID_KEY)
+        window.localStorage.removeItem(intentStorageKey(CONFIRMED_INTENT_KEY, this.projectId))
+        window.localStorage.removeItem(intentStorageKey(INTENT_ID_KEY, this.projectId))
       }
       this.persist()
     },
 
     persist() {
       if (typeof window === 'undefined' || !this.sessionId) return
-      window.localStorage.setItem(WORKFLOW_SESSION_KEY, this.sessionId)
-      window.localStorage.setItem(S1_STATE_KEY, JSON.stringify({
+      window.localStorage.setItem(intentStorageKey(WORKFLOW_SESSION_KEY, this.projectId), this.sessionId)
+      window.localStorage.setItem(intentStorageKey(S1_STATE_KEY, this.projectId), JSON.stringify({
         sessionId: this.sessionId,
         messages: this.messages,
         intentSummary: this.intentSummary,

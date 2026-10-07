@@ -614,6 +614,7 @@ class ExportJob(BaseModel):
 class IntentExtractRequest(BaseModel):
     """POST /api/v1/intent/extract 请求"""
     session_id: str = ""
+    request_id: str = ""
     messages: list[DialogueTurn] = Field(default_factory=list)
 
 

@@ -165,8 +165,9 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useMaterialStore } from '../../stores/materialStore'
+import { intentStorageKey } from '../../stores/intentStore'
+import { useCoursewareProjectStore } from '../../stores/coursewareProjectStore'
 
-const INTENT_HANDOFF_KEY = 'fuww_intent_parsed'
 
 const props = defineProps({
   /** 会话ID，传递给知识库索引 */
@@ -184,6 +185,7 @@ const props = defineProps({
 const emit = defineEmits(['toast', 'bind-evidence'])
 
 const materialStore = useMaterialStore()
+const projectStore = useCoursewareProjectStore()
 const query = ref('')
 const topK = ref(10)
 const searched = ref(false)
@@ -265,7 +267,7 @@ onMounted(() => {
   if (typeof window === 'undefined' || query.value.trim()) return
 
   try {
-    const raw = window.localStorage.getItem(INTENT_HANDOFF_KEY)
+    const raw = window.localStorage.getItem(intentStorageKey('fuww_intent_parsed', projectStore.projectId || ''))
     if (!raw) return
 
     const intent = JSON.parse(raw)

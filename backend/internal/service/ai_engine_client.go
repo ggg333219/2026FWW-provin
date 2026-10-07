@@ -357,6 +357,7 @@ type DialogueTurn struct {
 
 type IntentExtractRequest struct {
 	SessionID string         `json:"session_id"`
+	RequestID string         `json:"request_id,omitempty"`
 	Messages  []DialogueTurn `json:"messages,omitempty"`
 }
 

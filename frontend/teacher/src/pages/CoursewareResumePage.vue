@@ -24,10 +24,10 @@ import { useGenerationStore } from '../stores/generationStore'
 const route = useRoute(); const router = useRouter(); const projects = useCoursewareProjectStore(); const message = ref('正在读取最新编辑进度…'); const failed = ref(false)
 const intentStore = useIntentStore(); const materialStore = useMaterialStore(); const outlineStore = useOutlineStore(); const generationStore = useGenerationStore()
 const routeForStep = { s1_intent: 'S1Intent', s2_material: 'S2Material', s3_studio: 'S3Studio', s4_version: 'S4Version' }
-function hydrateDraft(draft) {
+function hydrateDraft(draft, projectId) {
   const intentSession = draft.intent_session || {}
   if (draft.intent || intentSession.session_id) {
-    intentStore.initialize()
+    intentStore.initialize(projectId)
     intentStore.intentSummary = draft.intent || intentStore.intentSummary
     intentStore.sessionId = intentSession.session_id || intentStore.sessionId
     intentStore.intentId = intentSession.intent_id || intentStore.intentId
@@ -73,7 +73,8 @@ onMounted(async () => {
     else if (typeof draftSource === 'string') {
       try { draft = JSON.parse(draftSource) || {} } catch { draft = {} }
     }
-    hydrateDraft(draft)
+    projects.setActive(projectId)
+    hydrateDraft(draft, projectId)
     try { window.localStorage.setItem('fuww_courseware_resume_draft', JSON.stringify(draft)) } catch {}
     const generationId = context.generation_id || context.project?.gen_id || draft.generation_id || draft.generation?.generation_id || ''
     let latestLocked = false

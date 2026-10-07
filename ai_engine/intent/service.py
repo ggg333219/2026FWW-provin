@@ -55,7 +55,9 @@ class IntentUnderstandingService:
         self.client = client or LLMClient(model=settings.MODEL, temperature=0.1)
         self.engine = engine
 
-    def extract_intent(self, session_id: str, messages: list[DialogueTurn]) -> dict[str, Any]:
+    def extract_intent(
+        self, session_id: str, messages: list[DialogueTurn], request_id: str = ""
+    ) -> dict[str, Any]:
         """从完整对话历史提取意图，并推进 collecting/clarifying/confirming。"""
         session_id = (session_id or "").strip()
         if not session_id:
@@ -81,9 +83,10 @@ class IntentUnderstandingService:
 
         summary, engine_name, used_fallback, fallback_reason = self._extract_summary(messages, raw_messages)
         if used_fallback:
+            safe_request_id = request_id if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", request_id or "") else "unavailable"
             logging.getLogger(__name__).warning(
-                "S1 intent extraction degraded session_id=%s reason=%s",
-                session_id,
+                "S1 intent extraction degraded request_id=%s reason=%s",
+                safe_request_id,
                 fallback_reason or "unknown",
             )
         summary = self._merge_rule_evidence(summary, raw_messages)
@@ -193,9 +196,9 @@ class IntentUnderstandingService:
                         return summary, self.engine.__class__.__name__, False, None
                     reason = "invalid_model_response"
                 else:
-                    reason = "engine_unavailable" if isinstance(result, dict) and result.get("error") else "invalid_model_response"
-            except Exception:
-                reason = "engine_unavailable"
+                    reason = self._classify_engine_failure(result) if isinstance(result, dict) and result.get("error") else "invalid_model_response"
+            except Exception as exc:
+                reason = self._classify_engine_failure({"reason": f"{type(exc).__name__} {exc}"})
             return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason
 
         prompt = self._build_extract_prompt(messages)
@@ -217,8 +220,20 @@ class IntentUnderstandingService:
                 raise ValueError("LLM 未返回有效主题")
             return summary, "LLM", False, None
         except Exception as exc:
-            reason = "invalid_model_response" if isinstance(exc, (ValueError, TypeError)) else "engine_unavailable"
+            reason = "invalid_model_response" if isinstance(exc, (ValueError, TypeError)) else self._classify_engine_failure(
+                {"reason": f"{type(exc).__name__} {exc}"}
+            )
             return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason
+
+    @staticmethod
+    def _classify_engine_failure(result: dict[str, Any]) -> str:
+        """Map provider exceptions to safe categories without exposing their details."""
+        detail = str(result.get("reason") or result.get("error") or "").lower()
+        if "timeout" in detail or "timed out" in detail or "deadline exceeded" in detail:
+            return "timeout"
+        if any(marker in detail for marker in ("connection", "connecterror", "dns")):
+            return "engine_unavailable"
+        return "model_error"
 
     @staticmethod
     def _build_extract_prompt(messages: list[DialogueTurn]) -> str:

@@ -45,6 +45,7 @@ describe('courseware project draft isolation', () => {
 
     const pendingSave = store.saveNow({ title: 'A draft' })
     store.setActive('project-b')
+    await new Promise((resolve) => setTimeout(resolve, 0))
     resolveSave({ data: { saved_at: '2026-10-07T00:00:00Z' } })
     await pendingSave
 
@@ -52,5 +53,41 @@ describe('courseware project draft isolation', () => {
     expect(store.projectId).toBe('project-b')
     expect(store.draft).toBeNull()
     expect(store.savedAt).toBe('')
+  })
+
+  it('does not activate a project when its resume response is stale', async () => {
+    let resolveContext
+    vi.spyOn(projectModifyApi, 'context').mockImplementation(() => new Promise((resolve) => {
+      resolveContext = resolve
+    }))
+    const store = useCoursewareProjectStore()
+    store.setActive('project-c')
+
+    const pendingResume = store.resume('project-b', () => false)
+    resolveContext({ data: { project: { id: 'project-b' }, draft: { title: 'stale B' } } })
+    await pendingResume
+
+    expect(store.projectId).toBe('project-c')
+    expect(store.draft).toBeNull()
+  })
+
+  it('queues saves with the project ID captured before a project switch', async () => {
+    const calls = []
+    vi.spyOn(projectModifyApi, 'saveDraft').mockImplementation((projectId, draft) => new Promise((resolve) => {
+      calls.push({ projectId, draft, resolve })
+    }))
+    const store = useCoursewareProjectStore()
+    store.setActive('project-a')
+    const first = store.saveNow({ title: 'A1' })
+    const second = store.saveNow({ title: 'A2' })
+    store.setActive('project-b')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    calls[0].resolve({ data: {} })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(calls[1].projectId).toBe('project-a')
+    calls[1].resolve({ data: {} })
+    await Promise.all([first, second])
+    expect(store.projectId).toBe('project-b')
+    expect(store.draft).toBeNull()
   })
 })

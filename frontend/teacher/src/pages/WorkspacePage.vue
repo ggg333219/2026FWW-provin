@@ -231,7 +231,7 @@
 import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/authStore'
-import { useIntentStore } from '../stores/intentStore'
+import { intentStorageKey, useIntentStore } from '../stores/intentStore'
 import { useMaterialStore } from '../stores/materialStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import { useGenerationStore } from '../stores/generationStore'
@@ -310,13 +310,14 @@ function writeHandoff(key, value) {
 }
 
 const evidenceHandoffKey = () => `fuww_s2_evidence_packet:${intentStore.sessionId || workspaceStore.currentCourseId || 'workspace'}`
+const intentHandoffKey = () => intentStorageKey('fuww_intent_parsed', intentStore.projectId || workspaceStore.currentCourseId || '')
 
 function persistWorkspaceIntent(summary, status, intentId) {
   if (!['confirmed', 'locked'].includes(status)) return
   const topic = String(summary?.topic || '').trim()
   if (!topic) return
   const subject = String(summary?.subject || summary?.discipline || '').trim()
-  writeHandoff('fuww_intent_parsed', JSON.stringify({
+  writeHandoff(intentHandoffKey(), JSON.stringify({
     ...summary,
     topic,
     ...(subject ? { subject } : {}),
@@ -338,7 +339,7 @@ function restoreGenIdToVersion() {
 
 function restoreIntentToMaterial() {
   try {
-    const raw = readHandoff('fuww_intent_parsed')
+    const raw = readHandoff(intentHandoffKey())
     if (!raw) return
     const intent = JSON.parse(raw)
     const keywords = [intent.topic, intent.subject].filter(Boolean).join(' ')
