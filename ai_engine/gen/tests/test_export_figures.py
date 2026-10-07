@@ -26,7 +26,7 @@ _ROOT = Path(__file__).resolve().parent.parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from ai_engine.gen.export_ppt import PPTExporter  # noqa: E402
+from ai_engine.gen.export_ppt import ExportPPTConfig, PPTExporter  # noqa: E402
 from ai_engine.gen.preview import PreviewRenderer  # noqa: E402
 
 FIGURE_KINDS = ["flow", "compare", "cycle", "hierarchy", "chart", "matrix"]
@@ -127,7 +127,11 @@ def test_two_node_cycle_degrades_to_a_flow():
     node = _figure_node("cycle")
     node["figure"] = {"kind": "cycle", "items": ["甲", "乙"]}
 
-    prs = Presentation(PPTExporter().export_to_bytes([node], "图示验收"))
+    # 节点级图示渲染口径：关闭 M3 默认结构注入
+    prs = Presentation(PPTExporter(ExportPPTConfig(
+        include_auto_cover=False, include_auto_toc=False,
+        include_auto_summary=False, include_closing_slide=False,
+    )).export_to_bytes([node], "图示验收"))
 
     assert [s.text for slide in prs.slides for s in slide.shapes if hasattr(s, "text")]
     assert len(prs.slides) == 1

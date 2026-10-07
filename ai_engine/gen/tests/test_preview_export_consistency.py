@@ -97,7 +97,8 @@ def test_six_node_snapshot_keeps_authored_semantics_in_preview_and_ppt():
         assert token in preview_html, f"preview 丢失讲稿分段: {token}"
         assert token not in ppt_text, f"PPT 不应包含讲稿分段: {token}"
 
-    assert len(prs.slides) == 6
+    # M3 默认结构：作者语义页数不变，仅末尾追加"感谢聆听"致谢页（6 + 1 = 7）
+    assert len(prs.slides) == 7
     assert all(shape.shape_type != 13 for slide in prs.slides for shape in slide.shapes)
     assert resolve_node_type(nodes[3]) == "two_column"
 
@@ -169,7 +170,8 @@ def test_export_follows_presentation_style():
 
     assert "315FD4" in _solid_fills(prs), "Klein Blue 未落到形状填充"
     assert "SimSun" in _run_fonts(prs), "serif 字体族未落到文本"
-    assert len(prs.slides) == 6
+    # M3 默认结构：追加致谢页（6 + 1 = 7），样式断言不受影响
+    assert len(prs.slides) == 7
     assert all(shape.shape_type != 13 for slide in prs.slides for shape in slide.shapes)
 
 
