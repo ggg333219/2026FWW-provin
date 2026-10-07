@@ -192,16 +192,7 @@ func RegisterNewSkillRoutes(
 		parse.POST("/video", parseHandler.ProcessVideo)
 	}
 
-	// ---- KB: 知识库 RAG ----
-	rag := v1.Group("/rag")
-	{
-		rag.POST("/search", knowledgeHandler.Search)
-		rag.POST("/evidence", knowledgeHandler.Evidence)
-	}
-	knowledge := v1.Group("/knowledge")
-	{
-		knowledge.POST("/upload", knowledgeHandler.Upload)
-	}
+	RegisterKnowledgeRoutes(v1, knowledgeHandler)
 
 	// ---- S3: 教师确认前的大纲草稿 ----
 	outlines := v1.Group("/outlines")
@@ -271,4 +262,17 @@ func RegisterNewSkillRoutes(
 	canonicalExportStatus := v1.Group("/exports")
 	canonicalExportStatus.Use(handler.JWTAuthMiddleware())
 	canonicalExportStatus.GET("/:export_job_id", exportHandler.StatusV2)
+}
+
+// RegisterKnowledgeRoutes exposes shared KB operations only to authenticated teachers/admins.
+// Both full and standalone server modes must use this registration to keep the boundary consistent.
+func RegisterKnowledgeRoutes(v1 *gin.RouterGroup, knowledgeHandler *handler.KnowledgeHandler) {
+	rag := v1.Group("/rag")
+	rag.Use(handler.JWTAuthMiddleware(), handler.TeacherRoleMiddleware())
+	rag.POST("/search", knowledgeHandler.Search)
+	rag.POST("/evidence", knowledgeHandler.Evidence)
+
+	knowledge := v1.Group("/knowledge")
+	knowledge.Use(handler.JWTAuthMiddleware(), handler.TeacherRoleMiddleware())
+	knowledge.POST("/upload", knowledgeHandler.Upload)
 }
