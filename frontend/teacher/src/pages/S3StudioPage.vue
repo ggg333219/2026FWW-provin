@@ -643,7 +643,7 @@ const selectedEvidencePacket = computed(() => {
 });
 
 function draftSnapshot() {
-  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value } };
+  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value }, generation_instruction_set: buildGenerationInstructionSet(selectedEvidencePacket.value, generationScope.value) };
 }
 
 function versionPageBindings() {
@@ -1359,6 +1359,7 @@ async function handleSaveNewVersion() {
       outline_version: outlineStore.outline_version,
       page_bindings: versionPageBindings(),
       presentation: draftSnapshot().presentation,
+      generation_instruction_set: draftSnapshot().generation_instruction_set,
     });
     const data = response?.data || response || {};
     if (data.generation_id) generationStore.setLastGenId(data.generation_id);
@@ -1375,11 +1376,13 @@ async function handleSaveNewVersion() {
         content: generationStore.currentScriptNodes,
         page_bindings: versionPageBindings(),
         style: draftSnapshot().presentation,
+        generation_instruction_set: draftSnapshot().generation_instruction_set,
       };
       const projectResponse = await projectModifyApi.createVersion(projectStore.projectId, {
         nodes: generationStore.currentScriptNodes,
         presentation: draftSnapshot().presentation,
         page_bindings: versionPageBindings(),
+        generation_instruction_set: draftSnapshot().generation_instruction_set,
         version_summary: summary,
         version_no: Math.max(baseVersion.value + 1, generationVersion || 1),
         snapshot,

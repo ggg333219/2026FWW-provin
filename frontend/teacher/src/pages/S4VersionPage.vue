@@ -367,6 +367,7 @@ function handleStartExport(format) {
     courseTitle.value,
     versionStore.currentVersionDetail?.nodes || [],
     projectStore.projectId,
+    versionStore.currentVersionDetail?.generationInstructionSet || projectStore.draft?.generation_instruction_set || {},
   )
 }
 

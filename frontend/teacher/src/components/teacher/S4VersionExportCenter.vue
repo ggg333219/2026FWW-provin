@@ -101,7 +101,7 @@
         <div v-if="exportStatus === 'failed'" class="error-section">
           <span class="error-icon">❌ 导出失败</span>
           <p v-if="exportError" class="error-msg">{{ exportError }}</p>
-          <button class="btn btn-sm" @click="$emit('reset-export')">重试</button>
+          <button class="btn btn-sm" @click="$emit('start-export', selectedFormat)">重试</button>
         </div>
       </div>
     </div>

@@ -753,6 +753,7 @@ type VersionSnapshot struct {
 	NodesSnapshot []TeachingNodeItem `json:"nodes_snapshot,omitempty"`
 	PageBindings  []map[string]any   `json:"page_bindings,omitempty"`
 	Presentation  map[string]any     `json:"presentation,omitempty"`
+	Metadata      map[string]any     `json:"metadata,omitempty"`
 	Summary       string             `json:"summary,omitempty"`
 	Locked        bool               `json:"locked"`
 	CreatedAt     string             `json:"created_at"`
@@ -781,12 +782,13 @@ type VersionLockResponse struct {
 }
 
 type ExportCreateRequest struct {
-	Format          string             `json:"format"`
-	Version         int                `json:"version"`
-	VersionID       string             `json:"version_id,omitempty"`
-	Formats         []string           `json:"formats,omitempty"`
-	CoursewareTitle string             `json:"courseware_title,omitempty"`
-	Nodes           []TeachingNodeItem `json:"nodes,omitempty"`
+	Format                   string             `json:"format"`
+	Version                  int                `json:"version"`
+	VersionID                string             `json:"version_id,omitempty"`
+	Formats                  []string           `json:"formats,omitempty"`
+	CoursewareTitle          string             `json:"courseware_title,omitempty"`
+	Nodes                    []TeachingNodeItem `json:"nodes,omitempty"`
+	GenerationInstructionSet map[string]any     `json:"generation_instruction_set,omitempty"`
 }
 
 type ExportCreateResponse struct {
@@ -835,14 +837,15 @@ type ExportQualityReport struct {
 // =============================================================================
 
 type GenerationFinalizeRequest struct {
-	GenerationID   string             `json:"generation_id,omitempty"`
-	Nodes          []TeachingNodeItem `json:"nodes"`
-	CourseName     string             `json:"course_name,omitempty"`
-	Summary        string             `json:"summary,omitempty"`
-	OutlineID      string             `json:"outline_id,omitempty"`
-	OutlineVersion int                `json:"outline_version,omitempty"`
-	PageBindings   []map[string]any   `json:"page_bindings,omitempty"`
-	Presentation   map[string]any     `json:"presentation,omitempty"`
+	GenerationID             string             `json:"generation_id,omitempty"`
+	Nodes                    []TeachingNodeItem `json:"nodes"`
+	CourseName               string             `json:"course_name,omitempty"`
+	Summary                  string             `json:"summary,omitempty"`
+	OutlineID                string             `json:"outline_id,omitempty"`
+	OutlineVersion           int                `json:"outline_version,omitempty"`
+	PageBindings             []map[string]any   `json:"page_bindings,omitempty"`
+	Presentation             map[string]any     `json:"presentation,omitempty"`
+	GenerationInstructionSet map[string]any     `json:"generation_instruction_set,omitempty"`
 }
 
 type GenerationFinalizeResponse struct {

@@ -1239,6 +1239,7 @@ class GenFinalizeRequest(BaseModel):
     outline_version: int = 0
     page_bindings: list[dict[str, Any]] = Field(default_factory=list)
     presentation: dict[str, Any] = Field(default_factory=dict)
+    generation_instruction_set: dict[str, Any] = Field(default_factory=dict)
 
 
 class GenFinalizeResponse(BaseModel):
@@ -1297,6 +1298,7 @@ async def gen_finalize(req: GenFinalizeRequest):
         metadata={
             "outline_id": req.outline_id,
             "outline_version": req.outline_version,
+            "generation_instruction_set": req.generation_instruction_set,
         },
         page_bindings=req.page_bindings,
         presentation=req.presentation,
@@ -2135,6 +2137,7 @@ async def export_create(gen_id: str, req: ExportRequest):
     if req.nodes:
         nodes = req.nodes
         selected_version = requested_version if requested_version > 0 else 1
+        snapshot = None
     else:
         # 兼容旧调用：按 generation_id 从 AI Engine 版本存储加载。
         vm = get_version_manager()
@@ -2143,6 +2146,7 @@ async def export_create(gen_id: str, req: ExportRequest):
             raise HTTPException(status_code=404, detail="版本不存在")
         nodes = selected.nodes_snapshot
         selected_version = selected.version_number
+        snapshot = selected
     courseware_title = (req.courseware_title or "课件").strip() or "课件"
 
     # 创建导出任务
@@ -2165,20 +2169,27 @@ async def export_create(gen_id: str, req: ExportRequest):
     await _persist_export_job(job)
 
     # 教案导出（lesson_plan）需要意图摘要补充课时/授课对象等，从内存生成任务查找（找不到则 fallback 全靠节点）
-    intent_dict = None
+    instruction_set = req.generation_instruction_set or {}
+    if not instruction_set and snapshot is not None:
+        instruction_set = (snapshot.metadata or {}).get("generation_instruction_set") or {}
+    intent_dict = instruction_set.get("intent") if isinstance(instruction_set, dict) else None
     with _gen_tasks_lock:
         for _task in _gen_tasks.values():
             if _task.generation_id == gen_id:
-                intent_dict = (
+                task_intent = (
                     _task.intent.model_dump()
                     if hasattr(_task.intent, "model_dump") else dict(_task.intent)
                 )
+                intent_dict = intent_dict or task_intent
+                if not instruction_set:
+                    instruction_set = _task.generation_instruction_set.model_dump(mode="json")
                 break
 
     # 后台执行导出
     asyncio.create_task(
         _run_export(
             job_id, nodes, req.format, intent=intent_dict,
+            generation_instruction_set=instruction_set,
             courseware_title=courseware_title, version=selected_version,
         )
     )
@@ -2197,6 +2208,7 @@ async def export_create(gen_id: str, req: ExportRequest):
 
 async def _run_export(
     job_id: str, nodes: list[dict], fmt: ExportFormat, intent: dict | None = None,
+    generation_instruction_set: dict[str, Any] | None = None,
     courseware_title: str = "课件", version: int = 1,
 ):
     """后台导出任务"""
@@ -2218,9 +2230,11 @@ async def _run_export(
 
         # Word 标准教案（A12 赛题 4b）：LLM 生成 + 确定性 fallback，导出永不空。
         # 产物存 doc_path（.docx），复用既有上传/下载链路，无需改动 upload 循环。
-        if fmt == ExportFormat.LESSON_PLAN:
+        if fmt in (ExportFormat.LESSON_PLAN, ExportFormat.DOCX, ExportFormat.BOTH):
             generator = LessonPlanGenerator()
-            plan = await asyncio.to_thread(generator.generate, nodes, intent or {}, None)
+            plan = await asyncio.to_thread(
+                generator.generate, nodes, intent or {}, None, generation_instruction_set or {},
+            )
             exporter = LessonPlanDOCExporter()
             buf = exporter.export_to_bytes(plan)
             doc_path = export_dir / f"{job_id}.docx"
@@ -2260,15 +2274,6 @@ async def _run_export(
                         _export_tasks[job_id] = job
                     await _persist_export_job(job)
                     return
-
-        if fmt in (ExportFormat.BOTH, ExportFormat.DOCX):
-            exporter = DOCExporter()
-            buf = exporter.export_to_bytes(nodes, course_name)
-            doc_path = export_dir / f"{job_id}.docx"
-            doc_path.write_bytes(buf.getvalue())
-            job.metadata = job.metadata or {}
-            job.metadata["doc_path"] = str(doc_path)
-            job.file_size = doc_path.stat().st_size
 
         # HTML5 互动小游戏（A12 赛题 4c/5c）：both/interactive 模式下随 pptx/docx 一起产出
         if fmt in (ExportFormat.BOTH, ExportFormat.INTERACTIVE):
