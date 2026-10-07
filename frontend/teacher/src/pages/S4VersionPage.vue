@@ -218,6 +218,7 @@ import { useIntentStore } from '../stores/intentStore'
 import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
 import AppShell from '../components/layout/AppShell.vue'
 import S4VersionExportCenter from '../components/teacher/S4VersionExportCenter.vue'
+import { writeResumeDraft } from '../utils/coursewareDraft'
 
 const versionStore = useVersionStore()
 const generationStore = useGenerationStore()
@@ -413,9 +414,7 @@ async function persistRollbackDraft({ nodes, outline, pageBindings, presentation
     presentation: { ...(current.presentation || {}), ...(presentation || {}) },
   }
   await projectStore.saveNow(restored).catch(() => {})
-  try {
-    window.localStorage.setItem('fuww_courseware_resume_draft', JSON.stringify(restored))
-  } catch {}
+  writeResumeDraft(String(route.query.project_id || projectStore.projectId || ''), restored)
 }
 
 function formatTime(iso) {

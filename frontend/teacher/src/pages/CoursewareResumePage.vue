@@ -20,6 +20,10 @@ import { useIntentStore } from '../stores/intentStore'
 import { useMaterialStore } from '../stores/materialStore'
 import { useOutlineStore } from '../stores/outlineStore'
 import { useGenerationStore } from '../stores/generationStore'
+import { useVersionStore } from '../stores/versionStore'
+import { useModifyStore } from '../stores/modifyStore'
+import { useContentStore } from '../stores/contentStore'
+import { writeResumeDraft, clearLegacyResumeDraft } from '../utils/coursewareDraft'
 
 const route = useRoute(); const router = useRouter(); const projects = useCoursewareProjectStore(); const message = ref('正在读取最新编辑进度…'); const failed = ref(false)
 const intentStore = useIntentStore(); const materialStore = useMaterialStore(); const outlineStore = useOutlineStore(); const generationStore = useGenerationStore()
@@ -53,6 +57,8 @@ function hydrateDraft(draft) {
 async function restart() {
   try {
     const project = await projects.create('未命名课件')
+    for (const store of [useIntentStore(), useMaterialStore(), useOutlineStore(), useGenerationStore(), useVersionStore(), useModifyStore(), useContentStore()]) store.reset?.()
+    clearLegacyResumeDraft()
     await projects.updateStep('s1_intent')
     router.replace({ name: 'S1Intent', query: { project_id: project.id || project.project_id } })
   } catch (error) { message.value = error?.message || '重新开始失败，请稍后重试' }
@@ -74,7 +80,7 @@ onMounted(async () => {
       try { draft = JSON.parse(draftSource) || {} } catch { draft = {} }
     }
     hydrateDraft(draft)
-    try { window.localStorage.setItem('fuww_courseware_resume_draft', JSON.stringify(draft)) } catch {}
+    writeResumeDraft(projectId, draft)
     const generationId = context.generation_id || context.project?.gen_id || draft.generation_id || draft.generation?.generation_id || ''
     let latestLocked = false
     if (generationId) {

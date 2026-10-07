@@ -577,6 +577,7 @@ import ModifyPanel from "../components/teacher/ModifyPanel.vue";
 import EvidenceSidebar from "../components/teacher/EvidenceSidebar.vue";
 import { useGenerationStore } from "../stores/generationStore";
 import { useOutlineStore } from "../stores/outlineStore";
+import { readResumeDraft } from "../utils/coursewareDraft";
 import { useInteractiveStore } from "../stores/interactiveStore";
 import { useContentStore } from "../stores/contentStore";
 import { useIntentStore } from "../stores/intentStore";
@@ -747,8 +748,7 @@ onMounted(async () => {
       // 兼容旧版后端曾直接保存的节点数组，避免历史课件刷新后变成空白。
       if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
       if (!savedDraft || typeof savedDraft !== "object" || (!savedDraft.outline && !savedDraft.generation)) {
-        const rawDraft = window.localStorage.getItem("fuww_courseware_resume_draft");
-        savedDraft = rawDraft ? JSON.parse(rawDraft) : null;
+        savedDraft = readResumeDraft(projectStore.projectId) || null;
         if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
       }
       if (savedDraft?.outline?.outline_id) {
