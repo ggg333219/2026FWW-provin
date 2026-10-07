@@ -24,7 +24,7 @@
           class="search-input"
           @keyup.enter="handleSearch"
         />
-        <select v-model="topK" class="topk-select" title="返回结果数">
+        <select v-model.number="topK" class="topk-select" title="每页结果数" @change="handlePageSizeChange">
           <option :value="5">Top 5</option>
           <option :value="10">Top 10</option>
           <option :value="20">Top 20</option>
@@ -43,7 +43,7 @@
       <div class="card-head">
         <div>
           <h3>检索结果</h3>
-          <span class="card-desc">共 {{ results.length }} 条命中，按相似度降序</span>
+          <span class="card-desc">共 {{ totalResults }} 条命中，按相似度降序</span>
         </div>
         <span v-if="totalChunks > 0" class="stat-badge">知识库 {{ totalChunks }} chunks</span>
       </div>
@@ -58,7 +58,15 @@
       <div v-else class="result-list">
         <div v-for="(item, idx) in results" :key="item.chunk_id" class="result-item">
           <div class="result-head">
-            <span class="rank">{{ idx + 1 }}</span>
+            <label class="select-evidence">
+              <input
+                type="checkbox"
+                :checked="selectedChunkIds.has(item.chunk_id)"
+                @change="toggleEvidence(item, $event.target.checked)"
+              />
+              采用
+            </label>
+            <span class="rank">{{ pageOffset + idx + 1 }}</span>
             <span class="score" :class="{ high: item.score >= 0.85, mid: item.score >= 0.7 && item.score < 0.85 }">
               {{ (item.score * 100).toFixed(1) }}%
             </span>
@@ -68,6 +76,13 @@
           <p class="result-content">{{ item.content }}</p>
         </div>
       </div>
+      <div v-if="totalResults > topK" class="pagination-row">
+        <span>第 {{ currentPage }} / {{ pageCount }} 页</span>
+        <div class="pagination-actions">
+          <button class="page-btn" :disabled="currentPage <= 1 || materialStore.searching" @click="changePage(-1)">上一页</button>
+          <button class="page-btn" :disabled="currentPage >= pageCount || materialStore.searching" @click="changePage(1)">下一页</button>
+        </div>
+      </div>
     </section>
 
     <!-- ============ 证据融合区 ============ -->
@@ -75,11 +90,11 @@
       <div class="card-head">
         <div>
           <h3>证据融合</h3>
-          <span class="card-desc">基于检索结果合成 EvidencePacket，绑定到当前内容供 S3 消费</span>
+          <span class="card-desc">已确认 {{ selectedChunkIds.size }} 条；仅将已选片段作为课件依据</span>
         </div>
         <button
           class="primary-btn"
-          :disabled="!query.trim() || materialStore.searching || hasConfirmedEmptySearch"
+          :disabled="!query.trim() || materialStore.searching || hasConfirmedEmptySearch || selectedChunkIds.size === 0"
           @click="handleFuseEvidence"
         >
           {{ hasConfirmedEmptySearch ? '暂无证据可融合' : '生成证据包' }}
@@ -172,8 +187,13 @@ const materialStore = useMaterialStore()
 const query = ref('')
 const topK = ref(10)
 const searched = ref(false)
+const currentPage = ref(1)
+const selectedChunkIds = ref(new Set())
+const pageOffset = computed(() => (currentPage.value - 1) * topK.value)
+const pageCount = computed(() => Math.max(1, Math.ceil(totalResults.value / topK.value)))
 
 const results = computed(() => materialStore.ragResults)
+const totalResults = computed(() => materialStore.ragTotalResults)
 const totalChunks = computed(() => {
   const list = materialStore.materials
   return list.reduce((sum, m) => sum + ((m.chunks || []).length), 0)
@@ -205,7 +225,36 @@ const handleIndexKnowledge = async () => {
 const handleSearch = async () => {
   if (!query.value.trim()) return
   searched.value = true
-  await materialStore.searchRag({ query: query.value, topK: topK.value })
+  currentPage.value = 1
+  selectedChunkIds.value = new Set()
+  await runSearch()
+}
+
+const handlePageSizeChange = () => {
+  if (searched.value) void handleSearch()
+}
+
+const runSearch = () => materialStore.searchRag({
+  query: query.value,
+  topK: topK.value,
+  offset: pageOffset.value
+})
+
+const changePage = async (delta) => {
+  const target = currentPage.value + delta
+  if (target < 1 || target > pageCount.value || materialStore.searching) return
+  currentPage.value = target
+  await runSearch()
+}
+
+const toggleEvidence = (item, selected) => {
+  const ids = new Set(selectedChunkIds.value)
+  if (selected) {
+    ids.add(item.chunk_id)
+  } else {
+    ids.delete(item.chunk_id)
+  }
+  selectedChunkIds.value = ids
 }
 
 /**
@@ -235,8 +284,11 @@ onMounted(() => {
 })
 
 const handleFuseEvidence = async () => {
-  if (!query.value.trim()) return
-  const packet = await materialStore.generateEvidence({ query: query.value })
+  if (!query.value.trim() || selectedChunkIds.value.size === 0) return
+  const packet = await materialStore.generateEvidence({
+    query: query.value,
+    selectedChunkIds: [...selectedChunkIds.value]
+  })
   if (packet) {
     emit('toast', '证据包已生成，可绑定到当前内容')
   } else {
@@ -455,6 +507,38 @@ const handleBind = () => {
   line-height: 1.7;
   color: #334155;
 }
+
+.select-evidence {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #2f605a;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.pagination-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.pagination-actions { display: flex; gap: 8px; }
+
+.page-btn {
+  padding: 6px 12px;
+  border: 1px solid #d5e3dc;
+  border-radius: 8px;
+  background: #fff;
+  color: #2f605a;
+  cursor: pointer;
+}
+
+.page-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* ---------- 证据融合 ---------- */
 .evidence-box {

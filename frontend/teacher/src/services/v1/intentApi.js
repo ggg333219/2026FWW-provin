@@ -9,7 +9,7 @@ export const teacherIntentApi = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId, messages }),
-      timeoutMs: 45000
+      timeoutMs: 150000
     })
     return unwrap(payload)
   },

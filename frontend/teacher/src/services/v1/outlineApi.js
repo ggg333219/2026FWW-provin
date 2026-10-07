@@ -21,7 +21,7 @@ export const teacherOutlineApi = {
    * POST /api/v1/outlines
    * 生成大纲（AI 生成大纲节点树，仅结构描述，不含完整讲稿）
    */
-  create: ({ session_id, intent_id, intent, evidence_packet, markdown } = {}) =>
+  create: ({ session_id, intent_id, intent, evidence_packet, markdown, generation_instruction_set } = {}) =>
     requestJson('/api/v1/outlines', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -31,6 +31,7 @@ export const teacherOutlineApi = {
         intent_id: intent_id || '',
         intent: intent || {},
         evidence_packet: evidence_packet || null,
+        generation_instruction_set: generation_instruction_set || {},
         markdown: markdown || ''
       })
     }),

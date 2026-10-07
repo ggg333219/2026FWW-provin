@@ -144,6 +144,37 @@ class IntentUnderstandingTests(unittest.TestCase):
         self.assertEqual(summary.knowledge_points, [])
         self.assertTrue(summary.with_interactive)
 
+    def test_failed_llm_engine_returns_safe_fallback_reason(self):
+        class FailedEngine:
+            @staticmethod
+            def extract_intent(_messages):
+                return {"error": "llm_call_failed", "reason": "secret-bearing provider details"}
+
+        service = IntentUnderstandingService(engine=FailedEngine())
+        result = service.extract_intent("session_fallback_reason", [self._turn("我想讲快速排序，45分钟")])
+
+        self.assertTrue(result["used_fallback"])
+        self.assertEqual(result["fallback_reason"], "engine_unavailable")
+        self.assertNotIn("secret-bearing", str(result))
+
+    def test_successful_extraction_has_no_fallback_reason(self):
+        result = self.service.extract_intent("session_success_reason", [self._turn("我想讲快速排序，45分钟")])
+
+        self.assertFalse(result["used_fallback"])
+        self.assertIsNone(result["fallback_reason"])
+
+    def test_incomplete_model_response_is_reported_as_degraded(self):
+        class IncompleteEngine:
+            @staticmethod
+            def extract_intent(_messages):
+                return {"topic": None, "duration_minutes": None}
+
+        service = IntentUnderstandingService(engine=IncompleteEngine())
+        result = service.extract_intent("session_invalid_response", [self._turn("帮我设计课件")])
+
+        self.assertTrue(result["used_fallback"])
+        self.assertEqual(result["fallback_reason"], "invalid_model_response")
+
     def test_confirm_unknown_session_raises(self):
         with self.assertRaises(IntentSessionNotFound):
             self.service.confirm_intent("missing")

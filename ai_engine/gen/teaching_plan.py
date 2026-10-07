@@ -613,6 +613,7 @@ def plan_deck(
     nodes: list[dict[str, Any]],
     *,
     evidence: str = "",
+    generation_instruction_set: Optional[dict[str, Any]] = None,
     llm: Optional[Any] = None,
 ) -> dict[str, dict[str, Any]]:
     """一次规划整份课件：``{node_id: plan}``。
@@ -636,6 +637,14 @@ def plan_deck(
             brief = _intent_brief(intent)
             if brief:
                 user_prompt = f"{brief}\n\n{user_prompt}"
+            if isinstance(generation_instruction_set, dict):
+                constraints = {
+                    "output_requirements": generation_instruction_set.get("output_requirements") or {},
+                    "presentation": generation_instruction_set.get("presentation") or {},
+                }
+                constraints = {key: value for key, value in constraints.items() if value}
+                if constraints:
+                    user_prompt += f"\n\n【本次统一生成指令】\n{json.dumps(constraints, ensure_ascii=False)}"
             if evidence.strip():
                 user_prompt += (
                     "\n\n【参考材料】\n"

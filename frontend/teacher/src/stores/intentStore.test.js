@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { buildIntentRevisionMessage, useIntentStore } from './intentStore'
+import { teacherIntentApi } from '../services/v1/intentApi'
 
 function createStorage() {
   const values = new Map()
@@ -43,6 +44,17 @@ describe('buildIntentRevisionMessage', () => {
 })
 
 describe('S1 意图理解 Mock 链路（extract / confirm）', () => {
+  it('服务失败时保留教师原消息，便于核对和重试', async () => {
+    vi.spyOn(teacherIntentApi, 'extract').mockRejectedValueOnce(new Error('AI Engine timeout'))
+    const store = useIntentStore()
+    store.initialize()
+
+    expect(await store.sendMessage('请设计一节高等数学课')).toBe(false)
+
+    expect(store.messages.some((message) => message.role === 'teacher' && message.content === '请设计一节高等数学课')).toBe(true)
+    expect(store.error).toContain('AI Engine timeout')
+  })
+
   it('sendMessage → extract：提取主题并进入澄清（缺核心字段不能确认）', async () => {
     const store = useIntentStore()
     store.initialize()

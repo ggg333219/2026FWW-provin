@@ -5,7 +5,7 @@ os.environ.setdefault("AI_GEN_MODE", "mock")
 
 from fastapi.testclient import TestClient
 
-from ai_engine.core.schema import Chunk, SourceType
+from ai_engine.core.schema import Chunk, EvidenceResponse, SearchResult, SourceType
 from ai_engine.main import app
 from ai_engine.rag.router import _session_parsed_chunks
 
@@ -63,6 +63,53 @@ def test_rag_search_filters_chunks_by_node_scope():
     assert {item["chunk_id"] for item in response.json()["results"]} == {"scope_node_a"}
 
     _session_parsed_chunks.pop(session_id, None)
+    rag_router_module._store.clear()
+
+
+def test_rag_search_passes_offset_and_returns_total_result_count(monkeypatch):
+    seen = {}
+
+    class PagedRetriever:
+        def search_page(self, **kwargs):
+            seen.update(kwargs)
+            return [SearchResult(chunk_id="page-2", content="第二页结果", score=0.9)], 27
+
+    monkeypatch.setattr(rag_router_module, "_get_retriever", lambda: PagedRetriever())
+    response = client.post("/api/v1/rag/search", json={
+        "query": "分页检索", "top_k": 10, "offset": 10, "min_score": 0.0,
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert seen["top_k"] == 10
+    assert seen["offset"] == 10
+    assert body["total_results"] == 27
+    assert [item["chunk_id"] for item in body["results"]] == ["page-2"]
+
+
+def test_evidence_uses_only_teacher_confirmed_chunk_ids(monkeypatch):
+    rag_router_module._store.clear()
+    rag_router_module._store.insert_batch([Chunk(
+        chunk_id="teacher-confirmed",
+        source_type=SourceType.TEXT,
+        source_ref="shared.pdf",
+        content="已确认内容",
+    )], doc_id="shared-doc")
+    captured = {}
+
+    class CapturingSynthesizer:
+        def synthesize_to_response(self, **kwargs):
+            captured.update(kwargs)
+            return EvidenceResponse()
+
+    monkeypatch.setattr(rag_router_module, "_synthesizer", CapturingSynthesizer())
+    response = client.post("/api/v1/rag/evidence", json={
+        "query": "课件主题", "selected_chunk_ids": ["teacher-confirmed"],
+    })
+
+    assert response.status_code == 200
+    assert [item.chunk_id for item in captured["search_results"]] == ["teacher-confirmed"]
+    assert captured["search_results"][0].content == "已确认内容"
     rag_router_module._store.clear()
 
 

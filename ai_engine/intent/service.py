@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 import re
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -78,7 +79,13 @@ class IntentUnderstandingService:
         if not any(item["role"].lower() == "teacher" for item in raw_messages):
             raise ValueError("至少需要一条教师消息")
 
-        summary, engine_name, used_fallback = self._extract_summary(messages, raw_messages)
+        summary, engine_name, used_fallback, fallback_reason = self._extract_summary(messages, raw_messages)
+        if used_fallback:
+            logging.getLogger(__name__).warning(
+                "S1 intent extraction degraded session_id=%s reason=%s",
+                session_id,
+                fallback_reason or "unknown",
+            )
         summary = self._merge_rule_evidence(summary, raw_messages)
         summary.missing_fields = self._infer_missing_fields(summary)
 
@@ -120,6 +127,7 @@ class IntentUnderstandingService:
             "can_confirm": can_confirm,
             "engine": engine_name,
             "used_fallback": used_fallback,
+            "fallback_reason": fallback_reason,
         }
 
     def build_followup_questions(self, summary: IntentSummary, core_only: bool = False) -> list[str]:
@@ -171,19 +179,24 @@ class IntentUnderstandingService:
         self,
         messages: list[DialogueTurn],
         raw_messages: list[dict[str, str]],
-    ) -> tuple[IntentSummary, str, bool]:
+    ) -> tuple[IntentSummary, str, bool, str | None]:
         if self.engine is not None:
             try:
                 result = self.engine.extract_intent(raw_messages)
                 if isinstance(result, IntentSummary):
-                    return result, self.engine.__class__.__name__, False
-                if isinstance(result, dict) and not result.get("error"):
+                    if result.topic:
+                        return result, self.engine.__class__.__name__, False, None
+                    reason = "invalid_model_response"
+                elif isinstance(result, dict) and not result.get("error"):
                     summary = IntentSummary(**result)
                     if summary.topic:
-                        return summary, self.engine.__class__.__name__, False
+                        return summary, self.engine.__class__.__name__, False, None
+                    reason = "invalid_model_response"
+                else:
+                    reason = "engine_unavailable" if isinstance(result, dict) and result.get("error") else "invalid_model_response"
             except Exception:
-                pass
-            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True
+                reason = "engine_unavailable"
+            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason
 
         prompt = self._build_extract_prompt(messages)
         try:
@@ -202,9 +215,10 @@ class IntentUnderstandingService:
             summary = IntentSummary(**(result or {}))
             if not summary.topic:
                 raise ValueError("LLM 未返回有效主题")
-            return summary, "LLM", False
-        except Exception:
-            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True
+            return summary, "LLM", False, None
+        except Exception as exc:
+            reason = "invalid_model_response" if isinstance(exc, (ValueError, TypeError)) else "engine_unavailable"
+            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason
 
     @staticmethod
     def _build_extract_prompt(messages: list[DialogueTurn]) -> str:

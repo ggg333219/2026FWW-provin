@@ -63,7 +63,7 @@ const RecognitionCtor = typeof window !== 'undefined'
 const isSupported = Boolean(RecognitionCtor)
 
 const buttonTitle = computed(() => {
-  if (!isSupported.value) return '当前浏览器不支持语音识别，请使用 Chrome / Edge'
+  if (!isSupported) return '当前浏览器不支持语音识别，请使用 Chrome / Edge'
   return isListening.value ? '停止语音输入' : '语音输入（点击开始）'
 })
 
@@ -154,7 +154,7 @@ const stopListening = () => {
 }
 
 const startListening = () => {
-  if (!isSupported.value) return
+  if (!isSupported) return
   errorMessage.value = ''
   try {
     recognition = recognition || buildRecognition()

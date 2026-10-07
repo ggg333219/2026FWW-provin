@@ -128,6 +128,9 @@
           :intent-id="intentStore.intentId"
           :intent-summary="intentStore.intentSummary"
           :evidence-packet="selectedEvidencePacket"
+          :presentation="{ template_id: templateId, palette, layout: layoutMode, font_family: fontFamily, density }"
+          generation-mode="full_pipeline"
+          :page-generation-mode="generateMode"
           :ready="outlineReady"
           :auto-restore="true"
           @confirm-complete="handleOutlineConfirmed"
@@ -314,7 +317,12 @@
                 outlineStore.outline_version
               }}</span
             >
-            <span class="gen-label" style="margin-left: 12px">生成模式</span>
+            <span class="gen-label" style="margin-left: 12px">生成范围</span>
+            <select v-model="generationScope" class="gen-mode-select">
+              <option value="content_only">仅生成内容（沿用已确认大纲）</option>
+              <option value="full_pipeline">全流程（重建大纲并生成内容）</option>
+            </select>
+            <span class="gen-label" style="margin-left: 12px">页面策略</span>
             <select v-model="generateMode" class="gen-mode-select">
               <option value="page_incremental">逐页增量生成</option>
               <option value="page_parallel">全页面并行生成</option>
@@ -587,6 +595,7 @@ const router = useRouter();
 const currentPhase = ref("outline");
 const generationMode = ref("");
 const generateMode = ref("page_incremental");
+const generationScope = ref("content_only");
 const genError = ref("");
 const generationPages = ref([]);
 const regeneratingPageId = ref("");
@@ -682,14 +691,21 @@ onMounted(async () => {
   }
 
   // project_id 才是 AI 对话、草稿与版本的边界；generation_id 只是该项目的生成结果。
-  projectStore.setActive(String(route.query.project_id || projectStore.restoreActiveId() || ""));
+  const previousProjectId = projectStore.projectId || projectStore.restoreActiveId() || "";
+  projectStore.setActive(String(route.query.project_id || previousProjectId));
+  const hasProject = Boolean(projectStore.projectId);
+  if (!hasProject || previousProjectId !== projectStore.projectId) {
+    outlineStore.reset();
+    generationStore.reset();
+    contentStore.reset();
+  }
   if (projectStore.projectId) {
     modifyStore.bindProject(projectStore.projectId);
     await modifyStore.loadVersionHistory();
     // 刷新或直接打开 S3 时以后端草稿为准，不能只依赖页面跳转留下的本地缓存。
     await projectStore.resume(projectStore.projectId).catch(() => {});
     await projectStore.updateStep("s3_studio").catch(() => {});
-    // 后端草稿优先；只有后端没有可用草稿时才回退到统一恢复入口留下的本地缓存。
+    // 项目身份明确时只恢复服务端项目草稿，不读无项目归属的旧全局缓存。
     try {
       const backendDraft = projectStore.draft;
       let savedDraft = backendDraft;
@@ -698,11 +714,6 @@ onMounted(async () => {
       }
       // 兼容旧版后端曾直接保存的节点数组，避免历史课件刷新后变成空白。
       if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
-      if (!savedDraft || typeof savedDraft !== "object" || (!savedDraft.outline && !savedDraft.generation)) {
-        const rawDraft = window.localStorage.getItem("fuww_courseware_resume_draft");
-        savedDraft = rawDraft ? JSON.parse(rawDraft) : null;
-        if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
-      }
       if (savedDraft?.outline?.outline_id) {
         if (savedDraft.outline.editable_after_rollback || route.query.from_rollback_version) {
           outlineStore.restoreEditableSnapshot(savedDraft.outline);
@@ -744,17 +755,11 @@ onMounted(async () => {
       if (savedDraft?.presentation) { templateId.value = savedDraft.presentation.template_id || "default"; palette.value = savedDraft.presentation.palette || "classic"; layoutMode.value = savedDraft.presentation.layout || "balanced"; fontFamily.value = savedDraft.presentation.font_family || "system"; density.value = savedDraft.presentation.density || "comfortable"; }
     } catch {}
   }
-  // 尝试从 localStorage 恢复大纲
-  const restored = restoredProjectOutline ? true : outlineStore.restore();
-  if (!restoredProjectOutline && restored && outlineStore.session_id && intentStore.sessionId
-      && outlineStore.session_id !== intentStore.sessionId) {
-    outlineStore.reset();
-  }
-  if (!restoredGenerationNodes && restored && outlineStore.isConfirmed) {
+  if (!restoredGenerationNodes && restoredProjectOutline && outlineStore.isConfirmed) {
     currentPhase.value = "generating";
   }
   // 恢复最近生成记录
-  generationStore.restoreLastGenId();
+  if (projectStore.projectId) generationStore.restoreLastGenId();
   if (generationStore.lastGenId) {
     interactiveStore.setGenerationId(generationStore.lastGenId);
     // 项目草稿已经包含完整节点时直接使用，避免全局缓存中的旧 task_id
@@ -775,12 +780,33 @@ onMounted(async () => {
   } finally {
     initializing.value = false;
   }
-  // 恢复内容生成状态
-  const contentRestored = contentStore.restore();
-  if (contentRestored && contentStore.hasContent) {
-    currentPhase.value = "content";
-  }
 });
+
+function buildGenerationInstructionSet(evidence, mode) {
+  return {
+    schema_version: 1,
+    intent: intentStore.intentSummary || {},
+    reference_materials: (evidence?.relevant_chunks || []).map((chunk) => ({
+      chunk_id: chunk.chunk_id,
+      source_ref: chunk.source_ref || chunk.source?.file_name || '',
+      page_ref: chunk.page_ref || chunk.source?.page || null,
+    })),
+    confirmed_evidence: evidence || null,
+    output_requirements: {
+      formats: intentStore.intentSummary?.output_format || ['ppt'],
+      with_interactive: Boolean(intentStore.intentSummary?.with_interactive),
+    },
+    presentation: {
+      template_id: templateId.value,
+      palette: palette.value,
+      layout: layoutMode.value,
+      font_family: fontFamily.value,
+      density: density.value,
+    },
+    generation_mode: mode,
+    page_generation_mode: generateMode.value,
+  };
+}
 
 watch(() => [outlineStore.nodes, generationStore.currentScriptNodes, templateId.value, palette.value, layoutMode.value, fontFamily.value, density.value], () => projectStore.scheduleSave(draftSnapshot()), { deep: true });
 watch(() => generationStore.currentScriptNodes, (nodes) => {
@@ -915,8 +941,12 @@ async function handleModifyApplied({ allNodes = [] } = {}) {
 
 // 开始生成内容
 async function handleStartGeneration() {
-  if (!outlineStore.outline_id || !outlineStore.isConfirmed) {
+  if (generationScope.value === "content_only" && (!outlineStore.outline_id || !outlineStore.isConfirmed)) {
     handleError("请先确认大纲");
+    return;
+  }
+  if (!intentStore.sessionId || !intentStore.intentSummary) {
+    handleError("缺少有效的 S1 意图会话，请返回 S1 完成意图确认");
     return;
   }
   genError.value = "";
@@ -925,6 +955,18 @@ async function handleStartGeneration() {
 
   try {
     const evidence = selectedEvidencePacket.value;
+
+    if (generationScope.value === "full_pipeline") {
+      generationStore.setGenerateProgress(10, "根据当前意图与已确认资料重新生成大纲");
+      await outlineStore.createOutline({
+        session_id: intentStore.sessionId,
+        intent_id: intentStore.intentId,
+        intent: intentStore.intentSummary,
+        evidence_packet: evidence,
+        generation_instruction_set: buildGenerationInstructionSet(evidence, "full_pipeline"),
+      });
+      await outlineStore.confirmOutline();
+    }
 
     generationStore.setGenerateProgress(15, "创建生成任务");
     const resp = await teacherV1Api.generation.createGeneration({
@@ -935,8 +977,10 @@ async function handleStartGeneration() {
       template_id: templateId.value,
       project_id: projectStore.projectId,
       generate_mode: generateMode.value,
+      generation_scope: generationScope.value,
       intent: intentStore.intentSummary || undefined,
       evidence_packet: evidence,
+      generation_instruction_set: buildGenerationInstructionSet(evidence, generationScope.value),
     });
 
     const task = resp?.data || resp || {};

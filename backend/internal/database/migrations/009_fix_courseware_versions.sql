@@ -22,7 +22,15 @@ BEGIN
     END IF;
 
     ALTER TABLE courseware_versions ADD COLUMN IF NOT EXISTS id varchar(64);
-    UPDATE courseware_versions SET id = version_id WHERE id IS NULL;
+    IF EXISTS (
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'courseware_versions'
+           AND column_name = 'version_id'
+    ) THEN
+        UPDATE courseware_versions SET id = version_id WHERE id IS NULL;
+    END IF;
 
     SELECT c.conname, pg_get_constraintdef(c.oid)
       INTO pk_name, pk_def

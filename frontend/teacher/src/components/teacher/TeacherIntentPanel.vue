@@ -213,7 +213,9 @@
         </div>
       </section>
 
-      <div v-if="store.usedFallback" class="engine-note">当前由本地规则引擎稳定接管，链路仍保持可用。</div>
+      <div v-if="store.usedFallback" class="engine-note" role="status">
+        当前使用本地规则提取（{{ fallbackReasonLabel }}），请核对并补充识别结果。
+      </div>
 
       <footer class="intent-footer">
         <template v-if="!store.isConfirmed">
@@ -300,6 +302,10 @@ const coreFields = computed(() => [
 ])
 
 const knowledgePoints = computed(() => store.intentSummary?.knowledge_points || [])
+const fallbackReasonLabel = computed(() => ({
+  engine_unavailable: 'AI 服务暂不可用',
+  invalid_model_response: 'AI 返回内容无法校验'
+}[store.fallbackReason] || '解析服务异常'))
 const ringStyle = computed(() => ({ background: `conic-gradient(#4f8f7b ${store.completionPct}%, #e7efeb 0)` }))
 const statusClass = computed(() => store.isConfirmed ? 'confirmed' : store.canConfirm ? 'confirming' : 'collecting')
 const statusText = computed(() => store.isConfirmed ? '已确认' : store.canConfirm ? '待确认' : '持续理解中')

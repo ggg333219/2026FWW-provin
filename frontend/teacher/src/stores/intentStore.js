@@ -62,7 +62,8 @@ export const useIntentStore = defineStore('intent', {
     isConfirming: false,
     error: '',
     engine: '',
-    usedFallback: false
+    usedFallback: false,
+    fallbackReason: ''
   }),
 
   getters: {
@@ -115,6 +116,7 @@ export const useIntentStore = defineStore('intent', {
         this.humanSummary = result.human_summary || ''
         this.engine = result.engine || ''
         this.usedFallback = Boolean(result.used_fallback)
+        this.fallbackReason = result.fallback_reason || ''
         this.messages.push({
           role: 'assistant',
           content: result.response || this.followupQuestions[0] || '我已经更新了教学意图，请检查右侧方案卡。'
@@ -125,7 +127,6 @@ export const useIntentStore = defineStore('intent', {
         this.error = error?.name === 'AbortError'
           ? '分析超时，AI Engine 可能仍在处理，请稍后重试。'
           : (error?.message || '暂时无法连接意图理解服务，请检查 Go Backend 与 AI Engine。')
-        this.messages.pop()
         this.persist()
         return false
       } finally {
@@ -182,6 +183,7 @@ export const useIntentStore = defineStore('intent', {
       this.error = ''
       this.engine = ''
       this.usedFallback = false
+      this.fallbackReason = ''
       if (typeof window !== 'undefined') {
         window.localStorage.removeItem(CONFIRMED_INTENT_KEY)
         window.localStorage.removeItem(INTENT_ID_KEY)
@@ -205,7 +207,8 @@ export const useIntentStore = defineStore('intent', {
         humanSummary: this.humanSummary,
         intentId: this.intentId,
         engine: this.engine,
-        usedFallback: this.usedFallback
+        usedFallback: this.usedFallback,
+        fallbackReason: this.fallbackReason
       }))
     }
   }
