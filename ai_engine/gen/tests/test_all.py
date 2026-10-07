@@ -111,7 +111,9 @@ class TestPPTExporter(unittest.TestCase):
             {"node_id": "n2", "title": "小结", "type": "summary", "key_points": ["K1", "K2"]},
         ]
         result = self.ppt.export(nodes, "测试")
-        self.assertEqual(result["pages"], 2)  # 节点同源：不额外插入预览中不存在的封面
+        # M3 默认结构：预览与导出同源注入封面（1）+ quiz（2）+ 用户小结（3）+ 致谢（4）；
+        # 末节点已是 summary 不重复注入"本节小结"，内容节点≤5 不注入目录
+        self.assertEqual(result["pages"], 4)
 
 
 # ── 套件 4: DOCX 导出 ──

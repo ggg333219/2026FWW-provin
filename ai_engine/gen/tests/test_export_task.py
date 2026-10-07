@@ -71,6 +71,14 @@ class TestPPTExporter(unittest.TestCase):
 
     def setUp(self):
         self.ppt = PPTExporter(ExportPPTConfig(output_dir="/tmp"))
+        # 节点级渲染单元测试专用：关闭 M3 默认结构注入（封面/目录/总结/致谢），
+        # 保持"一个节点一页"的旧断言口径；默认结构行为由
+        # scripts/verify_deck_structure.py 与 test_preview_export_consistency 覆盖。
+        self.ppt_struct_off = PPTExporter(ExportPPTConfig(
+            output_dir="/tmp",
+            include_auto_cover=False, include_auto_toc=False,
+            include_auto_summary=False, include_closing_slide=False,
+        ))
 
     # ── 基础功能 ──
 
@@ -139,7 +147,7 @@ class TestPPTExporter(unittest.TestCase):
             "node_id": "n1", "title": "课堂互动", "node_type": "cover",
             "type": "quiz", "questions": ["哪个字段优先？"],
         }]
-        buf = self.ppt.export_to_bytes(nodes, "双字段")
+        buf = self.ppt_struct_off.export_to_bytes(nodes, "双字段")
         prs = Presentation(buf)
         self.assertEqual(len(prs.slides), 1)
         slide_text = "\n".join(shape.text for shape in prs.slides[0].shapes if hasattr(shape, "text"))
@@ -181,7 +189,9 @@ class TestPPTExporter(unittest.TestCase):
     def test_template_file_samples_are_not_leaked_into_export(self):
         """从模板目录加载时会清除样例页，不污染节点同源页数。"""
         template_dir = Path(__file__).resolve().parents[1] / "templates"
-        exporter = PPTExporter(ExportPPTConfig(template_dir=str(template_dir), output_dir="/tmp"))
+        exporter = PPTExporter(ExportPPTConfig(template_dir=str(template_dir), output_dir="/tmp",
+                                                include_auto_cover=False, include_auto_toc=False,
+                                                include_auto_summary=False, include_closing_slide=False))
         prs = Presentation(exporter.export_to_bytes(
             [{"node_id": "n1", "node_type": "slide", "title": "唯一节点", "content": "唯一正文"}],
             "母版加载", "academic",
@@ -220,7 +230,7 @@ class TestPPTExporter(unittest.TestCase):
             ],
             "figure": {"kind": "flow", "items": ["甲", "乙", "丙"]},
         }
-        prs = Presentation(self.ppt.export_to_bytes([node], "分页容量"))
+        prs = Presentation(self.ppt_struct_off.export_to_bytes([node], "分页容量"))
         text = "\n".join(
             shape.text for slide in prs.slides for shape in slide.shapes
             if hasattr(shape, "text")
@@ -243,7 +253,7 @@ class TestPPTExporter(unittest.TestCase):
             }],
         }
         self.assertEqual(resolve_node_type(node), "two_column")
-        prs = Presentation(self.ppt.export_to_bytes([node], "双栏验证"))
+        prs = Presentation(self.ppt_struct_off.export_to_bytes([node], "双栏验证"))
         self.assertEqual(len(prs.slides), 1)
 
         left_shapes = [
