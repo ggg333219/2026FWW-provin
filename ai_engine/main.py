@@ -670,6 +670,8 @@ class ExportPPTRequest(BaseModel):
     nodes: list[dict[str, Any]]
     course_name: str = "课件"
     template_id: str = "default"
+    intent: dict[str, Any] = Field(default_factory=dict)
+    generation_instruction_set: dict[str, Any] = Field(default_factory=dict)
 
 
 class PreviewRequest(BaseModel):
@@ -1258,9 +1260,21 @@ async def export_ppt_bytes(req: ExportPPTRequest):
 @app.post("/gen/export/doc")
 async def export_doc(req: ExportPPTRequest):
     """[S3] 导出 DOCX"""
-    exporter = DOCExporter()
     try:
-        return exporter.export(req.nodes, req.course_name)
+        from ai_engine.gen.export_doc import LessonPlanDOCExporter
+        from ai_engine.gen.lesson_plan import LessonPlanGenerator
+
+        intent = dict(req.intent or {})
+        intent.setdefault("topic", req.course_name)
+        plan = await asyncio.to_thread(
+            LessonPlanGenerator().generate,
+            req.nodes,
+            intent,
+            None,
+            req.generation_instruction_set,
+        )
+        result = await asyncio.to_thread(LessonPlanDOCExporter().export, plan)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DOCX 导出失败: {str(e)}")
 
@@ -1268,9 +1282,20 @@ async def export_doc(req: ExportPPTRequest):
 @app.post("/gen/export/doc-bytes")
 async def export_doc_bytes(req: ExportPPTRequest):
     """[S3] 导出 DOCX 字节流（直接上传 MinIO）"""
-    exporter = DOCExporter()
     try:
-        buf = exporter.export_to_bytes(req.nodes, req.course_name)
+        from ai_engine.gen.export_doc import LessonPlanDOCExporter
+        from ai_engine.gen.lesson_plan import LessonPlanGenerator
+
+        intent = dict(req.intent or {})
+        intent.setdefault("topic", req.course_name)
+        plan = await asyncio.to_thread(
+            LessonPlanGenerator().generate,
+            req.nodes,
+            intent,
+            None,
+            req.generation_instruction_set,
+        )
+        buf = await asyncio.to_thread(LessonPlanDOCExporter().export_to_bytes, plan)
         from fastapi.responses import StreamingResponse
         return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                  headers={"Content-Disposition": f"attachment; filename={req.course_name}.docx"})
