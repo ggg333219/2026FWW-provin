@@ -67,6 +67,7 @@ if ([string]::IsNullOrWhiteSpace($env:REDIS_HOST)) { $env:REDIS_HOST = '127.0.0.
 if ([string]::IsNullOrWhiteSpace($env:REDIS_PORT)) { $env:REDIS_PORT = '16379' }
 if ([string]::IsNullOrWhiteSpace($env:REDIS_ENABLED)) { $env:REDIS_ENABLED = '1' }
 if ([string]::IsNullOrWhiteSpace($env:RAG_STORE_BACKEND)) { $env:RAG_STORE_BACKEND = 'pgvector' }
+if ([string]::IsNullOrWhiteSpace($env:AI_EMBEDDING_DIM)) { $env:AI_EMBEDDING_DIM = '512' }
 if ([string]::IsNullOrWhiteSpace($env:DB_HOST)) { $env:DB_HOST = '127.0.0.1' }
 if ([string]::IsNullOrWhiteSpace($env:DB_PORT)) { $env:DB_PORT = '15432' }
 
@@ -341,8 +342,8 @@ Start-Background -Name "ai_engine" -FilePath $aiPython -ArgumentList $aiPythonAr
 $backendStartTimeUtc = [DateTime]::UtcNow
 $runtimePortFile = Join-Path $root 'backend\.runtime\teacher.json'
 Start-Background -Name "backend" -FilePath "go" -ArgumentList @('run','./cmd/teacher') -WorkingDirectory (Join-Path $root "backend") -StdOut "$logsDir\backend.log" -StdErr "$logsDir\backend.err.log"
-$backendPort = 18080
-for ($attempt = 1; $attempt -le 20; $attempt++) {
+$backendPort = 8082
+for ($attempt = 1; $attempt -le 60; $attempt++) {
     try {
         if (Test-Path $runtimePortFile) {
             $portAnnouncement = Get-Content $runtimePortFile -Raw | ConvertFrom-Json

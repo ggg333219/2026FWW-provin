@@ -1,6 +1,10 @@
 import { AI_API_BASE } from "../../config/api";
 import { requestJson } from "./request";
 
+// 内容生成会触发多个节点的 LLM 调用，不能使用 request.js 的通用 10 秒上限。
+// 创建接口只负责提交异步任务；状态查询仍保持默认短超时。
+const CONTENT_GENERATE_TIMEOUT_MS = 120000;
+
 /**
  * S3 讲稿生成 API (Studio)
  *
@@ -197,6 +201,7 @@ export const teacherGenerationApi = {
     requestJson("/api/v1/gen/content", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      timeoutMs: CONTENT_GENERATE_TIMEOUT_MS,
       body: JSON.stringify({
         nodes: nodes || [],
         context_markdown,

@@ -61,7 +61,9 @@ def _build_store():
     """生产环境显式启用 pgvector；测试和无数据库场景保持零依赖内存实现。"""
     backend = (os.getenv("RAG_STORE_BACKEND") or "memory").strip().lower()
     if backend in {"pg", "pgvector", "postgres", "postgresql"}:
-        return PGVectorStore()
+        # The store schema must use the same dimension as the embedding service.
+        # This is especially important for the local BGE-small-zh model (512d).
+        return PGVectorStore(embedding_dim=_embed_service.dim)
     return InMemoryVectorStore()
 
 
