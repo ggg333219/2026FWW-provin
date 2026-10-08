@@ -349,7 +349,8 @@ class PPTExporter:
                                   align=PP_ALIGN.CENTER)
                 self._add_textbox(slide, text, x + 0.88, y + 0.25, card_w - 1.1, 0.56,
                                   font_size=self._fit_font(text, 14, 19, 15),
-                                  color=self._theme.text, valign=MSO_ANCHOR.MIDDLE)
+                                  color=self._theme.text, valign=MSO_ANCHOR.MIDDLE,
+                                  fit_to_shape=True)
 
     def _add_agenda_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
         items = resolve_key_points(node)
@@ -367,7 +368,8 @@ class PPTExporter:
                 self._add_textbox(slide, f"{offset:02d}", 0.95, y, 0.7, 0.48,
                                   font_size=19, color=self._theme.accent, bold=True)
                 self._add_textbox(slide, text, 1.85, y - 0.02, 10.25, 0.58,
-                                  font_size=self._fit_font(text, 19, 25, 36), color=self._theme.text)
+                                  font_size=self._fit_font(text, 19, 25, 36), color=self._theme.text,
+                                  fit_to_shape=True)
                 self._add_shape(slide, MSO_SHAPE.RECTANGLE, 1.85, y + 0.54, 9.95, 0.012, self._theme.muted)
                 y += 0.77
 
@@ -1321,11 +1323,11 @@ class PPTExporter:
                 self._add_textbox(
                     slide, body, inner_x + 0.2, cursor, inner_w - 0.42, box_h,
                     font_size=size, color=self._theme.text, bold=True,
-                    valign=MSO_ANCHOR.MIDDLE)
+                    valign=MSO_ANCHOR.MIDDLE, fit_to_shape=True)
                 cursor += advance
                 continue
             self._add_textbox(slide, body, inner_x, cursor, inner_w, box_h,
-                              font_size=size, color=self._theme.text)
+                              font_size=size, color=self._theme.text, fit_to_shape=True)
             cursor += advance
 
     @staticmethod
@@ -1365,12 +1367,12 @@ class PPTExporter:
 
     def _add_textbox(self, slide, text: str, x: float, y: float, width: float,
                      height: float, *, font_size: int, color: str, bold: bool = False,
-                     align=PP_ALIGN.LEFT, valign=MSO_ANCHOR.TOP):
+                     align=PP_ALIGN.LEFT, valign=MSO_ANCHOR.TOP, fit_to_shape: bool = False):
         box = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(width), Inches(height))
         frame = box.text_frame
         frame.clear()
         frame.word_wrap = True
-        frame.auto_size = MSO_AUTO_SIZE.NONE
+        frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE if fit_to_shape else MSO_AUTO_SIZE.NONE
         frame.vertical_anchor = valign
         frame.margin_left = frame.margin_right = Inches(0.02)
         frame.margin_top = frame.margin_bottom = Inches(0.01)

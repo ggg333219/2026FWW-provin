@@ -198,7 +198,7 @@ def _revision_has_content(revision: Any) -> bool:
         return False
     if str(revision.get("script") or "").strip():
         return True
-    for key in ("summary", "segments", "point_details"):
+    for key in ("title", "summary", "content", "key_points", "segments", "point_details"):
         value = revision.get(key)
         if isinstance(value, str) and value.strip():
             return True
@@ -237,6 +237,22 @@ def apply_page_revision(node: dict[str, Any], revision: Any,
         return node
 
     updated = dict(node)
+    kind = str(node.get("node_type") or node.get("type") or "content").strip().lower()
+    special_page = kind in {"cover", "title", "title_slide", "agenda", "toc", "directory", "summary", "conclusion", "recap", "目录"}
+
+    # 封面/目录/总结是实际 PPT 页，不应再把模型返回的页面文字丢掉。
+    # 普通教学节点仍保持原有身份保护，避免模型误改 node_id/title。
+    if special_page:
+        new_title = str(revision.get("title") or "").strip()
+        if new_title:
+            updated["title"] = new_title
+        new_content = str(revision.get("content") or "").strip()
+        if new_content:
+            updated["content"] = new_content
+        raw_points = revision.get("key_points")
+        if isinstance(raw_points, list) and raw_points:
+            updated["key_points"] = [str(item).strip() for item in raw_points if str(item).strip()]
+            updated["core_points"] = list(updated["key_points"])
 
     new_summary = str(revision.get("summary") or "").strip()
     if new_summary:

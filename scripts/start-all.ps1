@@ -61,6 +61,9 @@ if ([string]::IsNullOrWhiteSpace($env:AI_MODEL) -or $env:AI_MODEL -match '^gpt-4
 if ([string]::IsNullOrWhiteSpace($env:AI_GEN_MODE)) {
     $env:AI_GEN_MODE = 'llm'
 }
+if ([string]::IsNullOrWhiteSpace($env:LLM_TIMEOUT_SECONDS)) {
+    $env:LLM_TIMEOUT_SECONDS = '120'
+}
 
 # Docker Compose maps Redis to host port 16379; keep explicit overrides available.
 if ([string]::IsNullOrWhiteSpace($env:REDIS_HOST)) { $env:REDIS_HOST = '127.0.0.1' }

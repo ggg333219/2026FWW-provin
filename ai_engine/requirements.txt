@@ -25,5 +25,6 @@ redis>=5.0.0                # Redis 任务与会话跨进程持久化
 # python-docx         # DOCX 解析（知识库上传需要）
 
 # ASR 语音识别（可选二选一：有 key 走 dashscope；无 key 服务器可开本地 whisper）
-# dashscope>=1.20.0          # 云端 Paraformer（设置 DASHSCOPE_API_KEY 即启用，无需装包也可用 openai 兼容路径时忽略）
+dashscope>=1.20.0           # 云端 Paraformer（设置 DASHSCOPE_API_KEY 即启用）
+imageio-ffmpeg>=0.6.0       # 浏览器 WebM 录音转 WAV（自带 FFmpeg 二进制）
 # faster-whisper>=1.0.0      # 本地转写（ASR_ALLOW_LOCAL_WHISPER=1 启用；模型经 HF_ENDPOINT 镜像下载）

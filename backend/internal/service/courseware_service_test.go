@@ -120,6 +120,25 @@ func sampleTeachingNodes() []TeachingNodeItem {
 	}
 }
 
+func TestApplyDirectSpecialPageTitle(t *testing.T) {
+	nodes := []TeachingNodeItem{
+		{NodeID: "__auto_cover__", Title: "旧标题", NodeType: "cover"},
+		{NodeID: "node_1", Title: "正文", NodeType: "content"},
+	}
+	updated, modified, ok := applyDirectSpecialPageTitle(
+		"这页title换成排序算法",
+		ModifyIntent{TargetIDs: []string{"__auto_cover__"}},
+		nodes,
+	)
+
+	if !ok || len(modified) != 1 || updated[0].Title != "排序算法" {
+		t.Fatalf("special title edit not applied: ok=%v modified=%v nodes=%+v", ok, modified, updated)
+	}
+	if updated[1].Title != "正文" {
+		t.Fatalf("normal node changed unexpectedly: %+v", updated[1])
+	}
+}
+
 func newCoursewareTestSvc(ai *fakeModifyAI) *CoursewareService {
 	return &CoursewareService{aiClient: ai, store: newMemCoursewareStore()}
 }

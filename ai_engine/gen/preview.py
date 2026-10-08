@@ -254,9 +254,10 @@ class PreviewRenderer:
   .section-slide .divider {{ width: 60px; height: 4px; background: rgba(255,255,255,0.9);
                              margin: 20px 0; border-radius: 2px; }}
   .section-sub {{ font-size: 16px; color: rgba(255,255,255,0.85); margin-bottom: 18px; line-height: 1.6; }}
-  .section-list {{ list-style: none; display: grid; gap: 10px; margin-top: 8px; }}
+  .section-list {{ list-style: none; display: grid; gap: 8px; margin-top: 8px; }}
   .section-list li {{ display: flex; align-items: center; gap: 12px; background: rgba(255,255,255,0.14);
-                      border-radius: 10px; padding: 10px 16px; font-size: 15px; line-height: 1.5; }}
+                      border-radius: 10px; padding: 7px 14px; font-size: 14px; line-height: 1.35;
+                      overflow-wrap: anywhere; min-height: 32px; }}
   .section-list .kp-idx {{ flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%;
                            background: #fff; color: #b5179e; font-weight: 700; font-size: 12px;
                            display: flex; align-items: center; justify-content: center; }}

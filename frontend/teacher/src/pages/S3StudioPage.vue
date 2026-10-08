@@ -121,7 +121,12 @@
         @selection-change="handleEvidenceSelection"
       />
       <!-- C6: AI 修改对话面板（右侧浮动；projectId 绑定后显示） -->
-      <ModifyPanel class="s3-ai-panel" @style-request="handleStyleRequest" @applied="handleModifyApplied" />
+      <ModifyPanel
+        class="s3-ai-panel"
+        :include-special-pages="currentPhase !== 'outline' || !!generationStore.lastGenId"
+        @style-request="handleStyleRequest"
+        @applied="handleModifyApplied"
+      />
       <div v-if="currentPhase === 'outline'" class="phase-panel">
         <OutlineEditor
           :session-id="intentStore.sessionId"

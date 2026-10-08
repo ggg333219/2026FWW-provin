@@ -15,7 +15,7 @@
       当前页 —— 对话里说「这页 / 本页 / 当前页」时的所指。
       不选就退回「按指令里的页号或标题定位」，与加这条之前完全一致。
     -->
-    <div v-if="liveNodes.length" class="active-page-bar">
+    <div v-if="editableNodes.length" class="active-page-bar">
       <span class="apb-label">当前页</span>
       <select
         class="apb-select"
@@ -26,7 +26,7 @@
       >
         <option value="">未指定（按指令里的页号定位）</option>
         <option
-          v-for="(node, index) in liveNodes"
+          v-for="(node, index) in editableNodes"
           :key="node.node_id || index"
           :value="node.node_id"
         >
@@ -93,12 +93,12 @@
       </button>
     </div>
 
-    <section v-if="liveNodes.length" class="live-preview" aria-label="页面列表">
+    <section v-if="editableNodes.length" class="live-preview" aria-label="页面列表">
       <div class="preview-head">
         <strong>页面</strong>
         <span>点一行即选中，对话里就能说「这页」</span>
       </div>
-      <article v-for="(node, index) in liveNodes" :key="node.node_id || index"
+      <article v-for="(node, index) in editableNodes" :key="node.node_id || index"
         :class="['preview-node', { modified: isRecentlyModified(node), active: isActiveNode(node) }]"
         role="button" tabindex="0"
         :aria-pressed="isActiveNode(node)"
@@ -156,10 +156,81 @@ const outlineStore = useOutlineStore()
 const generationStore = useGenerationStore()
 const messagesEl = ref(null)
 const selectedVersion = ref(null)
+const props = defineProps({
+  includeSpecialPages: { type: Boolean, default: true },
+})
 const emit = defineEmits(['style-request', 'applied'])
 const liveNodes = computed(() => generationStore.currentScriptNodes?.length
   ? generationStore.currentScriptNodes
   : outlineStore.nodes)
+const specialKind = (node) => {
+  const raw = String(node?.node_type || node?.type || 'content').trim().toLowerCase()
+  if (['cover', 'title', 'title_slide'].includes(raw)) return 'cover'
+  if (['agenda', 'toc', 'directory', '目录'].includes(raw)) return 'agenda'
+  if (['summary', 'conclusion', 'recap'].includes(raw)) return 'summary'
+  return raw || 'content'
+}
+const normalizedNode = (node) => ({
+  ...node,
+  node_id: node.node_id,
+  title: node.title,
+  summary: node.summary || node.content || '',
+  node_type: node.node_type || node.type || 'content',
+  key_points: node.key_points || node.core_points || [],
+  core_points: node.core_points || node.key_points || [],
+  script: node.script || '',
+  segments: node.segments || [],
+  estimated_duration_minutes: node.estimated_duration_minutes || 5,
+  citation_refs: node.citation_refs || [],
+  source_chunk_ids: node.source_chunk_ids || [],
+  metadata: node.metadata || {},
+})
+const materializeSpecialPages = (source) => {
+  const nodes = (source || []).map(normalizedNode)
+  if (!props.includeSpecialPages) return nodes
+  const hasKind = (kind) => nodes.some((node) => specialKind(node) === kind)
+  const contentNodes = nodes.filter((node) => !['cover', 'agenda', 'summary'].includes(specialKind(node)))
+  const result = [...nodes]
+  if (!hasKind('cover')) {
+    result.unshift(normalizedNode({
+      node_id: '__auto_cover__',
+      title: outlineStore.title || '课件',
+      content: 'AI 智能生成课件',
+      summary: '',
+      node_type: 'cover',
+      type: 'cover',
+      key_points: [],
+    }))
+  }
+  if (!hasKind('agenda') && contentNodes.length > 5) {
+    const coverIndex = result.findIndex((node) => specialKind(node) === 'cover')
+    result.splice(coverIndex + 1, 0, normalizedNode({
+      node_id: '__auto_toc__',
+      title: '目录',
+      content: `本次课程共 ${contentNodes.length} 个环节`,
+      summary: `本次课程共 ${contentNodes.length} 个环节`,
+      node_type: 'agenda',
+      type: 'agenda',
+      key_points: contentNodes.map((node) => node.title).filter(Boolean),
+    }))
+  }
+  if (!hasKind('summary')) {
+    result.push(normalizedNode({
+      node_id: '__auto_summary__',
+      title: '本节小结',
+      content: '回顾本次课程的核心要点',
+      summary: '回顾本次课程的核心要点',
+      node_type: 'summary',
+      type: 'summary',
+      key_points: contentNodes
+        .flatMap((node) => node.key_points || node.core_points || [node.title])
+        .filter(Boolean)
+        .slice(0, 5),
+    }))
+  }
+  return result
+}
+const editableNodes = computed(() => materializeSpecialPages(liveNodes.value))
 const isRecentlyModified = (node) => modifyStore.recentlyModifiedIds.includes(node.node_id)
 // 选中页时直接教老师说「这页」—— 这是最短的一句指令
 const inputPlaceholder = computed(() => modifyStore.activeNodeId
@@ -183,24 +254,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleGlobalKeydown)
 // 对话里报「已更新」，页面上却是「改了看不见」。引擎侧每加一个节点字段，
 // 手工白名单就得同步一次，这条链路上没有谁会记得。
 function nodesForApi() {
-  const source = generationStore.currentScriptNodes?.length
-    ? generationStore.currentScriptNodes
-    : outlineStore.nodes
-  return (source || []).map((n) => ({
-    ...n,
-    node_id: n.node_id,
-    title: n.title,
-    summary: n.summary,
-    node_type: n.node_type,
-    key_points: n.key_points || [],
-    core_points: n.core_points || n.key_points || [],
-    script: n.script || '',
-    segments: n.segments || [],
-    estimated_duration_minutes: n.estimated_duration_minutes || 5,
-    citation_refs: n.citation_refs || [],
-    source_chunk_ids: n.source_chunk_ids || [],
-    metadata: n.metadata || {},
-  }))
+  return editableNodes.value
 }
 
 // 生成后优先写回 PPT 节点并用 inline 节点刷新预览；生成前才回写大纲。
@@ -210,7 +264,7 @@ async function applyResult({ allNodes, modifiedNodes, intent, instruction, prese
     emit('style-request', { instruction, intent, presentation })
     return
   }
-  const current = liveNodes.value || []
+  const current = editableNodes.value || []
   const currentById = new Map(current.map((node) => [node.node_id, node]))
   const hasField = (node, field) => Object.prototype.hasOwnProperty.call(node || {}, field)
   const normalize = (n) => ({

@@ -78,7 +78,7 @@ describe('大纲接口超时配置', () => {
 
     await teacherOutlineApi.create({ session_id: 's1' }).catch(() => {})
 
-    expect(delays).toContain(150000)
+    expect(delays).toContain(180000)
   })
 
   it('revise 同样使用 150s 超时，长于 Go 大纲等待上限', async () => {
@@ -87,6 +87,6 @@ describe('大纲接口超时配置', () => {
 
     await teacherOutlineApi.revise('outline_1', { message: '删掉总结节点' }).catch(() => {})
 
-    expect(delays).toContain(150000)
+    expect(delays).toContain(180000)
   })
 })

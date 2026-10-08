@@ -2529,7 +2529,7 @@ async def asr_transcribe(file: UploadFile = File(...), language: str = "zh"):
     POST /api/v1/asr/transcribe — 上传短音频（≤20MB / ≤60s），返回识别文本。
 
     前端链路：MediaRecorder 录音 → multipart 上传（经 /ai/ 前缀反代到引擎）→ 回填输入框。
-    provider 链见 ai_engine/asr.py：dashscope（有 key）→ local_whisper（ASR_ALLOW_LOCAL_WHISPER=1）→ 501。
+    provider 链见 ai_engine/asr.py：dashscope（有 DASHSCOPE_API_KEY）→ local_whisper（ASR_ALLOW_LOCAL_WHISPER=1）→ 501。
     """
     data = await file.read()
     content_type = file.content_type or ""

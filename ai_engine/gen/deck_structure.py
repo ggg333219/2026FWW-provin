@@ -30,7 +30,16 @@ SUMMARY_MAX_POINTS = 5
 def resolve_kind(node: dict[str, Any]) -> str:
     """与 page_spec.resolve_kind 同口径的轻量判定（避免循环导入）。"""
     raw = str(node.get("node_type") or node.get("type") or "content").strip().lower()
-    return raw or "content"
+    aliases = {
+        "title": "cover",
+        "title_slide": "cover",
+        "toc": "agenda",
+        "directory": "agenda",
+        "目录": "agenda",
+        "conclusion": "summary",
+        "recap": "summary",
+    }
+    return aliases.get(raw, raw) or "content"
 
 
 def _as_mapping(node: Any) -> dict[str, Any]:
@@ -61,7 +70,7 @@ def _toc_titles(nodes: list[dict[str, Any]]) -> list[str]:
     """目录条目 = 除封面/已有目录页外的每个节点标题。"""
     titles: list[str] = []
     for index, node in enumerate(nodes, start=1):
-        if resolve_kind(node) == "cover":
+        if resolve_kind(node) in ("cover", "agenda", "summary"):
             continue
         title = str(node.get("title") or "").strip()
         titles.append(title or f"第 {index} 页")
@@ -128,7 +137,8 @@ def expand_deck_pages(
         })
 
     # ② 目录（紧跟封面之后；无封面时才作为首页）
-    if include_toc and content_count > toc_min_content_nodes:
+    has_agenda = any(resolve_kind(node) == "agenda" for node in expanded)
+    if include_toc and not has_agenda and content_count > toc_min_content_nodes:
         titles = _toc_titles(normalized)
         if titles:
             # 首位已是封面（注入的或用户自己的）→ 目录排在其后；否则目录作为首页

@@ -15,7 +15,10 @@ import (
 
 const (
 	intentExtractRequestTimeout = 120 * time.Second
-	outlineRequestTimeout       = 120 * time.Second
+	outlineRequestTimeout       = 180 * time.Second
+	// 意图解析会先调用一次结构化 LLM。允许它完成一次慢请求，
+	// 但不把 AI Engine 的内部重试周期再叠加到 Go 网关上。
+	modifyIntentRequestTimeout = 180 * time.Second
 )
 
 // AIEngine 定义所有向后端 AI Engine 的调用契约。
@@ -594,20 +597,22 @@ type OutlineReviseAIResponse struct {
 // TeachingNodeItem —— 引擎 TeachingNode 的 Go 镜像（字段=ai_engine/core/schema.py）。
 // 字段只增不删：node 由 S3 生成 → S4 版本快照 / 导出 / 前端渲染全链路共用本结构。
 type TeachingNodeItem struct {
-	NodeID               string         `json:"node_id"`
-	Title                string         `json:"title"`
-	NodeType             string         `json:"node_type,omitempty"` // 引擎枚举渲染类型（slide/section/quiz/cover/...）
-	Content              string         `json:"content"`             // 完整节点内容（markdown / html）
-	Summary              string         `json:"summary"`
-	PageRef              int            `json:"page_ref,omitempty"`
-	SourceChunkIDs       []string       `json:"source_chunk_ids"` // 引用证据 chunk 列表
-	CorePoints           []string       `json:"core_points"`
-	KeyPoints            []string       `json:"key_points"` // 与 core_points 等效（兼容主流 AI-PPT 规范）
-	Examples             []string       `json:"examples"`
-	KeyDifficulties      []string       `json:"key_difficulties"`
-	ExpectedOutcomes     []string       `json:"expected_outcomes"`
-	DurationMin          float64        `json:"estimated_duration_minutes"` // 单位统一为分钟
-	InteractiveQuestions []string       `json:"interactive_questions"`      // 与 questions 等效
+	NodeID           string   `json:"node_id"`
+	Title            string   `json:"title"`
+	NodeType         string   `json:"node_type,omitempty"` // 引擎枚举渲染类型（slide/section/quiz/cover/...）
+	Content          string   `json:"content"`             // 完整节点内容（markdown / html）
+	Summary          string   `json:"summary"`
+	PageRef          int      `json:"page_ref,omitempty"`
+	SourceChunkIDs   []string `json:"source_chunk_ids"` // 引用证据 chunk 列表
+	CorePoints       []string `json:"core_points"`
+	KeyPoints        []string `json:"key_points"` // 与 core_points 等效（兼容主流 AI-PPT 规范）
+	Examples         []string `json:"examples"`
+	KeyDifficulties  []string `json:"key_difficulties"`
+	ExpectedOutcomes []string `json:"expected_outcomes"`
+	DurationMin      float64  `json:"estimated_duration_minutes"` // 单位统一为分钟
+	// AI Engine 历史响应既可能返回字符串数组，也可能返回带题干/选项的对象数组；
+	// 使用 interface{} 保留两种合法形态，避免轮询 done 状态时整份响应解析失败。
+	InteractiveQuestions []any          `json:"interactive_questions"` // 与 questions 等效
 	CitationRefs         []string       `json:"citation_refs"`
 	NextNodeID           string         `json:"next_node_id,omitempty"`
 	PrevNodeID           string         `json:"prev_node_id,omitempty"`
@@ -1194,7 +1199,7 @@ func (c *aiEngineClient) ParseModify(ctx context.Context, req ParseModifyRequest
 		ModifyIntent
 	}
 	// Python 返回扁平 intent 对象，直接反序列化
-	if err := c.postJSON(ctx, "/api/v1/ai/parse_modify", req, &result); err != nil {
+	if err := c.postJSONWithTimeout(ctx, "/api/v1/ai/parse_modify", req, &result, modifyIntentRequestTimeout); err != nil {
 		return nil, err
 	}
 	return &result.ModifyIntent, nil

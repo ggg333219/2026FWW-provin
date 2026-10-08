@@ -350,7 +350,7 @@ class OutlineBuilder:
         return LLMClient(
             temperature=self.config.temperature,
             model=self.config.model or None,
-            timeout=min(resolve_llm_timeout(), 90),
+            timeout=min(resolve_llm_timeout(), 150),
             max_attempts=1,
             disable_sdk_retries=True,
             stop_schema_fallback_on_error=True,
