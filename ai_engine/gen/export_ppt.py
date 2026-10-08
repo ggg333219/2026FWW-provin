@@ -28,11 +28,16 @@ except ImportError:  # pragma: no cover
     MSO_LINE_DASH_STYLE = None
 
 from .page_spec import (
+    FALLBACK_DENSITY,
     MAX_FIGURE_ITEMS,
     ROLE_SECONDARY,
     ROLE_TEACHER,
     build_page_spec,
+    density_profile,
+    is_auto_node,
+    pptx_line_height_factor,
     resolve_export_key_points,
+    resolve_density,
 )
 from .deck_structure import TOC_MIN_CONTENT_NODES, expand_deck_pages
 from .presentation import presentation_from_nodes, presentation_to_theme
@@ -91,8 +96,8 @@ _LAYOUT_FIGURE_SHRINK = (0.28 + 0.333, 0.20 + 0.167)
 #: 3.6in 宽的左栏会圆到 0.6in，观感从"卡片"变成"枕头"，两边一眼就能看出不是同一个东西。
 _PANEL_RADIUS = 8.0 / 96.0
 
-#: 核心要点卡片的纵向内边距与卡片间距（英寸）。预览是 padding 7px、卡片间 gap 10px
-#: （preview.py 的 .svg-block-secondary .key-points li 与 .key-points 的 grid gap）。
+#: 核心要点卡片的纵向内边距与卡片间距（英寸）—— comfortable 档的基准值。实际
+#: 取值随密度档位从 page_spec.DENSITY_PROFILES 读取（H5 三处联动）。
 _POINT_CARD_PAD = 7.0 / 96.0
 _POINT_CARD_GAP = 10.0 / 96.0
 
@@ -160,10 +165,27 @@ class PPTExporter:
         # 构造期的兜底主题，_render 会按节点的样式层重算
         self._theme = get_theme(self.config.default_template)
         self._panel_shape = MSO_SHAPE.ROUNDED_RECTANGLE
+        # H5：疏密排版档位与 H8：同目录 html5 互动文件名，均由 _render 按输入重算
+        self._density = FALLBACK_DENSITY
+        self._html5_filename = ""
+
+    # ── 密度参数（H5）：所有排版数字都读 page_spec.DENSITY_PROFILES 这一张表 ──
+
+    def _density_value(self, key: str) -> float:
+        return float(density_profile(self._density)[key])
+
+    def _line_factor(self) -> float:
+        """排版行高系数（分页估算与渲染共用一把尺子，随密度档位变化）。"""
+        return pptx_line_height_factor(self._density)
+
+    def _panel_units(self) -> int:
+        """左栏要点面板的每页容量（单位数），随密度档位缩放。"""
+        return max(4, round(13 * self._density_value("panel_units_scale")))
 
     def export(self, nodes: list[dict[str, Any]], course_name: str = "课件",
-               template_id: str = "default") -> dict[str, Any]:
-        prs = self._render(nodes, course_name, template_id)
+               template_id: str = "default",
+               html5_filename: str | None = None) -> dict[str, Any]:
+        prs = self._render(nodes, course_name, template_id, html5_filename=html5_filename)
         safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in course_name).strip() or "课件"
         output_dir = Path(self.config.output_dir)
         # 既有测试和部分 Linux 配置使用 /tmp；Windows 下映射到系统临时目录。
@@ -179,15 +201,16 @@ class PPTExporter:
         }
 
     def export_to_bytes(self, nodes: list[dict[str, Any]], course_name: str = "课件",
-                        template_id: str = "default") -> io.BytesIO:
-        prs = self._render(nodes, course_name, template_id)
+                        template_id: str = "default",
+                        html5_filename: str | None = None) -> io.BytesIO:
+        prs = self._render(nodes, course_name, template_id, html5_filename=html5_filename)
         buf = io.BytesIO()
         prs.save(buf)
         buf.seek(0)
         return buf
 
     def _render(self, nodes: list[dict[str, Any]], course_name: str,
-                template_id: str) -> Presentation:
+                template_id: str, html5_filename: str | None = None) -> Presentation:
         prs = self._create_presentation(template_id)
         normalized = [_as_mapping(node) for node in (nodes or [])]
         # 样式层与预览同源，都读节点 metadata.presentation。取润色前的节点做判定，
@@ -196,6 +219,11 @@ class PPTExporter:
         presentation, explicit_keys = presentation_from_nodes(normalized)
         self._theme, _ = presentation_to_theme(
             presentation, explicit_keys, template_id or self.config.default_template)
+        # H5：密度三档（compact/comfortable/loose）取自样式层，排版数字全部来自
+        # page_spec.DENSITY_PROFILES 这一张参数表 —— 与预览 svg_renderer 同源。
+        self._density = resolve_density(presentation.get("density"))
+        # H8：互动页超链接指向的同目录 html5 文件名（无则不画超链接占位）
+        self._html5_filename = str(html5_filename or "").strip()
         # 面板永远是圆角：预览的版式面板写的都是 rounded_rect（rx=8），与用户选了
         # 哪套调色板无关。以前这里按"样式层是否启用"切成方角 —— 那是导出侧自己的
         # "瑞士风方角"设计语言，预览里并没有，于是选了样式反而更像不了。
@@ -292,7 +320,10 @@ class PPTExporter:
         self._add_shape(slide, MSO_SHAPE.OVAL, -0.95, 5.35, 2.3, 2.3,
                         self._blend(self._theme.primary, self._theme.inverse, 0.10))
         title = str(node.get("title") or node.get("content") or "课件").strip()
-        subtitle = str(node.get("content") or node.get("summary") or "").strip()
+        # M4：大纲概述（summary）不再当副标题；仅合成封面（__auto_）保留兜底
+        subtitle = str(node.get("content") or "").strip()
+        if not subtitle and is_auto_node(node):
+            subtitle = str(node.get("summary") or "").strip()
         if subtitle == title:
             subtitle = ""
         # 标题上下居中：主标题 + 副标题整体居中排布，配短装饰条
@@ -319,7 +350,10 @@ class PPTExporter:
         self._add_textbox(slide, title, 4.95, 2.25, 7.45, 1.7,
                           font_size=self._fit_font(title, 30, 42, 14), color=self._theme.text,
                           bold=True, valign=MSO_ANCHOR.MIDDLE)
-        summary = str(node.get("summary") or node.get("content") or "").strip()
+        # M4：章节页副标题只认 content；合成节点（__auto_）保留 summary 兜底
+        summary = str(node.get("content") or "").strip()
+        if not summary and is_auto_node(node):
+            summary = str(node.get("summary") or "").strip()
         if summary:
             self._add_textbox(slide, summary, 5.0, 4.15, 6.9, 1.0,
                               font_size=self._fit_font(summary, 17, 23, 36), color=self._theme.muted)
@@ -354,7 +388,8 @@ class PPTExporter:
     def _add_agenda_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
         items = resolve_key_points(node)
         if not items:
-            raw = node.get("content") or node.get("summary") or ""
+            # 合成目录页的条目兜底：content 优先（M4：真实节点 summary 不上页面）
+            raw = node.get("content") or (node.get("summary") if is_auto_node(node) else "") or ""
             items = [line.strip(" -•\t") for line in str(raw).splitlines() if line.strip()]
         items = items or ["课程导入", "核心内容", "课堂实践", "总结提升"]
         chunks = self._chunk_items(items, 7)
@@ -398,7 +433,7 @@ class PPTExporter:
         # 0.28in 计，实际只有 0.1in），又给结论块少算了（按 15pt/36 字估，实际是
         # 22pt/23 字）。于是面板里明明还剩一行的地方，那行就被推到了下一页。
         body_chunks = self._chunk_body_items(body_items, first_body[1] - 0.71, col_w - 0.58)
-        point_chunks = self._chunk_weighted(side_points, 13, 34)
+        point_chunks = self._chunk_weighted(side_points, self._panel_units(), 34)
         page_count = max(len(body_chunks), len(point_chunks), 1)
 
         title = str(node.get("title") or f"第 {index} 页")
@@ -791,8 +826,11 @@ class PPTExporter:
         """固定双栏页：左栏核心要点，右栏讲授分段或内容展开。"""
         key_items = [("要点", point, True) for point in resolve_key_points(node)]
         if not key_items:
-            summary = str(node.get("summary") or "暂无核心要点").strip()
-            key_items = [("摘要", summary, False)]
+            # M4：大纲概述不再兜底进左栏；合成节点保留
+            fallback = str(node.get("content") or "").strip()
+            if not fallback and is_auto_node(node):
+                fallback = str(node.get("summary") or "").strip()
+            key_items = [("摘要", fallback or "暂无核心要点", False)]
 
         body_items: list[tuple[str, str, bool]] = []
         value = node.get("content")
@@ -833,6 +871,10 @@ class PPTExporter:
             slide = self._blank_slide(prs, index)
             title = str(node.get("title") or "课堂互动") + ("（续）" if chunk_index else "")
             self._add_page_title(slide, title, index)
+            if self._html5_filename:
+                # H8：互动/测验页放一个可点击的占位形状，超链接指向同目录的
+                # html5 互动课件（由 main.py 的导出任务与 pptx 一起落在同一目录）。
+                self._add_interactive_link_shape(slide)
             y = 1.55
             for question, options, answer in chunk:
                 number += 1
@@ -862,6 +904,32 @@ class PPTExporter:
                     y += 1.02
 
     _QUIZ_PLAIN_PER_PAGE = 5
+
+    def _add_interactive_link_shape(self, slide) -> None:
+        """H8：互动页占位形状 + 超链接，指向同目录的 html5 互动课件文件。
+
+        链接写成**相对路径**（与 .pptx 同目录的文件名），拷走整个导出文件夹
+        后链接依然成立。形状与文字都挂 click_action，点哪一处都能打开。
+        """
+        target = self._html5_filename
+        shape = self._add_shape(
+            slide, MSO_SHAPE.ROUNDED_RECTANGLE, 8.42, 0.33, 3.42, 0.52,
+            self._blend(self._theme.primary, self._theme.inverse, 0.22),
+            line=self._theme.inverse,
+        )
+        label = "🎮 互动课件 · 点击打开（HTML5）"
+        box = self._add_textbox(
+            slide, label, 8.5, 0.4, 3.26, 0.38, font_size=10,
+            color=self._theme.inverse, bold=True, align=PP_ALIGN.CENTER,
+            valign=MSO_ANCHOR.MIDDLE,
+        )
+        for clickable in (shape, box):
+            try:
+                clickable.click_action.hyperlink.address = target
+            except Exception:
+                # 老版本 python-pptx 没有 click_action：退化成纯占位形状，
+                # 导出本身不受影响
+                pass
 
     @classmethod
     def _quiz_question_items(cls, node: dict[str, Any]) -> list[tuple[str, list[str], str]]:
@@ -906,7 +974,9 @@ class PPTExporter:
     def _add_summary_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
         points = resolve_key_points(node)
         if not points:
-            raw = node.get("content") or node.get("summary") or "本节要点"
+            # M4：真实节点的大纲概述不上总结页；合成总结页（__auto_）保留
+            raw = node.get("content") or (node.get("summary") if is_auto_node(node) else "") \
+                or "本节要点"
             points = [line.strip(" -•\t") for line in str(raw).splitlines() if line.strip()]
         points = points or ["本节要点"]
         chunks = self._chunk_items(points, 5)
@@ -988,7 +1058,9 @@ class PPTExporter:
             return items
         # 兜底：page_spec 一个区块都没吐出条目时（老课件、字段形状出乎意料），
         # 仍按改动前的口径直读节点字段，宁可重复也绝不出现"空白内容页"。
-        for field in ("content", "summary"):
+        # M4：真实节点只认 content（summary 是大纲概述，仅讲稿用）；合成节点保留。
+        fallback_fields = ("content", "summary") if is_auto_node(node) else ("content",)
+        for field in fallback_fields:
             value = node.get(field)
             if isinstance(value, str) and value.strip():
                 items.append(("text", value.strip(), False))
@@ -1137,7 +1209,10 @@ class PPTExporter:
         frame.margin_left = frame.margin_right = Inches(0.03)
         frame.margin_top = frame.margin_bottom = Inches(0.02)
         total_chars = sum(len(text) for _, text, _ in items)
-        size = 16 if total_chars > 500 else 17 if total_chars > 300 else 18
+        scale = self._density_value("body_font_scale")
+        size = max(10, round((16 if total_chars > 500 else 17 if total_chars > 300 else 18) * scale))
+        paragraph_gap = self._density_value("paragraph_gap_pt")
+        line_spacing = self._density_value("line_spacing")
         for item_index, (label, text, bullet) in enumerate(items):
             paragraph = frame.paragraphs[0] if item_index == 0 else frame.add_paragraph()
             # 先确定最终文本再设 run 样式：paragraph.text 赋值会重建 run
@@ -1145,8 +1220,9 @@ class PPTExporter:
                 else f"• {text}" if bullet \
                 else f"{label}｜{text}" if label else text
             paragraph.level = 0
-            paragraph.space_after = Pt(7)
-            paragraph.line_spacing = 1.13
+            # 行距与段距来自密度参数表（H5 三处联动），comfortable 档 = 现状 1.13 / 7pt
+            paragraph.space_after = Pt(paragraph_gap)
+            paragraph.line_spacing = line_spacing
             paragraph.font.name = self._theme.body_font
             paragraph.font.size = Pt(size)
             paragraph.font.color.rgb = self._rgb(self._theme.text)
@@ -1167,13 +1243,15 @@ class PPTExporter:
         """
         if not items or width <= 0 or height <= 0:
             return
-        gap, pad = _POINT_CARD_GAP, _POINT_CARD_PAD
+        # 内边距与卡片间距来自密度参数表（H5）：comfortable 档 = 现状 7px / 10px
+        gap = self._density_value("point_card_gap_px") / 96.0
+        pad = self._density_value("point_card_pad_px") / 96.0
         size = self._points_font_size(items, width, height, gap, pad)
         per_line = max(6, int((width - 0.24) * 72 / size))
 
         texts = [f"· {text}" for _label, text, _bullet in items]
         heights = [
-            max(1, math.ceil(len(text) / per_line)) * size * 1.35 / 72.0 + pad * 2
+            max(1, math.ceil(len(text) / per_line)) * size * self._line_factor() / 72.0 + pad * 2
             for text in texts
         ]
         # 估算偏乐观时（长英文词、标点避头尾）整体压缩卡片高度，宁可挤一点也不让
@@ -1194,19 +1272,23 @@ class PPTExporter:
                               valign=MSO_ANCHOR.MIDDLE)
             cursor += card_h + gap
 
-    @staticmethod
-    def _points_font_size(items: list[tuple[str, str, bool]], width: float,
+    def _points_font_size(self, items: list[tuple[str, str, bool]], width: float,
                           height: float, gap: float, pad: float) -> int:
-        """在「卡片数 × 每张行数」放得进面板高度的前提下取最大字号。"""
+        """在「卡片数 × 每张行数」放得进面板高度的前提下取最大字号。
+
+        字号候选整体乘密度档位的 body_font_scale（H5）：紧凑略小、宽松略大。
+        """
+        scale = self._density_value("body_font_scale")
+        candidates = [max(9, round(size * scale)) for size in (17, 16, 15, 14, 13, 12, 11)]
         usable = height - gap * (len(items) - 1) - pad * 2 * len(items)
-        for size in (17, 16, 15, 14, 13, 12, 11):
+        for size in candidates:
             if usable <= 0:
                 break
             per_line = max(6, int((width - 0.24) * 72 / size))
             lines = sum(max(1, math.ceil(len(text) / per_line)) for _l, text, _b in items)
-            if lines * size * 1.35 / 72.0 <= usable:
+            if lines * size * self._line_factor() / 72.0 <= usable:
                 return size
-        return 11
+        return candidates[-1]
 
     # ── 正文面板：分页与渲染共用一把尺子 ──
 
@@ -1216,35 +1298,38 @@ class PPTExporter:
 
         分页（_chunk_body_items）问它要推进量，渲染（_add_body_panel）问它要框高 ——
         两处共用同一份排版算术，是"面板里还有地方、最后一行却被推到下一页"的修法。
-        改这里的任何数字，分页与渲染会一起变，不会再分叉。
+        行高系数与字号随密度档位变化（H5：page_spec.DENSITY_PROFILES），改档位时
+        分页与渲染一起变，不会再分叉。
         """
         kind, text, _bullet = item
+        scale = self._density_value("body_font_scale")
         if kind == "conclusion":
             # 高度跟着字号算：结论最长 60 字（page_spec.MAX_CONCLUSION_CHARS），
             # 写死一个框高会让长结论溢到面板外
             text_w = inner_w - 0.42
-            size = self._fig_label_size(text, text_w, 22)
+            max_size = round(22 * scale)
+            size = self._fig_label_size(text, text_w, max(12, max_size))
             lines = max(1, math.ceil(len(text) / max(6, int(text_w * 72 / size))))
-            box_h = lines * size * 1.35 / 72.0 + 0.12
+            box_h = lines * size * self._line_factor() / 72.0 + 0.12
             return box_h, box_h + 0.08, size, text
-        size = 15 if kind == "text" else 14
+        size = max(10, round((15 if kind == "text" else 14) * scale))
         body = text if kind == "text" else f"• {text}"
         # 一行放得下多少字：汉字宽约等于字号，故 cw*72/size
         lines = max(1, math.ceil(len(body) / max(8, int(inner_w * 72 / size))))
-        line_h = lines * size * 1.35 / 72.0
+        line_h = lines * size * self._line_factor() / 72.0
         return line_h + 0.08, line_h + 0.1, size, body
 
-    @staticmethod
-    def _body_split_metrics(kind: str, inner_w: float) -> tuple[int, int]:
+    def _body_split_metrics(self, kind: str, inner_w: float) -> tuple[int, int]:
         """切分超长条目时用的 (字号, 每行字数)。
 
-        结论的字号随长度收缩（_fig_label_size），这里按最大字号 22pt 估 —— 低估字数
-        只会把一条切得偏碎，不会让某一条永远放不下一页。
+        结论的字号随长度收缩（_fig_label_size），这里按该档位结论最大字号估 ——
+        低估字数只会把一条切得偏碎，不会让某一条永远放不下一页。
         """
+        scale = self._density_value("body_font_scale")
         if kind == "conclusion":
-            size, text_w = 22, inner_w - 0.42
+            size, text_w = max(12, round(22 * scale)), inner_w - 0.42
         else:
-            size = 15 if kind == "text" else 14
+            size = max(10, round((15 if kind == "text" else 14) * scale))
             text_w = inner_w
         # "• " 前缀也占宽度，切分时一并扣掉
         prefix = 0 if kind in ("text", "conclusion") else 2
@@ -1257,12 +1342,13 @@ class PPTExporter:
 
         超长条目先按句子切开（仍是 _split_text，续段完整保留原文，不会腰斩一句话），
         再逐条累加 _body_item_box 的推进量；放不下就翻页。容量就是渲染器可用的高度
-        （面板高 - 0.71）乘 _BODY_FILL —— 分页算的就是渲染要画的高度，面板不会再
+        （面板高 - 0.71）乘密度档位的 body_fill —— 分页算的就是渲染要画的高度，面板不会再
         "还剩一行却被推走"。
         """
         if not items or max_height <= 0 or inner_w <= 0:
             return []
-        capacity = max_height * _BODY_FILL
+        # 每页容量系数随密度档位：紧凑 1.0（贴满），适中 0.97（现状），宽松 0.88
+        capacity = max_height * self._density_value("body_fill")
 
         expanded: list[tuple[str, str, bool]] = []
         for kind, text, bullet in items:

@@ -231,6 +231,11 @@ func RegisterNewSkillRoutes(
 		gen.GET("/preview/:gen_id", genHandler.Preview)
 		gen.POST("/modify", genHandler.Modify)
 		gen.POST("/finalize", genHandler.Finalize)
+		// [H3] 大纲逐节点流式生成（SSE 透传引擎 /gen/outline/stream）。
+		// 引擎不可用时处理器回退 JSON 502，前端自动降级到同步端点 POST /outlines。
+		if outlineHandler != nil {
+			gen.POST("/outline/stream", outlineHandler.CreateStream)
+		}
 	}
 	if interactiveHandler != nil {
 		generations := v1.Group("/generations")

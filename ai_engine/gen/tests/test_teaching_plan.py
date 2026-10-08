@@ -508,10 +508,14 @@ def _planned_node() -> dict:
 
 
 def test_content_page_order_is_total_then_detail():
-    """figure → text → conclusion → details：先"总"后"分"，细节给结论作注脚。"""
+    """figure → conclusion → details：先"总"后"分"，细节给结论作注脚。
+
+    M4 后不再生成独立 text 块——大纲节点的 summary（内容概述）不再直接排进页面，
+    教学内容由 conclusion + details（要点与细节展开）承载。
+    """
     spec = build_page_spec(_planned_node(), 1)
     assert [b.kind for b in spec.blocks if b.role == ROLE_PRIMARY] == \
-        ["figure", "text", "conclusion", "details"]
+        ["figure", "conclusion", "details"]
 
 
 def test_teaching_plan_round_trips_into_the_preview():

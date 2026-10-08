@@ -64,11 +64,20 @@ PPTX_FONTS = {
 }
 FALLBACK_PPTX_FONT = PPTX_FONTS["system"]
 
+# 疏密排版三档（H5）：取值统一来自 page_spec.DENSITY_PROFILES（预览 SVG / 预览 CSS /
+# PPTX 导出三处共用同一张参数表），这里只保留 CSS 内边距这一份视图。
+# "minimal" 是历史取值（旧语义 = 大留白），映射到 loose，老课件不变形。
+from .page_spec import (
+    DENSITY_ALIASES,
+    DENSITY_PROFILES,
+    FALLBACK_DENSITY,
+    resolve_density,
+)
+
 DENSITY_PADDING = {
-    "minimal": "56px 64px 60px",
-    "compact": "36px 44px 40px",
-    "comfortable": "44px 52px 48px",
+    tier: DENSITY_PROFILES[tier]["css_padding"] for tier in DENSITY_PROFILES
 }
+DENSITY_PADDING["minimal"] = DENSITY_PADDING[DENSITY_ALIASES["minimal"]]
 FALLBACK_DENSITY_PADDING = DENSITY_PADDING["comfortable"]
 
 # 选了模板但没显式给 palette 时，用该模板自带的默认配色兜底

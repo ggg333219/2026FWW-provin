@@ -55,6 +55,7 @@ from .presentation import (
     presentation_from_nodes,
     theme_from_palette,
 )
+from .page_spec import resolve_density
 from .svg_renderer import render_page_spec_to_svg
 from .templates import PPTTheme
 
@@ -106,6 +107,8 @@ class PreviewRenderer:
     def __init__(self) -> None:
         #: 当前批次的主题；未经过 render 直接调 _render_slide 时用默认调色板兜底
         self._theme = theme_from_palette(FALLBACK_PALETTE)
+        #: 当前批次的疏密档位（H5：与 SVG 摆版 / PPTX 导出共用同一张参数表）
+        self._density = "comfortable"
 
     def render(self, nodes: list[dict[str, Any]], course_name: str = "课件预览") -> str:
         """生成完整 HTML 预览页面
@@ -120,6 +123,7 @@ class PreviewRenderer:
         polished_nodes = polish_nodes(nodes)
         presentation = self._presentation_from_nodes(polished_nodes)
         self._theme = self._theme_from_presentation(presentation)
+        self._density = resolve_density(presentation.get("density"))
         # M3 默认结构：封面 / 目录 / 总结 —— 与导出端共用同一扩展器（deck_structure），
         # 保证预览页面序列与导出 PPTX 同源。合成页不参与内容润色，故在润色后注入。
         expanded_nodes = expand_deck_pages(
@@ -159,7 +163,9 @@ class PreviewRenderer:
 
     def render_node(self, node: dict[str, Any], index: int = 1) -> str:
         """生成单个节点的预览 HTML"""
-        self._theme = self._theme_from_presentation(self._presentation_from_nodes([node]))
+        presentation = self._presentation_from_nodes([node])
+        self._theme = self._theme_from_presentation(presentation)
+        self._density = resolve_density(presentation.get("density"))
         return self._render_slide(node, index)
 
     # ── 幻灯片构建 ──
@@ -188,7 +194,8 @@ class PreviewRenderer:
         slide_class = _SLIDE_CLASSES.get(node_type, _SLIDE_CLASSES["content"])
         # 页型同步传给 build_page_spec，避免在这里与 _resolve_type 各判一次
         spec = build_page_spec(node, index, node_type)
-        svg = render_page_spec_to_svg(spec, self._theme)
+        # H5：SVG 摆版读密度参数表，与导出侧同一份数字
+        svg = render_page_spec_to_svg(spec, self._theme, density=self._density)
         # data-node-id 是「改一页只换一页」的锚：前端拿到新 HTML 后按它找到旧页就地替换，
         # 不再整份重设 iframe。属性放在 class 之后，`class="slide xxx-slide"` 这类
         # 既有断言仍然成立。
@@ -411,6 +418,7 @@ class PreviewRenderer:
   .presentation[data-layout="visual"] .content-slide .key-points {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
   .presentation[data-layout="text"] .slide {{ max-width: 920px; margin-left: auto; margin-right: auto; }}
   .presentation[data-density="minimal"] .slide h2 {{ font-size: 28px; }}
+  .presentation[data-density="loose"] .slide h2 {{ font-size: 28px; }}
   .presentation[data-density="compact"] .slide {{ border-radius: 16px; }}
 </style>
 </head>

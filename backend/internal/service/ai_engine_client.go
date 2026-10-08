@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -48,6 +49,9 @@ type AIEngine interface {
 
 	// ---- S3: 大纲构建与 AI 修订（Python 无状态端点 /gen/outline、/gen/outline/revise）----
 	GenerateOutline(ctx context.Context, req OutlineGenerateRequest) (*OutlineGenerateResponse, error)
+	// StreamOutline [H3] 调 Python /gen/outline/stream（SSE），逐事件回调 onEvent；
+	// 大纲通道独立于共享超时，上限 outlineStreamTimeout（180s）。
+	StreamOutline(ctx context.Context, req OutlineGenerateRequest, onEvent func(event string, data []byte) error) error
 	ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error)
 
 	// ---- B5: 修改意图理解（Python /api/v1/ai/parse_modify）----
@@ -1162,6 +1166,77 @@ func (c *aiEngineClient) GenerateOutline(ctx context.Context, req OutlineGenerat
 		return nil, err
 	}
 	return &result, nil
+}
+
+// outlineStreamTimeout —— [H3] 大纲流式通道总时限。独立于共享 client 的全局
+// Timeout（120s）与 ai.timeout（90s）：大纲生成是 S3 最慢的 LLM 步骤，
+// 流式链路放宽到 180s，保证引擎逐节点输出不被网关提前切断。
+const outlineStreamTimeout = 180 * time.Second
+
+// StreamOutline [H3] 调用 Python /gen/outline/stream（SSE），把每个 SSE 事件
+// （event 名 + 原始 data 行）原样回调给 onEvent，由上层决定转发/累积。
+// 读取不经过 c.client（其带全局 Timeout，会在长流中途掐断连接）。
+func (c *aiEngineClient) StreamOutline(ctx context.Context, req OutlineGenerateRequest,
+	onEvent func(event string, data []byte) error) error {
+	if onEvent == nil {
+		onEvent = func(string, []byte) error { return nil }
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("序列化大纲流式请求失败: %w", err)
+	}
+	streamCtx, cancel := context.WithTimeout(ctx, outlineStreamTimeout)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost,
+		c.baseURL+"/gen/outline/stream", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("构造大纲流式请求失败: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	// 专用无超时 client：总时限由 streamCtx 兜底，单次读阻塞不另设上限
+	resp, err := (&http.Client{}).Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("连接大纲流式接口失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("大纲流式接口返回异常状态 %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 256*1024), 4*1024*1024)
+	var eventName string
+	var dataLines []string
+	dispatch := func() error {
+		if eventName == "" && len(dataLines) == 0 {
+			return nil
+		}
+		if err := onEvent(eventName, []byte(strings.Join(dataLines, "\n"))); err != nil {
+			return err
+		}
+		eventName, dataLines = "", nil
+		return nil
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case line == "":
+			if err := dispatch(); err != nil {
+				return err
+			}
+		case strings.HasPrefix(line, "event:"):
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("读取大纲流失败: %w", err)
+	}
+	return dispatch()
 }
 
 func (c *aiEngineClient) ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error) {

@@ -47,6 +47,15 @@ def _is_auto(node: dict[str, Any]) -> bool:
     return str(node.get("node_id") or "").startswith("__auto_")
 
 
+def is_auto_node(node: dict[str, Any]) -> bool:
+    """公开判定：是否为 deck_structure 注入的合成节点（node_id 以 ``__auto_`` 开头）。
+
+    page_spec（M4）用它区分「大纲节点的内容概述」与「合成节点的版面文案」：
+    前者的 summary 不再进 PPT，后者的 content/summary 是有意文案，保留。
+    """
+    return _is_auto(node)
+
+
 def _collect_key_points(node: dict[str, Any]) -> list[str]:
     for field in ("key_points", "core_points"):
         raw = node.get(field) or []
