@@ -19,6 +19,7 @@ from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.style import WD_STYLE_TYPE
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 
@@ -358,18 +359,19 @@ class LessonPlanDOCExporter:
 
         self._add_section(doc, "五、课堂活动设计")
         activities = p.get("classroom_activities") or []
-        activity_lines = [
-            (f"{i}. {a.get('name') or '课堂活动'}"
-             + (f"：{a.get('description')}" if str(a.get('description') or '').strip() else ""))
-            for i, a in enumerate(activities, start=1) if isinstance(a, dict)
-        ]
-        activity_lines += [
-            f"{len(activity_lines) + 1}. {a}"
-            for a in _as_str_list(activities)
-        ]
+        activity_lines = []
+        for activity in activities:
+            if isinstance(activity, dict):
+                name = str(activity.get("name") or "课堂活动").strip()
+                description = str(activity.get("description") or "").strip()
+                activity_lines.append(
+                    f"{name}：{description}" if description else name
+                )
+            elif str(activity).strip():
+                activity_lines.append(str(activity).strip())
         if activity_lines:
-            for line in activity_lines:
-                _set_run(doc.add_paragraph().add_run(line), size=12)
+            for index, line in enumerate(activity_lines, start=1):
+                _set_run(doc.add_paragraph().add_run(f"{index}. {line}"), size=12)
         else:
             _set_run(doc.add_paragraph().add_run("结合课堂互动环节灵活组织。"), size=12)
 
@@ -411,6 +413,7 @@ class LessonPlanDOCExporter:
 
         table = doc.add_table(rows=1 + len(rows), cols=len(headers))
         table.style = "Table Grid"
+        self._repeat_table_header(table.rows[0])
         for c, header in enumerate(headers):
             cell = table.cell(0, c)
             cell.text = ""
@@ -427,6 +430,24 @@ class LessonPlanDOCExporter:
                 cell = table.cell(r, c)
                 cell.text = ""
                 _set_run(cell.paragraphs[0].add_run(val), size=10.5)
+
+            # Keep a teaching phase together when it can fit on a page. This
+            # prevents the first row from being split into an orphaned tail.
+            self._prevent_row_split(table.rows[r])
+
+    @staticmethod
+    def _repeat_table_header(row: Any) -> None:
+        tr_pr = row._tr.get_or_add_trPr()
+        tbl_header = OxmlElement("w:tblHeader")
+        tbl_header.set(qn("w:val"), "true")
+        tr_pr.append(tbl_header)
+
+    @staticmethod
+    def _prevent_row_split(row: Any) -> None:
+        tr_pr = row._tr.get_or_add_trPr()
+        cant_split = OxmlElement("w:cantSplit")
+        cant_split.set(qn("w:val"), "true")
+        tr_pr.append(cant_split)
 
 
 def _plan_as_mapping(plan: Any) -> dict[str, Any]:
