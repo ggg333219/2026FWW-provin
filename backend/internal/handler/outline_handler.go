@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -52,6 +53,68 @@ func (h *OutlineHandler) Create(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": outline})
+}
+
+// CreateStream [H3] POST /api/v1/gen/outline/stream —— 生成大纲草稿（SSE 流式）。
+//
+// 事件流（透传 AI 引擎 /gen/outline/stream）：
+//
+//	event: start  data: {"mode": "llm"|"mock"}
+//	event: node   data: {"index": i, "node": {...}}   —— 逐节点出现
+//	event: done   data: {"used_fallback": ..., "nodes_count": n}
+//	event: saved  data: {完整大纲}                     —— 落库后由网关追加
+//	event: error  data: {"message": "..."}             —— 流中途失败
+//
+// 引擎不可用等启动期错误在任何事件写出前暴露，此时回退为 JSON 502，
+// 前端据此自动降级到同步端点 POST /api/v1/outlines。
+func (h *OutlineHandler) CreateStream(c *gin.Context) {
+	var req service.OutlineGenerateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
+		return
+	}
+	if req.SessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "session_id 不能为空"})
+		return
+	}
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "当前连接不支持流式响应"})
+		return
+	}
+
+	streamStarted := false
+	writeEvent := func(event string, data []byte) error {
+		if !streamStarted {
+			c.Writer.Header().Set("Content-Type", "text/event-stream")
+			c.Writer.Header().Set("Cache-Control", "no-cache")
+			c.Writer.Header().Set("X-Accel-Buffering", "no")
+			c.Writer.WriteHeader(http.StatusOK)
+			streamStarted = true
+		}
+		if _, err := c.Writer.Write([]byte("event: " + event + "\ndata: " + string(data) + "\n\n")); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+
+	outline, err := h.outlineService.CreateOutlineStream(c.Request.Context(), req, writeEvent)
+	if err != nil {
+		if !streamStarted {
+			// 未发出任何 SSE 事件 → 保持 JSON 契约，前端可整体回退同步端点
+			c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "大纲流式生成失败: " + err.Error()})
+			return
+		}
+		errPayload, _ := json.Marshal(gin.H{"message": err.Error()})
+		_ = writeEvent("error", errPayload)
+		return
+	}
+	saved, err := json.Marshal(outline)
+	if err != nil {
+		saved = []byte(`{"outline_id":"` + outline.OutlineID + `","outline_version":1,"status":"draft"}`)
+	}
+	_ = writeEvent("saved", saved)
 }
 
 // Get GET /api/v1/outlines/:outline_id —— 读取大纲。

@@ -96,11 +96,31 @@ def test_split_content_into_points_prefers_lines_then_sentences():
     assert split_content_into_points("") == []
 
 
-def test_body_paragraphs_keeps_content_then_summary():
-    """content 在真实链路里从不被赋值，但仍要读它 —— 历史课件与手工编辑写它。"""
-    assert body_paragraphs({"content": "正文", "summary": "摘要"}) == ["正文", "摘要"]
-    assert body_paragraphs({"summary": "摘要"}) == ["摘要"]
+def test_body_paragraphs_reads_content_only_for_real_nodes():
+    """M4：大纲节点的 summary（内容概述）只供讲稿，不再打进 PPT 正文。
+
+    content 在真实链路里从不被赋值，但仍要读它 —— 历史课件与手工编辑写它。
+    """
+    assert body_paragraphs({"content": "正文", "summary": "摘要"}) == ["正文"]
+    assert body_paragraphs({"summary": "摘要"}) == []
     assert body_paragraphs({}) == []
+
+
+def test_body_paragraphs_keeps_summary_for_auto_nodes():
+    """deck_structure 合成节点（__auto_ 前缀）的 content/summary 是有意文案，不误杀。"""
+    node = {"node_id": "__auto_toc__", "content": "本次课程共 6 个环节",
+            "summary": "本次课程共 6 个环节"}
+    assert body_paragraphs(node) == ["本次课程共 6 个环节"]
+
+
+def test_content_page_does_not_print_outline_summary():
+    """M4 回归：有显式要点时，大纲概述（summary）不出现在幻灯片上。"""
+    node = {"type": "content", "title": "冒泡排序",
+            "summary": "相邻比较，逆序交换。",
+            "key_points": ["每轮确定一个最大值"]}
+    spec = build_page_spec(node, 1)
+    svg = render_page_spec_to_svg(spec, get_theme("default"))
+    assert "相邻比较，逆序交换。" not in svg
 
 
 # =============================================================================
@@ -195,8 +215,17 @@ def test_content_page_demotes_key_points_when_anything_else_is_primary():
 
     # 去掉展开、但仍有正文：正文占主位，要点仍让位
     node = _content_node()
+    node["content"] = "相邻比较，逆序交换。"
     node.pop("point_details")
     assert "bullets" in _kinds(build_page_spec(node, 1), ROLE_SECONDARY)
+
+    # M4：概述（summary）不算正文 —— 节点只剩 summary 与要点时，要点升主位
+    summary_only = _content_node()
+    summary_only.pop("point_details")
+    summary_only.pop("figure")
+    spec = build_page_spec(summary_only, 1)
+    assert "bullets" in _kinds(spec, ROLE_PRIMARY)
+    assert not [b for b in spec.blocks if b.kind == "text"]
 
     # 展开与正文都没有：要点顶上主位，不能整页没有内容
     bare = _content_node()
@@ -208,8 +237,9 @@ def test_content_page_demotes_key_points_when_anything_else_is_primary():
 
 
 def test_content_page_keeps_body_even_when_points_exist():
-    """content/summary 不能被要点挤掉 —— n3 节点两者都有，且 content 有同源断言。"""
+    """content 不能被要点挤掉 —— n3 节点 content 与 key_points 同有，且有同源断言。"""
     node = _content_node()
+    node["content"] = "相邻比较，逆序交换。"
     node.pop("point_details")
     spec = build_page_spec(node, 1)
 

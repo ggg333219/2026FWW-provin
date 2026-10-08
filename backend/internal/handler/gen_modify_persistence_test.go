@@ -109,6 +109,9 @@ func (m *modifyPersistFakeAI) GenerationStatus(context.Context, string) (*servic
 func (m *modifyPersistFakeAI) GenerateOutline(context.Context, service.OutlineGenerateRequest) (*service.OutlineGenerateResponse, error) {
 	return nil, nil
 }
+func (m *modifyPersistFakeAI) StreamOutline(context.Context, service.OutlineGenerateRequest, func(string, []byte) error) error {
+	return nil
+}
 func (m *modifyPersistFakeAI) ReviseOutline(context.Context, service.OutlineReviseAIRequest) (*service.OutlineReviseAIResponse, error) {
 	return nil, nil
 }

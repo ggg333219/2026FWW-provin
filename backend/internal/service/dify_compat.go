@@ -366,6 +366,17 @@ func (c *DifyClient) GenerateOutline(ctx context.Context, req OutlineGenerateReq
 	return &out, nil
 }
 
+// StreamOutline [H3] Dify 场景暂不支持流式：有本地引擎兜底时透传给引擎的
+// 流式端点；否则返回错误（HTTP 处理器回退 JSON 502，前端降级同步端点）。
+func (c *DifyClient) StreamOutline(ctx context.Context, req OutlineGenerateRequest,
+	onEvent func(event string, data []byte) error) error {
+	engine, hasFallback := c.fallbackEngine()
+	if hasFallback {
+		return engine.StreamOutline(ctx, req, onEvent)
+	}
+	return fmt.Errorf("当前 AI 接入（Dify）不支持大纲流式生成，请使用同步端点 /api/v1/outlines")
+}
+
 // ReviseOutline 走 Dify 场景；Dify 未配置时降级到本地 AI Engine。
 func (c *DifyClient) ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error) {
 	var out OutlineReviseAIResponse
