@@ -873,25 +873,58 @@ class PPTExporter:
             return
 
         for item in flashcards:
-            slide = self._blank_slide(prs, index)
-            self._add_page_title(slide, str(node.get("title") or "知识翻卡"), index)
             x, width = 0.85, 11.65
-            self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, 1.65, width, 2.1,
-                            self._theme.background, self._theme.muted)
-            self._add_textbox(slide, "问题", x + 0.28, 1.88, width - 0.56, 0.38,
-                              font_size=16, color=self._theme.primary, bold=True)
+            front_slide = self._blank_slide(prs, index)
+            back_slide = self._blank_slide(prs, index)
+            title = str(node.get("title") or "知识翻卡")
+            self._add_page_title(front_slide, title, index)
+            self._add_page_title(back_slide, title, index)
+
+            front_panel = self._add_shape(
+                front_slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, 1.65, width, 4.45,
+                self._theme.background, self._theme.muted,
+            )
+            front_panel.click_action.target_slide = back_slide
+            front_label = self._add_textbox(
+                front_slide, "问题", x + 0.28, 1.98, width - 0.56, 0.38,
+                font_size=16, color=self._theme.primary, bold=True,
+            )
+            front_label.click_action.target_slide = back_slide
             front = str(item.get("front") or "")
-            self._add_textbox(slide, front, x + 0.28, 2.35, width - 0.56, 1.15,
-                              font_size=self._fit_font(front, 16, 24, 45),
-                              color=self._theme.text, bold=True, valign=MSO_ANCHOR.MIDDLE)
-            self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, 4.0, width, 2.1,
-                            self._theme.surface, self._theme.muted)
-            self._add_textbox(slide, "答案", x + 0.28, 4.22, width - 0.56, 0.38,
-                              font_size=16, color=self._theme.primary, bold=True)
+            front_body = self._add_textbox(
+                front_slide, front, x + 0.28, 2.48, width - 0.56, 2.2,
+                font_size=self._fit_font(front, 16, 24, 45), color=self._theme.text,
+                bold=True, valign=MSO_ANCHOR.MIDDLE,
+            )
+            front_body.click_action.target_slide = back_slide
+            front_hint = self._add_textbox(
+                front_slide, "单击卡片查看答案", x + 0.28, 5.25, width - 0.56, 0.42,
+                font_size=13, color=self._theme.secondary, align=PP_ALIGN.CENTER,
+            )
+            front_hint.click_action.target_slide = back_slide
+
+            back_panel = self._add_shape(
+                back_slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, 1.65, width, 4.45,
+                self._theme.surface, self._theme.muted,
+            )
+            back_panel.click_action.target_slide = front_slide
+            back_label = self._add_textbox(
+                back_slide, "答案", x + 0.28, 1.98, width - 0.56, 0.38,
+                font_size=16, color=self._theme.primary, bold=True,
+            )
+            back_label.click_action.target_slide = front_slide
             back = str(item.get("back") or "")
-            self._add_textbox(slide, back, x + 0.28, 4.65, width - 0.56, 1.15,
-                              font_size=self._fit_font(back, 15, 21, 50),
-                              color=self._theme.text, valign=MSO_ANCHOR.MIDDLE)
+            back_body = self._add_textbox(
+                back_slide, back, x + 0.28, 2.48, width - 0.56, 2.2,
+                font_size=self._fit_font(back, 15, 21, 50), color=self._theme.text,
+                valign=MSO_ANCHOR.MIDDLE,
+            )
+            back_body.click_action.target_slide = front_slide
+            back_hint = self._add_textbox(
+                back_slide, "单击卡片返回问题", x + 0.28, 5.25, width - 0.56, 0.42,
+                font_size=13, color=self._theme.secondary, align=PP_ALIGN.CENTER,
+            )
+            back_hint.click_action.target_slide = front_slide
 
     _QUIZ_PLAIN_PER_PAGE = 5
 

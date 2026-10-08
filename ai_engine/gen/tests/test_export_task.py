@@ -154,17 +154,28 @@ class TestPPTExporter(unittest.TestCase):
             "type": "interactive",
             "node_type": "interactive",
             "title": "定积分知识翻卡",
-            "content": "正面：定积分的几何意义是什么？\n背面：曲边梯形面积的代数和。",
+            "content": "",
+            "summary": "正面：定积分在几何上表示什么？点击卡片翻面查看答案。背面：当 f(x)≥0 时，定积分表示曲线 y=f(x) 与 x 轴围成的曲边梯形面积；一般情况下表示有向面积。请把正面问题与背面答案实现为可点击翻转的卡片，并嵌入 PPT。",
+            "questions": ["你觉得知识翻卡最关键的点是什么？"],
         }]
 
         prs = Presentation(self.ppt.export_to_bytes(nodes, "定积分知识翻卡"))
-        text = "\n".join(
-            shape.text for slide in prs.slides for shape in slide.shapes if hasattr(shape, "text")
-        )
+        self.assertEqual(len(prs.slides), 2)
+        front_slide, back_slide = prs.slides
+        front_shapes = [shape for shape in front_slide.shapes if hasattr(shape, "text")]
+        back_shapes = [shape for shape in back_slide.shapes if hasattr(shape, "text")]
+        front_body = next(shape for shape in front_shapes if "定积分在几何上表示什么？" in shape.text)
+        back_body = next(shape for shape in back_shapes if "定积分表示曲线" in shape.text)
 
-        self.assertIn("定积分的几何意义是什么？", text)
-        self.assertIn("曲边梯形面积的代数和。", text)
-        self.assertNotIn("请结合本节内容提出一个关键问题。", text)
+        self.assertEqual(front_body.click_action.target_slide, back_slide)
+        self.assertEqual(back_body.click_action.target_slide, front_slide)
+        self.assertTrue(any("单击卡片查看答案" in shape.text for shape in front_shapes))
+        self.assertTrue(any("单击卡片返回问题" in shape.text for shape in back_shapes))
+        self.assertNotIn("背面：", front_body.text)
+        self.assertNotIn("点击卡片翻面查看答案", front_body.text)
+        all_text = "\n".join(shape.text for slide in prs.slides for shape in slide.shapes
+                              if hasattr(shape, "text"))
+        self.assertNotIn("请结合本节内容提出一个关键问题。", all_text)
 
     def test_key_points_and_core_points_are_both_exported(self):
         """新旧要点字段同时存在时合并导出，不再产生空白要点页。"""

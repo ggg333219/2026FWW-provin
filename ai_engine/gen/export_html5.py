@@ -115,9 +115,10 @@ def _normalize_question(q: Any) -> dict[str, Any] | None:
 def extract_front_back(content: Any) -> tuple[str, str] | None:
     """Parse explicit front/back labels from authored interactive content."""
     text = str(content or "")
-    front = re.search(r"(?:^|\n)\s*正面\s*[:：]\s*(.*?)(?=\n\s*背面\s*[:：]|$)", text, re.S)
-    back = re.search(r"(?:^|\n)\s*背面\s*[:：]\s*(.*?)(?=\n\s*正面\s*[:：]|$)", text, re.S)
+    front = re.search(r"正面\s*[:：]\s*(.*?)(?=\s*背面\s*[:：]|$)", text, re.S)
+    back = re.search(r"背面\s*[:：]\s*(.*?)(?=\s*正面\s*[:：]|$)", text, re.S)
     front_text = front.group(1).strip() if front else ""
+    front_text = re.sub(r"\s*点击卡片翻面查看答案[。.]?\s*", "", front_text).strip()
     back_text = back.group(1).strip() if back else ""
     return (front_text, back_text) if front_text or back_text else None
 
@@ -155,9 +156,16 @@ def _node_to_items(node: dict[str, Any]) -> list[dict[str, Any]]:
     front = str(node.get("front") or "").strip()
     back = str(node.get("back") or "").strip()
     if not front and not back:
-        labeled = extract_front_back(node.get("content"))
-        if labeled:
-            front, back = labeled
+        for authored_text in (node.get("content"), node.get("summary"), node.get("script")):
+            labeled = extract_front_back(authored_text)
+            if labeled and all(labeled):
+                front, back = labeled
+                break
+    back = re.sub(
+        r"\s*请把正面问题与背面答案实现为可点击翻转的卡片，并嵌入\s*PPT。?\s*$",
+        "",
+        back,
+    ).strip()
     if front and not any(item.get("type") == "flashcard" and item.get("front") == front for item in items):
         items.append({"type": "flashcard", "front": front, "back": back, "tags": []})
 
@@ -173,14 +181,15 @@ def _node_to_items(node: dict[str, Any]) -> list[dict[str, Any]]:
                                "back": str(kc.get("definition") or kc.get("back") or "").strip(),
                                "tags": [str(t) for t in (kc.get("tags") or [])]})
     # 4) 纯文本题目转闪卡：正面=问题，背面=节点内容摘要（离线确定性转换，不编造答案）
-    for q in raw_questions:
-        if isinstance(q, dict):
-            continue
-        text = str(q).strip()
-        if not text:
-            continue
-        back = str(node.get("summary") or node.get("content") or node.get("script") or "").strip()[:200]
-        flashcards.append({"type": "flashcard", "front": text, "back": back, "tags": ["question"]})
+    if not any(item.get("type") == "flashcard" for item in items) and not flashcards:
+        for q in raw_questions:
+            if isinstance(q, dict):
+                continue
+            text = str(q).strip()
+            if not text:
+                continue
+            fallback_back = str(node.get("summary") or node.get("content") or node.get("script") or "").strip()[:200]
+            flashcards.append({"type": "flashcard", "front": text, "back": fallback_back, "tags": ["question"]})
     items.extend(flashcards)
     return items
 

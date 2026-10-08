@@ -188,6 +188,32 @@ def test_interactive_front_and_back_labels_become_flipcard_content():
     }]
 
 
+def test_version_snapshot_summary_front_back_overrides_generic_question():
+    from ai_engine.gen.export_html5 import extract_interactive_items
+
+    node = {
+        "node_id": "node_007",
+        "node_type": "interactive",
+        "type": "interactive",
+        "title": "知识翻卡：定积分的几何意义",
+        "content": "",
+        "summary": (
+            "正面：定积分在几何上表示什么？点击卡片翻面查看答案。"
+            "背面：当 f(x)≥0 时，定积分表示曲线 y=f(x) 与 x 轴围成的曲边梯形面积；"
+            "一般情况下表示有向面积。请把正面问题与背面答案实现为可点击翻转的卡片，并嵌入 PPT。"
+        ),
+        "script": "课堂讲解：同一节点的讲稿内容不应变成卡片答案。",
+        "questions": ["你觉得知识翻卡最关键的点是什么？"],
+    }
+
+    assert extract_interactive_items([node]) == [{
+        "type": "flashcard",
+        "front": "定积分在几何上表示什么？",
+        "back": "当 f(x)≥0 时，定积分表示曲线 y=f(x) 与 x 轴围成的曲边梯形面积；一般情况下表示有向面积。",
+        "tags": [],
+    }]
+
+
 def test_interactive_preview_uses_playable_renderer():
     from ai_engine.gen.export_html5 import extract_interactive_items, render_interactive_html
 
