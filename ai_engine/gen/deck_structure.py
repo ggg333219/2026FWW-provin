@@ -137,7 +137,9 @@ def expand_deck_pages(
         })
 
     # ② 目录（紧跟封面之后；无封面时才作为首页）
-    if include_toc and content_count > toc_min_content_nodes:
+    # 目录页被教师接管后 node_id 为 __auto_toc__，已在树里，再注入一次就会出现两个目录。
+    has_agenda = any(resolve_kind(node) == "agenda" for node in expanded)
+    if include_toc and not has_agenda and content_count > toc_min_content_nodes:
         titles = _toc_titles(normalized)
         if titles:
             # 首位已是封面（注入的或用户自己的）→ 目录排在其后；否则目录作为首页
