@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { buildIntentRevisionMessage, useIntentStore } from './intentStore'
+import { buildIntentRevisionMessage, intentStorageKey, useIntentStore } from './intentStore'
+import { teacherIntentApi } from '../services/v1/intentApi'
 
 function createStorage() {
   const values = new Map()
@@ -9,6 +10,13 @@ function createStorage() {
     setItem: (key, value) => values.set(key, String(value)),
     removeItem: (key) => values.delete(key)
   }
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+  return { promise, resolve, reject }
 }
 
 beforeEach(() => {
@@ -43,6 +51,52 @@ describe('buildIntentRevisionMessage', () => {
 })
 
 describe('S1 意图理解 Mock 链路（extract / confirm）', () => {
+  it('服务失败时保留教师原消息，便于核对和重试', async () => {
+    vi.spyOn(teacherIntentApi, 'extract').mockRejectedValueOnce(new Error('AI Engine timeout'))
+    const store = useIntentStore()
+    store.initialize()
+
+    expect(await store.sendMessage('请设计一节高等数学课')).toBe(false)
+
+    expect(store.messages.some((message) => message.role === 'teacher' && message.content === '请设计一节高等数学课')).toBe(true)
+    expect(store.error).toContain('AI Engine timeout')
+  })
+
+  it('重试失败的最后一条输入不会在多轮对话中重复插入', async () => {
+    vi.spyOn(teacherIntentApi, 'extract')
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce({
+        intent_summary: { topic: '排序算法', duration_minutes: null, missing_fields: ['duration_minutes'] },
+        session_status: 'collecting',
+        completion_pct: 25,
+        can_confirm: false,
+        followup_questions: ['计划安排多少分钟？'],
+        response: '计划安排多少分钟？',
+        used_fallback: false
+      })
+    const store = useIntentStore()
+    store.initialize()
+
+    expect(await store.sendMessage('我想讲排序算法')).toBe(false)
+    expect(await store.sendMessage('我想讲排序算法')).toBe(true)
+    expect(store.teacherMessages.filter((message) => message.content === '我想讲排序算法')).toHaveLength(1)
+  })
+
+  it('规则降级状态与安全原因会保留并供界面区分', async () => {
+    vi.spyOn(teacherIntentApi, 'extract').mockResolvedValueOnce({
+      intent_summary: { topic: '排序算法' },
+      session_status: 'collecting',
+      used_fallback: true,
+      fallback_reason: 'engine_unavailable'
+    })
+    const store = useIntentStore()
+    store.initialize()
+
+    expect(await store.sendMessage('排序算法课')).toBe(true)
+    expect(store.usedFallback).toBe(true)
+    expect(store.fallbackReason).toBe('engine_unavailable')
+  })
+
   it('sendMessage → extract：提取主题并进入澄清（缺核心字段不能确认）', async () => {
     const store = useIntentStore()
     store.initialize()
@@ -83,8 +137,72 @@ describe('S1 意图理解 Mock 链路（extract / confirm）', () => {
     expect(store.intentId).toBeTruthy()
     expect(store.sessionStatus).toBe('confirmed')
     // S1 → S2 交接 key
-    expect(window.localStorage.getItem('fuww_workflow_intent_id')).toBe(store.intentId)
-    expect(window.localStorage.getItem('fuww_s1_confirmed_intent')).toBeTruthy()
+    expect(window.localStorage.getItem(intentStorageKey('fuww_workflow_intent_id'))).toBe(store.intentId)
+    expect(window.localStorage.getItem(intentStorageKey('fuww_s1_confirmed_intent'))).toBeTruthy()
+  })
+
+  it('按项目隔离会话，切换项目后再切回可恢复各自对话', async () => {
+    const store = useIntentStore()
+    store.initialize('project-a')
+    const firstSessionId = store.sessionId
+    await store.sendMessage('排序算法，45分钟')
+
+    store.initialize('project-b')
+    const secondSessionId = store.sessionId
+    expect(secondSessionId).not.toBe(firstSessionId)
+    expect(store.messages).toHaveLength(1)
+
+    store.initialize('project-a')
+    expect(store.sessionId).toBe(firstSessionId)
+    expect(store.messages.some((message) => message.content === '排序算法，45分钟')).toBe(true)
+    expect(window.localStorage.getItem('fuww_workflow_session_id')).toBeNull()
+  })
+
+  it('切换项目后丢弃在途提取响应，不污染新项目状态与存储', async () => {
+    const pending = deferred()
+    vi.spyOn(teacherIntentApi, 'extract').mockReturnValueOnce(pending.promise)
+    const store = useIntentStore()
+    store.initialize('project-a')
+    const request = store.sendMessage('A 项目意图')
+    store.initialize('project-b')
+    const sessionB = store.sessionId
+
+    pending.resolve({ intent_summary: { topic: '错误写入' }, session_status: 'confirming', can_confirm: true })
+    expect(await request).toBe(false)
+    expect(store.projectId).toBe('project-b')
+    expect(store.sessionId).toBe(sessionB)
+    expect(store.intentSummary).toBeNull()
+    expect(store.messages).toHaveLength(1)
+    expect(JSON.parse(window.localStorage.getItem(intentStorageKey('fuww_s1_conversation', 'project-b'))).sessionId).toBe(sessionB)
+  })
+
+  it('重置后丢弃旧确认响应且不覆盖新 loading 状态', async () => {
+    const pending = deferred()
+    vi.spyOn(teacherIntentApi, 'confirm').mockReturnValueOnce(pending.promise)
+    const store = useIntentStore()
+    store.initialize('project-a')
+    store.canConfirm = true
+    const request = store.confirmIntent()
+    store.reset()
+    const resetSession = store.sessionId
+    pending.resolve({ confirmed: true, intent_id: 'stale-intent' })
+
+    expect(await request).toBe(false)
+    expect(store.sessionId).toBe(resetSession)
+    expect(store.intentId).toBe('')
+    expect(store.isConfirming).toBe(false)
+  })
+
+  it('分析修订期间阻止确认旧意图', async () => {
+    const confirm = vi.spyOn(teacherIntentApi, 'confirm')
+    confirm.mockClear()
+    const store = useIntentStore()
+    store.initialize('project-a')
+    store.canConfirm = true
+    store.isAnalyzing = true
+
+    expect(await store.confirmIntent()).toBe(false)
+    expect(confirm).not.toHaveBeenCalled()
   })
 
   it('确认后的意图可经 buildIntentRevisionMessage 回流到 Mock 提取', async () => {

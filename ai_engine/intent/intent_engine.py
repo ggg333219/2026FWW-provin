@@ -11,6 +11,7 @@ import re
 
 from ai_engine.core.schema import IntentSummary
 from ai_engine.core import settings
+from ai_engine.core.llm import LLMClient, resolve_llm_timeout
 from ai_engine.intent.rules import (
     detect_interactive,
     extract_duration,
@@ -145,9 +146,14 @@ class LLMIntentEngine:
     }
 
     def __init__(self, client=None):
-        from ai_engine.core import LLMClient
-
-        self.client = client or LLMClient(model=settings.MODEL, temperature=0.1)
+        self.client = client or LLMClient(
+            model=settings.MODEL,
+            temperature=0.1,
+            timeout=min(resolve_llm_timeout(), 90),
+            max_attempts=1,
+            disable_sdk_retries=True,
+            stop_schema_fallback_on_error=True,
+        )
 
     def extract_intent(self, messages: List[Dict[str, Any]]) -> dict:
         # build a simple user prompt containing recent teacher messages

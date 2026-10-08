@@ -256,6 +256,7 @@ class LessonPlanGenerator:
         nodes: list[dict[str, Any]],
         intent: Any = None,
         markdown: Optional[str] = None,
+        generation_instruction_set: Any = None,
     ) -> LessonPlan:
         """生成标准教案。
 
@@ -268,6 +269,9 @@ class LessonPlanGenerator:
             LessonPlan（data_source 标明生成来源，导出永不空）
         """
         intent_dict = _as_mapping(intent)
+        instruction_set = _as_mapping(generation_instruction_set)
+        if not intent_dict and isinstance(instruction_set.get("intent"), dict):
+            intent_dict = instruction_set["intent"]
         norm_nodes = [_as_mapping(n) for n in (nodes or [])]
 
         # mock 模式不调 LLM，直接构造样例教案
@@ -287,7 +291,7 @@ class LessonPlanGenerator:
                     "各阶段时长之和等于 duration_minutes；"
                     "3. 内容基于给定节点，不得虚构与课件无关的知识点。"
                 ),
-                user=self._build_user_prompt(norm_nodes, intent_dict, markdown),
+                user=self._build_user_prompt(norm_nodes, intent_dict, markdown, instruction_set),
                 schema=LESSON_PLAN_SCHEMA,
             )
             plan = self._plan_from_llm(data, norm_nodes, intent_dict)
@@ -301,6 +305,7 @@ class LessonPlanGenerator:
 
     def _build_user_prompt(
         self, nodes: list[dict[str, Any]], intent: dict[str, Any], markdown: Optional[str],
+        generation_instruction_set: Optional[dict[str, Any]] = None,
     ) -> str:
         lines: list[str] = []
         topic = _clean_str(intent.get("topic"))
@@ -316,6 +321,18 @@ class LessonPlanGenerator:
             lines.append(f"知识点：{'、'.join(_clean_list(intent['knowledge_points']))}")
         if intent.get("key_difficulties"):
             lines.append(f"预设难点：{'、'.join(_clean_list(intent['key_difficulties']))}")
+
+        instruction_set = generation_instruction_set or {}
+        output_requirements = instruction_set.get("output_requirements") or {}
+        if output_requirements:
+            lines.append(f"本次输出要求：{output_requirements}")
+        evidence = instruction_set.get("confirmed_evidence") or {}
+        evidence_context = _clean_str(evidence.get("synthesized_context")) if isinstance(evidence, dict) else ""
+        if evidence_context:
+            lines.append(f"教师已确认的参考资料：\n{evidence_context[:4000]}")
+        references = instruction_set.get("reference_materials") or []
+        if references:
+            lines.append(f"参考资料来源清单：{references[:30]}")
 
         lines.append("课件节点：")
         for idx, node in enumerate(nodes, start=1):

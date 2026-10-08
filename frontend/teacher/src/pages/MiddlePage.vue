@@ -56,6 +56,8 @@ import { useOutlineStore } from '../stores/outlineStore'
 import { useGenerationStore } from '../stores/generationStore'
 import { useVersionStore } from '../stores/versionStore'
 import { useModifyStore } from '../stores/modifyStore'
+import { useContentStore } from '../stores/contentStore'
+import { clearLegacyResumeDraft } from '../utils/coursewareDraft'
 
 const router = useRouter(); const projects = useCoursewareProjectStore()
 const keyword = ref(''); const sortBy = ref('updated'); const showCreate = ref(false); const newTitle = ref(''); const dialogError = ref(''); const creating = ref(false); const titleInput = ref(null); const deleteTarget = ref(null); const deletingId = ref(''); const notice = ref('')
@@ -74,7 +76,7 @@ function closeCreate() { if (!creating.value) showCreate.value = false }
 async function createProject() {
   const title = newTitle.value.trim(); if (!title || creating.value) return
   creating.value = true; dialogError.value = ''
-  try { const project = await projects.create(title); for (const store of [useIntentStore(), useMaterialStore(), useOutlineStore(), useGenerationStore(), useVersionStore(), useModifyStore()]) store.reset?.(); await projects.updateStep('s1_intent'); router.push({ name: 'S1Intent', query: { project_id: project.id || project.project_id } }) }
+  try { const project = await projects.create(title); for (const store of [useIntentStore(), useMaterialStore(), useOutlineStore(), useGenerationStore(), useVersionStore(), useModifyStore(), useContentStore()]) store.reset?.(); clearLegacyResumeDraft(); await projects.updateStep('s1_intent'); router.push({ name: 'S1Intent', query: { project_id: project.id || project.project_id } }) }
   catch (error) { dialogError.value = error?.message || '新建课件失败，请稍后重试' } finally { creating.value = false }
 }
 function resume(item) { router.push({ name: 'CoursewareResume', query: { project_id: projectId(item), generation_id: item.gen_id || item.generation_id || '' } }) }

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="use-iframe" content="true">
+<meta name="html-box-height-mode" content="auto">
+<meta name="description" content="AI课件生成系统模块架构与问题分布图">
+<title>系统模块与问题分布</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #fafaf8; padding: 20px; color: #0a0a0a; }
+.arch { display: flex; flex-direction: column; gap: 12px; max-width: 820px; margin: 0 auto; }
+.layer { display: flex; gap: 10px; justify-content: center; }
+.node { border: 1px solid #0a0a0a; padding: 10px 16px; text-align: center; background: #fff; position: relative; min-width: 120px; }
+.node.high { border-color: #c0392b; border-width: 2px; }
+.node.mid { border-color: #e67e22; }
+.node.low { border-color: #7f8c8d; }
+.node .label { font-size: 13px; font-weight: 600; }
+.node .count { font-size: 11px; color: #666; margin-top: 2px; }
+.node.high .count { color: #c0392b; font-weight: 700; }
+.arrow { text-align: center; font-size: 18px; color: #999; line-height: 1; }
+.layer-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #999; text-align: center; margin-bottom: 4px; }
+.legend { display: flex; gap: 16px; justify-content: center; margin-top: 16px; font-size: 12px; }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.dot { width: 12px; height: 12px; border: 1px solid; }
+.dot.high { border-color: #c0392b; background: #fadbd8; }
+.dot.mid { border-color: #e67e22; background: #fdebd0; }
+.dot.low { border-color: #7f8c8d; background: #f2f3f4; }
+</style>
+</head>
+<body>
+<div class="arch">
+  <div class="layer-title">前端 Vue</div>
+  <div class="layer">
+    <div class="node high"><div class="label">S1 需求输入</div><div class="count">2条高优</div></div>
+    <div class="node high"><div class="label">S3 工作台</div><div class="count">5条高优</div></div>
+    <div class="node high"><div class="label">S4 导出中心</div><div class="count">2条高优</div></div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer-title">Go 后端 (8082)</div>
+  <div class="layer">
+    <div class="node mid"><div class="label">项目/草稿隔离</div><div class="count">1条中优</div></div>
+    <div class="node high"><div class="label">生成任务路由</div><div class="count">404配置问题</div></div>
+    <div class="node mid"><div class="label">导出链路</div><div class="count">Word导出卡死</div></div>
+  </div>
+  <div class="arrow">▼</div>
+  <div class="layer-title">AI 引擎 (8000)</div>
+  <div class="layer">
+    <div class="node high"><div class="label">意图解析</div><div class="count">稳定性</div></div>
+    <div class="node low"><div class="label">知识库/RAG</div><div class="count">2条低优</div></div>
+    <div class="node high"><div class="label">大纲生成</div><div class="count">超时+编辑</div></div>
+    <div class="node high"><div class="label">PPTX渲染</div><div class="count">瑞士风断裂</div></div>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><div class="dot high"></div>高优先级（9条）</div>
+    <div class="legend-item"><div class="dot mid"></div>中优先级（6条）</div>
+    <div class="legend-item"><div class="dot low"></div>低优先级（4条）</div>
+  </div>
+</div>
+</body>
+</html>

@@ -142,12 +142,12 @@ _CHUNK_ID_MAX_LEN = 64
 def _sanitize_source_ref(source_ref: str, max_keep: int = 48) -> str:
     """清洗 source_ref，使其仅含 [A-Za-z0-9._-] 并截断到 max_keep 字符。
 
-    长 source_ref 用 md5 前缀保证唯一性，避免仅靠截断导致碰撞。
+    被清洗或截断的 source_ref 加 md5 前缀，避免 Unicode/特殊字符归一化碰撞。
     """
     if not source_ref:
         return "anon"
     safe = _CHUNK_ID_SAFE_RE.sub("_", source_ref)
-    if len(safe) <= max_keep:
+    if safe == source_ref and len(safe) <= max_keep:
         return safe
     digest = hashlib.md5(source_ref.encode("utf-8")).hexdigest()[:12]
     return f"h{digest}_{safe[:max_keep - 13]}"

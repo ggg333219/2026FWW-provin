@@ -486,6 +486,30 @@ class TestHybridRetriever(unittest.TestCase):
         results = self.retriever.search("test", top_k=5, min_score=0.0)
         self.assertEqual(len(results), 0)
 
+    def test_search_page_covers_candidates_past_old_200_vector_cap(self):
+        """分页必须覆盖完整候选集，不受旧 200 向量/100 BM25 上限影响。"""
+        class FixedEmbed:
+            def embed_text(self, _query):
+                return [1.0, 0.0]
+
+        chunks = [Chunk(
+            chunk_id=f"page-{i}", source_type=SourceType.TEXT,
+            source_ref="pagination.txt", content=f"排序目标候选内容 {i}",
+            embedding=[1.0, 0.0], seq_index=i,
+        ) for i in range(235)]
+        self.store.insert_batch(chunks, doc_id="pagination")
+        retriever = self.HybridRetriever(store=self.store, embed_service=FixedEmbed())
+
+        first, total_first = retriever.search_page("排序目标", top_k=100, offset=0, min_score=0.0)
+        second, total_second = retriever.search_page("排序目标", top_k=100, offset=100, min_score=0.0)
+        third, total_third = retriever.search_page("排序目标", top_k=100, offset=200, min_score=0.0)
+
+        self.assertEqual((total_first, total_second, total_third), (235, 235, 235))
+        self.assertEqual([len(first), len(second), len(third)], [100, 100, 35])
+        ids = [item.chunk_id for item in first + second + third]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(set(ids), {f"page-{i}" for i in range(235)})
+
     def test_rebuild_bm25(self):
         """重建 BM25 索引。"""
         self._add_test_data()
@@ -848,6 +872,17 @@ class TestChunkIdDeterminism(unittest.TestCase):
         )
         for c in chunks:
             self.assertLessEqual(len(c.chunk_id), 64, msg=f"超长 chunk_id: {c.chunk_id!r}")
+
+    def test_unicode_source_refs_that_sanitize_identically_remain_distinct(self):
+        """中文来源名不能因清洗成相同下划线而共享 chunk 主键。"""
+        chunker = self.DocumentChunker()
+        refs = ["信息系统的搭建实例.pdf", "信息系统的支撑技术.pdf"]
+        ids = [
+            chunker.chunk_text("同页内容", source_ref=ref, source_type=SourceType.PDF)[0].chunk_id
+            for ref in refs
+        ]
+        self.assertEqual(len(set(ids)), len(refs))
+        self.assertTrue(all("::s0000" in chunk_id for chunk_id in ids))
 
     def test_chunk_id_no_random_per_call(self):
         """两次调用不应出现 chunk_{uuid} 形式的随机 ID（旧版格式）。"""

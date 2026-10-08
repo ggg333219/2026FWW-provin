@@ -28,12 +28,14 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 
 from ai_engine.core import LLMClient
+from ai_engine.core.redis_client import get_redis_task_store
 from ai_engine.core.schema import (
     Chunk,
     EvidenceRequest,
     EvidenceResponse,
     SearchRequest,
     SearchResponse,
+    SearchResult,
     SourceType,
 )
 
@@ -59,7 +61,9 @@ def _build_store():
     """生产环境显式启用 pgvector；测试和无数据库场景保持零依赖内存实现。"""
     backend = (os.getenv("RAG_STORE_BACKEND") or "memory").strip().lower()
     if backend in {"pg", "pgvector", "postgres", "postgresql"}:
-        return PGVectorStore()
+        # The store schema must use the same dimension as the embedding service.
+        # This is especially important for the local BGE-small-zh model (512d).
+        return PGVectorStore(embedding_dim=_embed_service.dim)
     return InMemoryVectorStore()
 
 
@@ -118,9 +122,10 @@ async def rag_search(req: SearchRequest):
 
     try:
         retriever = _get_retriever()
-        results = retriever.search(
+        results, total_results = retriever.search_page(
             query=req.query.strip(),
             top_k=req.top_k or 5,
+            offset=req.offset,
             min_score=req.min_score or 0.2,
             knowledge_base_ids=req.knowledge_base_ids or None,
             scope=scope,
@@ -130,6 +135,7 @@ async def rag_search(req: SearchRequest):
         return SearchResponse(
             results=results,
             total_chunks=_store.count(),
+            total_results=total_results,
         )
     except Exception as e:
         raise HTTPException(
@@ -158,21 +164,40 @@ async def rag_evidence(req: EvidenceRequest):
         raise HTTPException(status_code=400, detail="query 不能为空")
 
     try:
-        # 1. 混合检索（k=20 作为候选池）
-        retriever = _get_retriever()
-        candidates = retriever.search(
-            query=query,
-            top_k=20,
-            min_score=0.3,  # 此阶段放宽阈值
-            knowledge_base_ids=req.knowledge_base_ids or None,
-        )
-
-        # 2. 重排序（top-20 → top-5）
-        reranked = _reranker.rerank(
-            query=query,
-            candidates=candidates,
-            top_k=5,
-        )
+        if req.selected_chunk_ids:
+            # Resolve teacher-confirmed IDs from the shared persistent store;
+            # never trust client-submitted chunk text as generation evidence.
+            selected_ids = list(dict.fromkeys(req.selected_chunk_ids))
+            indexed_chunks = [_store.get_chunk(chunk_id) for chunk_id in selected_ids]
+            if any(chunk is None for chunk in indexed_chunks):
+                raise HTTPException(status_code=400, detail="部分已选证据已失效，请重新检索")
+            allowed_kb_ids = {str(item) for item in req.knowledge_base_ids}
+            if allowed_kb_ids and any(
+                str((chunk.metadata or {}).get("knowledge_base_id") or "") not in allowed_kb_ids
+                for chunk in indexed_chunks
+            ):
+                raise HTTPException(status_code=403, detail="所选证据不属于当前知识库范围")
+            reranked = [SearchResult(
+                chunk_id=chunk.chunk_id,
+                content=chunk.content,
+                score=1.0,
+                source={
+                    "file_name": chunk.source_ref,
+                    "page": chunk.page_ref or 0,
+                    "type": chunk.source_type.value,
+                },
+                metadata={"doc_id": chunk.doc_id, "seq_index": chunk.seq_index, **chunk.metadata},
+            ) for chunk in indexed_chunks]
+        else:
+            # Backward-compatible automatic retrieval for existing API clients.
+            retriever = _get_retriever()
+            candidates = retriever.search(
+                query=query,
+                top_k=20,
+                min_score=0.3,
+                knowledge_base_ids=req.knowledge_base_ids or None,
+            )
+            reranked = _reranker.rerank(query=query, candidates=candidates, top_k=5)
 
         # 3. LLM 合成 EvidencePacket
         context = dict(req.context) if req.context else {}
@@ -321,11 +346,23 @@ def register_session_chunks(session_id: str, chunks: list[Chunk], intent_id: Opt
     if intent_id:
         entry["intent_id"] = intent_id
     _session_parsed_chunks[session_id] = entry
+    get_redis_task_store().save_session_data(session_id, {
+        "chunks": [chunk.model_dump(mode="json") for chunk in entry["chunks"]],
+        "intent_id": entry["intent_id"],
+    })
 
 
 def _find_session_chunks(session_id: str) -> list[Chunk]:
     """查找某 session 的已解析 chunks。"""
-    return _session_parsed_chunks.get(session_id, {}).get("chunks", [])
+    entry = _session_parsed_chunks.get(session_id)
+    if entry is None:
+        entry = get_redis_task_store().load_session_data(session_id)
+        if not entry:
+            return []
+        chunks = [Chunk.model_validate(item) for item in entry.get("chunks", [])]
+        entry = {"chunks": chunks, "intent_id": entry.get("intent_id")}
+        _session_parsed_chunks[session_id] = entry
+    return entry.get("chunks", [])
 
 
 def _process_file(file_url: str) -> list[Chunk]:

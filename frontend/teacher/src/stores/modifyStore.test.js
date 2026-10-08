@@ -103,7 +103,6 @@ describe('modifyStore C6/C7 对话迭代', () => {
     expect(store.error).toBe('')
   })
 
-<<<<<<< HEAD
   /**
    * 契约 v1.0 §3.2：切 PPT / 新建课件后必须清空"上一个课件"的 AI 对话气泡，
    * 否则切回会看到之前残留。之前的 bindProject 只在 !projectId 时清，导致

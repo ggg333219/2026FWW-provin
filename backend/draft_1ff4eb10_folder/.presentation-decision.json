@@ -1,0 +1,1 @@
+{"audience":"开发团队与项目经理","reader_task":"逐条理解根因、技术方案与工作量，确认排期","genre_contract":null,"adapter":null,"presentation_mode":"rich","visual_plan":{"reason":"用表格承载问题-方案-工作量映射，用HTML架构图展示模块依赖","blocks":[{"type":"html5-block","min_count":1,"purpose":"展示系统模块与问题分布"}]}}

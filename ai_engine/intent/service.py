@@ -61,7 +61,9 @@ class IntentUnderstandingService:
         self.client = client or LLMClient(model=settings.MODEL, temperature=0.1)
         self.engine = engine
 
-    def extract_intent(self, session_id: str, messages: list[DialogueTurn]) -> dict[str, Any]:
+    def extract_intent(
+        self, session_id: str, messages: list[DialogueTurn], request_id: str = ""
+    ) -> dict[str, Any]:
         """从完整对话历史提取意图，并推进 collecting/clarifying/confirming。"""
         session_id = (session_id or "").strip()
         if not session_id:
@@ -85,7 +87,14 @@ class IntentUnderstandingService:
         if not any(item["role"].lower() == "teacher" for item in raw_messages):
             raise ValueError("至少需要一条教师消息")
 
-        summary, engine_name, used_fallback = self._extract_summary(messages, raw_messages)
+        summary, engine_name, used_fallback, fallback_reason = self._extract_summary(messages, raw_messages)
+        if used_fallback:
+            safe_request_id = request_id if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", request_id or "") else "unavailable"
+            logging.getLogger(__name__).warning(
+                "S1 intent extraction degraded request_id=%s reason=%s",
+                safe_request_id,
+                fallback_reason or "unknown",
+            )
         summary = self._merge_rule_evidence(summary, raw_messages)
         summary.missing_fields = self._infer_missing_fields(summary)
 
@@ -130,6 +139,7 @@ class IntentUnderstandingService:
             # H0 可观测性：degraded 是 used_fallback 的显式别名，
             # 供监控/前端统一识别“LLM 失败→规则引擎兜底”的降级链路。
             "degraded": used_fallback,
+            "fallback_reason": fallback_reason,
         }
 
     def build_followup_questions(self, summary: IntentSummary, core_only: bool = False) -> list[str]:
@@ -181,34 +191,39 @@ class IntentUnderstandingService:
         self,
         messages: list[DialogueTurn],
         raw_messages: list[dict[str, str]],
-    ) -> tuple[IntentSummary, str, bool]:
+    ) -> tuple[IntentSummary, str, bool, str | None]:
         result: Any = None
         if self.engine is not None:
             try:
                 result = self.engine.extract_intent(raw_messages)
                 if isinstance(result, IntentSummary):
-                    return result, self.engine.__class__.__name__, False
-                if isinstance(result, dict) and not result.get("error"):
+                    if result.topic:
+                        return result, self.engine.__class__.__name__, False, None
+                    reason = "invalid_model_response"
+                elif isinstance(result, dict) and not result.get("error"):
                     summary = IntentSummary(**result)
                     if summary.topic:
-                        return summary, self.engine.__class__.__name__, False
+                        return summary, self.engine.__class__.__name__, False, None
                     self._log_degraded(
                         reason=f"自定义引擎输出缺少有效主题（topic={summary.topic!r}）",
                         raw_output=self._dump_raw_output(result),
                         path="engine",
                     )
+                    reason = "invalid_model_response"
                 elif isinstance(result, dict):
                     self._log_degraded(
                         reason=f"自定义引擎返回错误（error={result.get('error')!r}）",
                         raw_output=self._dump_raw_output(result),
                         path="engine",
                     )
+                    reason = self._classify_engine_failure(result)
                 else:
                     self._log_degraded(
                         reason=f"自定义引擎返回了不支持的类型（{type(result).__name__}）",
                         raw_output=self._dump_raw_output(result),
                         path="engine",
                     )
+                    reason = "invalid_model_response"
             except Exception as exc:
                 self._log_degraded(
                     reason=f"自定义引擎输出校验失败：{type(exc).__name__}: {exc}",
@@ -216,7 +231,8 @@ class IntentUnderstandingService:
                     path="engine",
                     exc=exc,
                 )
-            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True
+                reason = self._classify_engine_failure({"reason": f"{type(exc).__name__} {exc}"})
+            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason
 
         prompt = self._build_extract_prompt(messages)
         try:
@@ -235,7 +251,7 @@ class IntentUnderstandingService:
             summary = IntentSummary(**(result or {}))
             if not summary.topic:
                 raise ValueError("LLM 未返回有效主题")
-            return summary, "LLM", False
+            return summary, "LLM", False, None
         except Exception as exc:
             self._log_degraded(
                 reason=f"LLM 意图提取失败：{type(exc).__name__}: {exc}",
@@ -243,7 +259,20 @@ class IntentUnderstandingService:
                 path="chat_json",
                 exc=exc,
             )
-            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True
+            reason = "invalid_model_response" if isinstance(exc, (ValueError, TypeError)) else self._classify_engine_failure(
+                {"reason": f"{type(exc).__name__} {exc}"}
+            )
+            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason
+
+    @staticmethod
+    def _classify_engine_failure(result: dict[str, Any]) -> str:
+        """Map provider exceptions to safe categories without exposing their details."""
+        detail = str(result.get("reason") or result.get("error") or "").lower()
+        if "timeout" in detail or "timed out" in detail or "deadline exceeded" in detail:
+            return "timeout"
+        if any(marker in detail for marker in ("connection", "connecterror", "dns")):
+            return "engine_unavailable"
+        return "model_error"
 
     @staticmethod
     def _dump_raw_output(result: Any) -> str:

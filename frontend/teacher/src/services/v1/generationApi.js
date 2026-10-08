@@ -1,6 +1,10 @@
 import { AI_API_BASE } from "../../config/api";
 import { requestJson } from "./request";
 
+// 内容生成会触发多个节点的 LLM 调用，不能使用 request.js 的通用 10 秒上限。
+// 创建接口只负责提交异步任务；状态查询仍保持默认短超时。
+const CONTENT_GENERATE_TIMEOUT_MS = 120000;
+
 /**
  * S3 讲稿生成 API (Studio)
  *
@@ -22,12 +26,14 @@ export const teacherGenerationApi = {
     markdown,
     intent,
     evidence_packet,
+    generation_instruction_set,
     template_id,
     // S3 规范 3.6 参数
     outline_id,
     outline_version,
     outline_confirmed,
     generate_mode,
+    generation_scope,
     project_id
   } = {}) =>
     requestJson("/api/v1/gen/create", {
@@ -40,6 +46,7 @@ export const teacherGenerationApi = {
         markdown: markdown || "",
         intent: intent || undefined,
         evidence_packet: evidence_packet || null,
+        generation_instruction_set: generation_instruction_set || {},
         project_id: project_id || '',
         template_id: template_id || 'default',
         // 规范 3.6：确认大纲后必须传递完整 outline 上下文
@@ -49,6 +56,7 @@ export const teacherGenerationApi = {
               outline_version,
               outline_confirmed: !!outline_confirmed,
               generate_mode: generate_mode || "page_incremental",
+              generation_scope: generation_scope || "content_only",
             }
           : {}),
       }),
@@ -71,7 +79,7 @@ export const teacherGenerationApi = {
     }),
 
   /** 将当前内容、样式和证据引用固化为新的正式版本快照 */
-  finalize: ({ generation_id, nodes, course_name, summary, outline_id, outline_version, page_bindings, presentation } = {}) =>
+  finalize: ({ generation_id, nodes, course_name, summary, outline_id, outline_version, page_bindings, presentation, generation_instruction_set } = {}) =>
     requestJson('/api/v1/gen/finalize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -83,7 +91,8 @@ export const teacherGenerationApi = {
         outline_id: outline_id || '',
         outline_version: outline_version || 0,
         page_bindings: page_bindings || [],
-        presentation: presentation || {}
+        presentation: presentation || {},
+        generation_instruction_set: generation_instruction_set || {},
       })
     }),
 
@@ -186,10 +195,13 @@ export const teacherGenerationApi = {
     enhanced = false,
     outline_id = "",
     outline_version = 0,
+    outline_nodes = [],
+    generation_instruction_set = {},
   } = {}) =>
     requestJson("/api/v1/gen/content", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      timeoutMs: CONTENT_GENERATE_TIMEOUT_MS,
       body: JSON.stringify({
         nodes: nodes || [],
         context_markdown,
@@ -198,6 +210,8 @@ export const teacherGenerationApi = {
         enhanced,
         outline_id,
         outline_version,
+        outline_nodes: outline_nodes || [],
+        generation_instruction_set: generation_instruction_set || {},
       }),
     }),
 
@@ -205,17 +219,41 @@ export const teacherGenerationApi = {
   getContentStatus: (contentId) =>
     requestJson(`/api/v1/gen/content/status/${encodeURIComponent(contentId)}`),
 
-  /** POST /api/v1/gen/content/modify — AI 修改节点内容（自然语言指令） */
-  modifyContent: ({ content_id, node_id, message } = {}) =>
+  /**
+   * POST /api/v1/gen/content/modify — AI 修改单个节点内容（自然语言指令）
+   *
+   * nodes 必须带上：引擎侧是「基于当前节点内容做局部重生成」，只给一句指令
+   * 等于让它凭空重写一节，老师看到的就是内容被换掉而不是被改好。
+   * action 可留空，后端会按 message 兜底推断 simplify / expand / rewrite。
+   */
+  modifyContent: ({
+    content_id,
+    node_id,
+    message,
+    nodes = [],
+    action = "",
+    course_name = "",
+    context_markdown = "",
+    outline_id = "",
+    outline_version = 0,
+    intent = undefined,
+  } = {}) =>
     requestJson("/api/v1/gen/content/modify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // 节点重生成会调用真实大模型，允许较长响应时间。
+      // 节点重生成会调用真实大模型，还要等引擎侧的异步任务轮询完成。
       timeoutMs: 120000,
       body: JSON.stringify({
-        content_id,
-        node_id,
+        content_id: content_id || "",
+        node_id: node_id || "",
         message: message || "",
+        action: action || "",
+        nodes: nodes || [],
+        course_name: course_name || "",
+        context_markdown: context_markdown || "",
+        outline_id: outline_id || "",
+        outline_version: outline_version || 0,
+        intent: intent || undefined,
       }),
     }),
 

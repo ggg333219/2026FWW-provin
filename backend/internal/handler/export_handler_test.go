@@ -139,13 +139,17 @@ func TestExportProjectSnapshotWithoutGenerationCanBePolled(t *testing.T) {
 	router.Use(func(c *gin.Context) { c.Set("userID", "teacher-1") })
 	router.POST("/api/v1/exp/:gen_id", handler.Create)
 	router.GET("/api/v1/exp/status/:job_id", handler.Status)
-	body := `{"project_id":"project-1","format":"pptx","version":1,"nodes":[{"node_id":"node_001","title":"积分概念"}]}`
+	body := `{"project_id":"project-1","format":"docx","version":1,"nodes":[{"node_id":"node_001","title":"积分概念"}],"generation_instruction_set":{"intent":{"topic":"TCP"}}}`
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/exp/project-1", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	created := httptest.NewRecorder()
 	router.ServeHTTP(created, request)
 	if created.Code != http.StatusOK || ai.createGenID != "project-1" {
 		t.Fatalf("project-only snapshot export failed: status=%d gen=%q body=%s", created.Code, ai.createGenID, created.Body.String())
+	}
+	intent, ok := ai.createReq.GenerationInstructionSet["intent"].(map[string]any)
+	if !ok || intent["topic"] != "TCP" {
+		t.Fatalf("export did not forward the selected version instruction set: %#v", ai.createReq.GenerationInstructionSet)
 	}
 	status := httptest.NewRecorder()
 	router.ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/v1/exp/status/exp_project", nil))

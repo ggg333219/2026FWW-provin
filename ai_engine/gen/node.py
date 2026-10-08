@@ -250,7 +250,8 @@ class NodeGenerator:
     def generate_all(self, nodes: list[dict[str, Any]],
                      context_markdown: str = "",
                      course_name: str | None = None,
-                     plans: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                     plans: Optional[dict[str, Any]] = None,
+                     generation_instruction_set: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         """生成所有节点的讲稿。整批失败时按节点降级重试，避免整批退兜底。
 
         plans: 教学表达规划器的逐页决策 ``{node_id: plan}``，作为**约束**注入写稿
@@ -259,8 +260,9 @@ class NodeGenerator:
         fallback = self._fallback_scripts(nodes, course_name)
         node_ids = {n["node_id"] for n in nodes}
         plans = plans if isinstance(plans, dict) else {}
+        instruction_context = self._generation_instruction_context(generation_instruction_set)
         try:
-            scripts = self._run_batch_generation(context_markdown, nodes, course_name, plans)
+            scripts = self._run_batch_generation(context_markdown, nodes, course_name, plans, instruction_context)
             if not scripts:
                 scripts = fallback["scripts"]
             scripts = normalize_stage3_scripts(scripts, node_ids)
@@ -274,6 +276,7 @@ class NodeGenerator:
                 scripts.append(self.generate_single(
                     node, course_name, max_attempts=1,
                     teaching_plan=plans.get(str(node.get("node_id") or "")),
+                    generation_instruction_context=instruction_context,
                 ))
             scripts = normalize_stage3_scripts(scripts, node_ids)
             return {"scripts": scripts or fallback["scripts"], "used_fallback": True}
@@ -281,7 +284,8 @@ class NodeGenerator:
     def generate_enhanced(self, nodes: list[dict[str, Any]],
                           context_markdown: str = "",
                           course_name: str | None = None,
-                          plans: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                          plans: Optional[dict[str, Any]] = None,
+                          generation_instruction_set: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         """增强版生成：带 segment_type / estimated_seconds / interaction_hint / knowledge_card。
         整批失败时按节点降级重试，避免整批退兜底。
 
@@ -290,8 +294,9 @@ class NodeGenerator:
         fallback = self._enhanced_fallback(nodes, course_name)
         node_ids = {n["node_id"] for n in nodes}
         plans = plans if isinstance(plans, dict) else {}
+        instruction_context = self._generation_instruction_context(generation_instruction_set)
         try:
-            scripts = self._run_enhanced_batch(context_markdown, nodes, course_name, plans)
+            scripts = self._run_enhanced_batch(context_markdown, nodes, course_name, plans, instruction_context)
             if not scripts:
                 scripts = fallback["scripts"]
             scripts = self._normalize_enhanced_scripts(scripts, node_ids)
@@ -304,6 +309,7 @@ class NodeGenerator:
                 scripts.append(self.generate_single(
                     node, course_name, max_attempts=1,
                     teaching_plan=plans.get(str(node.get("node_id") or "")),
+                    generation_instruction_context=instruction_context,
                 ))
             scripts = self._normalize_enhanced_scripts(scripts, node_ids)
             return {"scripts": scripts or fallback["scripts"], "used_fallback": True}
@@ -313,7 +319,8 @@ class NodeGenerator:
                         extra_instruction: str = "",
                         context_markdown: str = "",
                         teaching_plan: Optional[dict[str, Any]] = None,
-                        revise_slide: bool = False) -> dict[str, Any]:
+                        revise_slide: bool = False,
+                        generation_instruction_context: str = "") -> dict[str, Any]:
         """生成单个节点的讲稿（供 S4 修补时部分重生成使用）
 
         max_attempts: 收紧 LLM 重试次数（1 = 不重试），None 时按环境变量/默认值。
@@ -368,6 +375,8 @@ class NodeGenerator:
                 user_prompt += _current_slide_context(node)
             if teaching_plan:
                 user_prompt += "\n" + _plan_constraint(teaching_plan)
+            if generation_instruction_context:
+                user_prompt += f"\n\n【本次统一生成指令】\n{generation_instruction_context}\n"
             if extra_instruction:
                 user_prompt += f"\n【修改要求】\n{extra_instruction}\n"
             if context_markdown:
@@ -410,7 +419,8 @@ class NodeGenerator:
 
     def _run_batch_generation(self, markdown: str,
                               nodes: list[dict], course_name: str | None,
-                              plans: Optional[dict[str, Any]] = None) -> list[dict]:
+                              plans: Optional[dict[str, Any]] = None,
+                              generation_instruction_context: str = "") -> list[dict]:
         system_prompt = (
             "你是课堂讲稿生成助手，负责为每个教学节点生成可直接讲授的脚本。\n"
             "【强制约束】\n"
@@ -432,6 +442,8 @@ class NodeGenerator:
         brief = _plans_brief(plans, nodes)
         if brief:
             user_prompt = f"{user_prompt}\n\n{brief}"
+        if generation_instruction_context:
+            user_prompt += f"\n\n【本次统一生成指令】\n{generation_instruction_context}"
         result = self._get_llm().chat_with_schema(
             system_prompt, user_prompt,
             build_stage3_script_schema(),
@@ -442,7 +454,8 @@ class NodeGenerator:
 
     def _run_enhanced_batch(self, markdown: str,
                             nodes: list[dict], course_name: str | None,
-                            plans: Optional[dict[str, Any]] = None) -> list[dict]:
+                            plans: Optional[dict[str, Any]] = None,
+                            generation_instruction_context: str = "") -> list[dict]:
         system_prompt = (
             "你是课堂讲稿生成助手（增强版），负责为每个教学节点生成分段讲授脚本。\n"
             "【强制约束】\n"
@@ -465,6 +478,8 @@ class NodeGenerator:
         brief = _plans_brief(plans, nodes)
         if brief:
             user_prompt = f"{user_prompt}\n\n{brief}"
+        if generation_instruction_context:
+            user_prompt += f"\n\n【本次统一生成指令】\n{generation_instruction_context}"
         result = self._get_llm().chat_with_schema(
             system_prompt, user_prompt,
             build_enhanced_script_schema(),
@@ -485,6 +500,18 @@ class NodeGenerator:
                     if isinstance(seg, dict):
                         seg["node_id"] = mapped
         return scripts
+
+    @staticmethod
+    def _generation_instruction_context(instruction_set: Optional[dict[str, Any]]) -> str:
+        if not isinstance(instruction_set, dict):
+            return ""
+        payload = {
+            "output_requirements": instruction_set.get("output_requirements") or {},
+            "presentation": instruction_set.get("presentation") or {},
+            "generation_mode": instruction_set.get("generation_mode") or "",
+        }
+        payload = {key: value for key, value in payload.items() if value}
+        return json.dumps(payload, ensure_ascii=False) if payload else ""
 
     # ── LLM 客户端 ──
 

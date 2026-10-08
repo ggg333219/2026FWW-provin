@@ -1,0 +1,171 @@
+<title>AI智能课件生成系统 冲刺排期方案（3人×3天）</title>
+
+<h1 seq="auto">目标与范围</h1>
+
+<p>总量约 56 人天，本轮 2-3 人做 2-3 天只交付一个<b>可演示闭环</b>，不铺开全部 19 个问题。核心链路：</p>
+<p><b>输入意图 → 生成大纲 → 手动编辑 → 保存 → 异常/降级提示可见</b></p>
+
+<p><b>本轮不做：</b>H3 流式生成、H5 疏密排版、H6/H7 Word 导出、H8 HTML5 集成——这些跨模块多，2-3 天内容易出现"代码改了但没有稳定可展示成果"。</p>
+
+<h1 seq="auto">三人分工</h1>
+
+<h2 seq="auto">A：后端 / AI 稳定性</h2>
+
+<p><b>负责：</b></p>
+<ul>
+<li><b>H0：</b>LLM 解析失败时增加日志、degraded=true 返回</li>
+<li><b>H1：</b>统一前端、Go、AI 引擎三层超时配置</li>
+<li><b>H9：</b>补充 AI 引擎地址配置和无 Key 启动警告</li>
+</ul>
+
+<p><b>交付结果：</b></p>
+<ul>
+<li>后端接口能返回成功、降级、超时三种状态</li>
+<li>日志能明确看到失败原因</li>
+<li>不改前端页面结构，只提供字段和配置</li>
+</ul>
+
+<p><b>只改这些文件：</b></p>
+<ul>
+<li><code>ai_engine/intent/service.py</code></li>
+<li><code>ai_engine/core/llm.py</code></li>
+<li><code>backend/pkg/config/config.go</code></li>
+<li>相关 .env / 配置文件</li>
+</ul>
+
+<h2 seq="auto">B：前端交互</h2>
+
+<p><b>负责 H4：大纲手动编辑</b></p>
+<ul>
+<li>大纲节点双击编辑标题、摘要</li>
+<li>增加、删除节点</li>
+<li>拖拽排序</li>
+<li>调用已有 PUT /api/v1/outlines/:outline_id</li>
+</ul>
+
+<p><b>交付结果：</b></p>
+<ul>
+<li>页面上能直接看到大纲树变化</li>
+<li>刷新后数据仍然存在</li>
+<li>不碰 AI 生成逻辑和后端超时逻辑</li>
+</ul>
+
+<p><b>只改这些文件：</b></p>
+<ul>
+<li><code>frontend/src/pages/S3StudioPage.vue</code></li>
+<li>相关大纲树组件</li>
+<li>API client</li>
+</ul>
+
+<h2 seq="auto">C：集成、可视化、验收</h2>
+
+<p><b>负责：</b></p>
+<ul>
+<li>做演示入口或准备固定测试数据</li>
+<li>把 A 的 degraded、错误信息展示到前端</li>
+<li>验证 B 的编辑、保存、刷新流程</li>
+<li>录制演示视频或准备截图</li>
+<li>整理前后对比指标</li>
+</ul>
+
+<p><b>最终展示四个画面：</b></p>
+<ol>
+<li>输入教学主题并生成大纲</li>
+<li>大纲树逐节点展示</li>
+<li>修改标题、拖拽排序并保存</li>
+<li>模拟 LLM 失败，页面提示"已降级"，后台日志有原因</li>
+</ol>
+
+<p>C 不大规模改业务代码，主要负责联调、测试和演示包装，减少互相覆盖。</p>
+
+<h1 seq="auto">时间安排</h1>
+
+<table>
+<colgroup><col width="120"/><col width="220"/><col width="220"/><col width="220"/></colgroup>
+<thead><tr>
+<th background-color="light-gray"><p>时间</p></th>
+<th background-color="light-gray"><p>A 后端/AI</p></th>
+<th background-color="light-gray"><p>B 前端</p></th>
+<th background-color="light-gray"><p>C 集成/可视化</p></th>
+</tr></thead>
+<tbody>
+<tr>
+<td><p><b>第1天 上午</b></p></td>
+<td><p>确认接口字段、超时配置</p></td>
+<td><p>确认大纲节点数据结构</p></td>
+<td><p>准备测试数据和演示脚本</p></td>
+</tr>
+<tr>
+<td><p><b>第1天 下午</b></p></td>
+<td><p>完成 H0/H1 基础修改</p></td>
+<td><p>完成大纲树编辑 UI</p></td>
+<td><p>建立成功/失败测试用例</p></td>
+</tr>
+<tr>
+<td><p><b>第2天</b></p></td>
+<td><p>完成配置、日志和降级返回</p></td>
+<td><p>接通 PUT 保存接口</p></td>
+<td><p>联调主流程</p></td>
+</tr>
+<tr>
+<td><p><b>第3天 上午</b></p></td>
+<td><p>修复联调问题</p></td>
+<td><p>修复排序、刷新、异常状态</p></td>
+<td><p>回归测试</p></td>
+</tr>
+<tr>
+<td><p><b>第3天 下午</b></p></td>
+<td><p>协助定位问题</p></td>
+<td><p>协助定位问题</p></td>
+<td><p>截图、录屏、整理成果</p></td>
+</tr>
+</tbody>
+</table>
+
+<h1 seq="auto">2 人版本</h1>
+
+<p>如果只有 2 个人：</p>
+<ul>
+<li><b>人员 1：</b>H0 + H1 + H9，负责后端和 AI 状态</li>
+<li><b>人员 2：</b>H4 + 联调页面和演示</li>
+</ul>
+
+<p>范围控制在：大纲生成结果展示、大纲编辑和保存、降级提示、超时提示。不做 H3/H5/H6/H7/H8。</p>
+
+<h1 seq="auto">互不干扰的四条约定</h1>
+
+<ol>
+<li><b>边界约定：</b>A 只负责接口字段、状态和配置；B 只负责页面和 API 调用。</li>
+<li><b>统一响应格式：</b>
+<pre lang="json"><code>{
+  "success": true,
+  "degraded": false,
+  "message": "",
+  "data": {}
+}</code></pre>
+</li>
+<li><b>独立分支：</b>
+<ul>
+<li>A → <code>feat/ai-observability-timeout</code></li>
+<li>B → <code>feat/outline-editor</code></li>
+<li>C → <code>test/demo-integration</code></li>
+</ul>
+</li>
+<li><b>接口冻结：</b>第一天结束前冻结接口，不再随意改字段。需要变更时先在群里确认，避免前后端反复返工。</li>
+</ol>
+
+<h1 seq="auto">最终验收标准</h1>
+
+<p>2-3 天后至少要能现场演示：</p>
+<ol>
+<li>正常生成一次大纲</li>
+<li>修改节点并保存</li>
+<li>刷新页面后修改仍然存在</li>
+<li>模拟 AI 失败时，页面能看到降级提示</li>
+<li>后台日志能定位失败原因</li>
+<li>超时不会出现前端、Go、AI 引擎各自不同步的问题</li>
+</ol>
+
+<callout emoji="⚠️" background-color="light-yellow">
+<p><b>主要风险：</b>H1 的超时配置和 H4 的接口联调可能受现有代码状态影响，建议第一天上午先完成接口冒烟测试。</p>
+</callout>

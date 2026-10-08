@@ -31,7 +31,7 @@ def test_distributed_lock_does_not_release_unacquired_local_lock():
     class RedisLockStub:
         released = False
 
-        def acquire(self):
+        def acquire(self, max_retries=3):
             return True
 
         def release(self):

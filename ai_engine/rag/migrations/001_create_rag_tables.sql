@@ -33,13 +33,13 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
     content      TEXT NOT NULL DEFAULT '',
     page_ref     INTEGER,
     seq_index    INTEGER NOT NULL DEFAULT 0,
-    embedding    halfvec(1024),   -- pgvector half precision, 1024-dim. 按需调整维度
+    embedding    halfvec(512),    -- pgvector half precision, 512-dim local BGE-small-zh
     metadata     JSONB DEFAULT '{}',
     created_at   TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 COMMENT ON TABLE rag_chunks IS 'KB 知识库分块 + 向量';
-COMMENT ON COLUMN rag_chunks.embedding IS 'halfvec: 半精度浮点向量 (1024-dim)';
+COMMENT ON COLUMN rag_chunks.embedding IS 'halfvec: 半精度浮点向量 (512-dim local BGE-small-zh)';
 
 -- 4. HNSW 向量索引 (余弦距离, 生产推荐参数)
 CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding

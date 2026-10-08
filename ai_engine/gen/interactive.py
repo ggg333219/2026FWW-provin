@@ -32,13 +32,15 @@ class InteractiveBuilder:
         self.config = config or InteractiveConfig()
         self._llm = llm_client  # 可注入，供测试用
 
-    def build_quiz(self, node: dict[str, Any]) -> list[dict[str, Any]]:
+    def build_quiz(self, node: dict[str, Any], *, mode: str = "llm") -> list[dict[str, Any]]:
         """生成测验题"""
         title = node.get("title", "知识点")
         content = node.get("script") or node.get("content") or node.get("summary") or ""
         questions = node.get("interactive_questions") or []
         if questions:
             return [{"type": "quiz", "title": title, "questions": questions, "source": "node"}]
+        if str(mode or "llm").strip().lower() == "mock":
+            return self._fallback_quiz(title, content)
         # LLM 生成
         try:
             result = self._get_llm().chat_json(
@@ -86,10 +88,10 @@ class InteractiveBuilder:
             }
         return None
 
-    def build_all(self, node: dict[str, Any]) -> list[dict[str, Any]]:
+    def build_all(self, node: dict[str, Any], *, mode: str = "llm") -> list[dict[str, Any]]:
         """一键生成该节点所有互动物料"""
         items = []
-        quiz = self.build_quiz(node)
+        quiz = self.build_quiz(node, mode=mode)
         items.extend(quiz)
         cards = self.build_flashcards(node)
         items.extend(cards)

@@ -20,14 +20,18 @@ import { useIntentStore } from '../stores/intentStore'
 import { useMaterialStore } from '../stores/materialStore'
 import { useOutlineStore } from '../stores/outlineStore'
 import { useGenerationStore } from '../stores/generationStore'
+import { useVersionStore } from '../stores/versionStore'
+import { useModifyStore } from '../stores/modifyStore'
+import { useContentStore } from '../stores/contentStore'
+import { writeResumeDraft, clearLegacyResumeDraft } from '../utils/coursewareDraft'
 
 const route = useRoute(); const router = useRouter(); const projects = useCoursewareProjectStore(); const message = ref('正在读取最新编辑进度…'); const failed = ref(false)
 const intentStore = useIntentStore(); const materialStore = useMaterialStore(); const outlineStore = useOutlineStore(); const generationStore = useGenerationStore()
 const routeForStep = { s1_intent: 'S1Intent', s2_material: 'S2Material', s3_studio: 'S3Studio', s4_version: 'S4Version' }
-function hydrateDraft(draft) {
+function hydrateDraft(draft, projectId) {
   const intentSession = draft.intent_session || {}
   if (draft.intent || intentSession.session_id) {
-    intentStore.initialize()
+    intentStore.initialize(projectId)
     intentStore.intentSummary = draft.intent || intentStore.intentSummary
     intentStore.sessionId = intentSession.session_id || intentStore.sessionId
     intentStore.intentId = intentSession.intent_id || intentStore.intentId
@@ -53,6 +57,8 @@ function hydrateDraft(draft) {
 async function restart() {
   try {
     const project = await projects.create('未命名课件')
+    for (const store of [useIntentStore(), useMaterialStore(), useOutlineStore(), useGenerationStore(), useVersionStore(), useModifyStore(), useContentStore()]) store.reset?.()
+    clearLegacyResumeDraft()
     await projects.updateStep('s1_intent')
     router.replace({ name: 'S1Intent', query: { project_id: project.id || project.project_id } })
   } catch (error) { message.value = error?.message || '重新开始失败，请稍后重试' }
@@ -73,8 +79,9 @@ onMounted(async () => {
     else if (typeof draftSource === 'string') {
       try { draft = JSON.parse(draftSource) || {} } catch { draft = {} }
     }
-    hydrateDraft(draft)
-    try { window.localStorage.setItem('fuww_courseware_resume_draft', JSON.stringify(draft)) } catch {}
+    projects.setActive(projectId)
+    hydrateDraft(draft, projectId)
+    writeResumeDraft(projectId, draft)
     const generationId = context.generation_id || context.project?.gen_id || draft.generation_id || draft.generation?.generation_id || ''
     let latestLocked = false
     if (generationId) {

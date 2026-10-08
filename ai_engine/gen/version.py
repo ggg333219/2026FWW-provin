@@ -243,6 +243,15 @@ class VersionManager:
             # 读取当前版本列表
             versions_meta = self._read_meta(generation_id)
             next_no = versions_meta["latest_version"] + 1
+            previous_no = parent_version or versions_meta["latest_version"]
+            previous = self._read_snapshot(generation_id, previous_no) if previous_no else None
+            if previous is not None:
+                if metadata is None:
+                    metadata = dict(previous.metadata)
+                if page_bindings is None:
+                    page_bindings = list(previous.page_bindings)
+                if presentation is None:
+                    presentation = dict(previous.presentation)
 
             # 构建版本对象
             version = GenerationVersion(
@@ -250,8 +259,8 @@ class VersionManager:
                 generation_id=generation_id,
                 version_number=next_no,
                 nodes_snapshot=nodes,
-                page_bindings=page_bindings or [],
-                presentation=presentation or {},
+                page_bindings=page_bindings if page_bindings is not None else [],
+                presentation=presentation if presentation is not None else {},
                 summary=summary or f"版本 {next_no}",
                 parent_version=parent_version,
                 locked=False,

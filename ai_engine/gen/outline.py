@@ -146,7 +146,12 @@ class OutlineBuilder:
 
     # ── 公开入口 ──
 
-    def build(self, intent: dict[str, Any], evidence_packet: dict[str, Any] | None = None) -> dict[str, Any]:
+    def build(
+        self,
+        intent: dict[str, Any],
+        evidence_packet: dict[str, Any] | None = None,
+        generation_instruction_set: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """主入口：intent + 证据 → 节点树
 
         Args:
@@ -169,6 +174,7 @@ class OutlineBuilder:
         markdown = self._build_markdown_context(
             title, description, key_points, evidence_text, total_duration
         )
+        markdown = self._append_generation_instructions(markdown, generation_instruction_set)
         fallback = self._fallback_outline(title, key_points, total_duration)
 
         nodes, used_fallback, fallback_reason = self._run_with_fallback(
@@ -182,11 +188,19 @@ class OutlineBuilder:
             result["fallback_reason"] = fallback_reason
         return result
 
-    def build_from_markdown(self, markdown: str, course_name: str | None = None) -> dict[str, Any]:
+    def build_from_markdown(
+        self,
+        markdown: str,
+        course_name: str | None = None,
+        generation_instruction_set: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """从已有 Markdown 构建节点树（兼容旧接口）"""
         # 无 intent 时没有课时来源，用默认总课时，保证输出仍可被 Go 大纲确认接受。
         total_duration = DEFAULT_TOTAL_DURATION_MINUTES
         fallback = self._fallback_outline(course_name or "未命名课程", None, total_duration)
+        # 统一生成指令（指令集）在进模型之前追加到 markdown 尾部，
+        # 让「输出要求 / 呈现偏好 / 生成模式」全链路共享同一份约束。
+        markdown = self._append_generation_instructions(markdown, generation_instruction_set)
         nodes, used_fallback, fallback_reason = self._run_with_fallback(
             markdown, [], total_duration, fallback
         )
@@ -197,6 +211,20 @@ class OutlineBuilder:
         if used_fallback:
             result["fallback_reason"] = fallback_reason
         return result
+
+    @staticmethod
+    def _append_generation_instructions(markdown: str, instruction_set: dict[str, Any] | None) -> str:
+        if not isinstance(instruction_set, dict) or not instruction_set:
+            return markdown
+        constraints = {
+            "output_requirements": instruction_set.get("output_requirements") or {},
+            "presentation": instruction_set.get("presentation") or {},
+            "generation_mode": instruction_set.get("generation_mode") or "",
+        }
+        constraints = {key: value for key, value in constraints.items() if value}
+        if not constraints:
+            return markdown
+        return f"{markdown}\n\n## 本次统一生成指令\n{json.dumps(constraints, ensure_ascii=False)}"
 
     @staticmethod
     def _fallback_reason(exc: Exception) -> str:

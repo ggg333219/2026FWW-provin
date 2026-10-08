@@ -110,7 +110,7 @@ class VectorStore(ABC):
     def search(
         self,
         query_vec: list[float],
-        top_k: int = 5,
+        top_k: Optional[int] = 5,
         min_score: float = 0.0,
         source_type: Optional[SourceType] = None,
     ) -> list[SearchHit]:
@@ -220,7 +220,7 @@ class InMemoryVectorStore(VectorStore):
                 hits.append(SearchHit(chunk=indexed, score=score))
 
         hits.sort(key=lambda h: h.score, reverse=True)
-        return hits[:top_k]
+        return hits if top_k is None else hits[:top_k]
 
     def delete_by_doc(self, doc_id: str) -> int:
         chunk_ids = self._doc_chunks.pop(doc_id, [])

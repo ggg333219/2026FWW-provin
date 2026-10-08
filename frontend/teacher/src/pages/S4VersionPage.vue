@@ -161,8 +161,6 @@
               :export-error="versionStore.exportError"
               :export-quality-report="versionStore.exportQualityReport"
               :loading="versionStore.loading"
-              :intent="intentStore.intentSummary || {}"
-              :nodes="versionStore.currentVersionDetail?.nodes || []"
               :course-title="courseTitle"
               :version-label="currentVersionLabel"
               @start-export="handleStartExport"
@@ -218,6 +216,7 @@ import { useIntentStore } from '../stores/intentStore'
 import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
 import AppShell from '../components/layout/AppShell.vue'
 import S4VersionExportCenter from '../components/teacher/S4VersionExportCenter.vue'
+import { writeResumeDraft } from '../utils/coursewareDraft'
 
 const versionStore = useVersionStore()
 const generationStore = useGenerationStore()
@@ -367,12 +366,16 @@ function handleStartExport(format) {
     courseTitle.value,
     versionStore.currentVersionDetail?.nodes || [],
     projectStore.projectId,
+    versionStore.currentVersionDetail?.generationInstructionSet || projectStore.draft?.generation_instruction_set || {},
   )
 }
 
 async function handleContinueFromLocked() {
   const version = versionStore.currentVersionDetail?.version
   if (!version || (!versionStore.genId && !projectStore.projectId)) return
+  // 在创建分支前先保存当前锁定版本的大纲快照。回滚接口刷新版本详情后，
+  // 新草稿的详情可能只返回内容节点，不能再依赖刷新后的 currentVersionDetail。
+  const sourceOutline = versionStore.currentVersionDetail?.outline || projectStore.draft?.outline
   const nodes = versionStore.currentVersionDetail?.nodes || []
   const result = projectStore.projectId
     ? await versionStore.rollbackProject(projectStore.projectId, version)
@@ -384,12 +387,12 @@ async function handleContinueFromLocked() {
   generationStore.setNodes(restoredNodes)
   await persistRollbackDraft({
     nodes: restoredNodes,
-    outline: versionStore.currentVersionDetail?.outline,
+    outline: sourceOutline,
     pageBindings: data.page_bindings || versionStore.currentVersionDetail?.pageBindings || [],
     presentation: data.presentation || versionStore.currentVersionDetail?.presentation || {},
   })
   await projectStore.updateStep('s3_studio').catch(() => {})
-  router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: version, phase: 'outline' } })
+  router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: version, editable_outline: '1', phase: 'outline' } })
 }
 
 async function persistRollbackDraft({ nodes, outline, pageBindings, presentation }) {
@@ -413,9 +416,7 @@ async function persistRollbackDraft({ nodes, outline, pageBindings, presentation
     presentation: { ...(current.presentation || {}), ...(presentation || {}) },
   }
   await projectStore.saveNow(restored).catch(() => {})
-  try {
-    window.localStorage.setItem('fuww_courseware_resume_draft', JSON.stringify(restored))
-  } catch {}
+  writeResumeDraft(String(route.query.project_id || projectStore.projectId || ''), restored)
 }
 
 function formatTime(iso) {

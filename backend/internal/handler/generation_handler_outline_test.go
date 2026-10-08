@@ -26,6 +26,19 @@ func (handlerOutlineAI) ReviseOutline(_ context.Context, req service.OutlineRevi
 	return &service.OutlineReviseAIResponse{Nodes: req.Nodes}, nil
 }
 
+// StreamOutline 只为满足 service.outlineClient 接口（H3 引入），测试不覆盖流式路径。
+func (a handlerOutlineAI) StreamOutline(ctx context.Context, req service.OutlineGenerateRequest, onEvent func(event string, data []byte) error) error {
+	resp, err := a.GenerateOutline(ctx, req)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	return onEvent("done", raw)
+}
+
 func TestGenerationCreateInjectsBackendConfirmedOutline(t *testing.T) {
 	var forwarded service.GenerationCreateRequest
 	aiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

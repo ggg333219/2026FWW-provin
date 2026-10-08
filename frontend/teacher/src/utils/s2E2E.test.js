@@ -83,6 +83,41 @@ describe('S2 前端链路（mock）', () => {
     expect(second.data.chunk_count).toBe(0)
   })
 
+  it('RAG 分页透传 offset 并保存完整命中总数', async () => {
+    const store = useMaterialStore()
+    const search = vi.spyOn(teacherV1Api.rag, 'search').mockResolvedValueOnce({
+      data: { results: [{ chunk_id: 'page-2', content: '后续页', score: 0.8 }], total_results: 27 }
+    })
+
+    const results = await store.searchRag({ query: '排序', topK: 10, offset: 10 })
+
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ topK: 10, offset: 10 }))
+    expect(results).toHaveLength(1)
+    expect(store.ragTotalResults).toBe(27)
+  })
+
+  it('知识库索引完整发送所有切片，不截断数量或长文本', async () => {
+    const store = useMaterialStore()
+    const longText = '完整切片内容'.repeat(700)
+    store.materials = [{
+      id: 'material-large',
+      chunks: Array.from({ length: 205 }, (_, index) => ({
+        chunkId: `chunk_${index}`,
+        content: index === 204 ? longText : `知识片段 ${index}`
+      }))
+    }]
+    const upload = vi.spyOn(teacherV1Api.rag, 'knowledgeUpload').mockResolvedValueOnce({
+      data: { task_id: 'kb_task', status: 'done', chunk_count: 205 }
+    })
+
+    const result = await store.indexKnowledgeBase()
+
+    expect(result.chunk_count).toBe(205)
+    const sentTexts = upload.mock.calls[0][0].texts
+    expect(sentTexts).toHaveLength(205)
+    expect(sentTexts[204]).toBe(longText)
+  })
+
   it('证据融合生成 evidence_packet 并入 store', async () => {
     const store = useMaterialStore()
     await store.loadMaterials()
@@ -90,6 +125,18 @@ describe('S2 前端链路（mock）', () => {
     expect(packet).toBeTruthy()
     expect(packet.relevant_chunks).toBeTruthy()
     expect(store.evidencePackets.length).toBe(1)
+  })
+
+  it('证据融合将教师确认的切片 ID 传给后端', async () => {
+    const store = useMaterialStore()
+    const evidence = vi.spyOn(teacherV1Api.rag, 'evidence').mockResolvedValueOnce({
+      data: { evidence_packet: { relevant_chunks: [{ chunk_id: 'chosen' }], synthesized_context: '依据', citations: [] } }
+    })
+
+    const packet = await store.generateEvidence({ query: '排序', selectedChunkIds: ['chosen'] })
+
+    expect(packet).toBeTruthy()
+    expect(evidence).toHaveBeenCalledWith(expect.objectContaining({ selectedChunkIds: ['chosen'] }))
   })
 
   it('空证据包不会被当作成功结果持久化', async () => {

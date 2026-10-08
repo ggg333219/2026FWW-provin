@@ -75,32 +75,32 @@
 import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMaterialStore, isEvidencePacketUsable } from '../../stores/materialStore'
-import { useIntentStore } from '../../stores/intentStore'
+import { intentStorageKey, useIntentStore } from '../../stores/intentStore'
+import { useCoursewareProjectStore } from '../../stores/coursewareProjectStore'
 import S2MaterialHub from './S2MaterialHub.vue'
 import KnowledgeBasePanel from './KnowledgeBasePanel.vue'
 import { buildIntentEvidenceQuery } from '../../utils/intentEvidence'
 
 const materialStore = useMaterialStore()
 const intentStore = useIntentStore()
+const projectStore = useCoursewareProjectStore()
 const route = useRoute()
 const router = useRouter()
 
 const EVIDENCE_KEY = 'fuww_s2_bound_evidence'
 const SELECTION_KEY = 'fuww_s2_selected_materials'
 const NODE_REF_KEY = 'fuww_s2_current_node_ref'
-const WORKFLOW_SESSION_KEY = 'fuww_workflow_session_id'
-
-intentStore.initialize()
+intentStore.initialize(String(route.query.project_id || projectStore.projectId || projectStore.restoreActiveId() || ''))
 
 const scopedKey = (base) => `${base}:${sessionId.value}`
 
 /** 会话ID：同一浏览器会话内保持稳定，供 S2 → KB → S3 串联 */
 const sessionId = computed(() => {
   if (typeof window === 'undefined') return 's2_demo'
-  let id = intentStore.sessionId || window.localStorage.getItem(WORKFLOW_SESSION_KEY)
+  let id = intentStore.sessionId || window.localStorage.getItem(intentStorageKey('fuww_workflow_session_id', projectStore.projectId || route.query.project_id || ''))
   if (!id) {
     id = `sess_s1_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-    window.localStorage.setItem(WORKFLOW_SESSION_KEY, id)
+    window.localStorage.setItem(intentStorageKey('fuww_workflow_session_id', projectStore.projectId || route.query.project_id || ''), id)
   }
   return id
 })

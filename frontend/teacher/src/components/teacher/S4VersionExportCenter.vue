@@ -39,15 +39,6 @@
       </button>
 
       <!-- HTML 课件预览 -->
-      <button
-        class="btn btn-secondary"
-        :disabled="!genId || skillPreviewLoading"
-        @click="handleSkillPreview"
-      >
-        {{ skillPreviewLoading ? '生成中...' : 'HTML 课件预览' }}
-      </button>
-      <p v-if="!genId" class="preview-hint">请先加载版本后再使用 HTML 预览</p>
-
       <!-- 状态与进度 -->
       <div v-if="exportStatus !== 'idle'" class="export-status">
         <div class="status-row">
@@ -101,7 +92,7 @@
         <div v-if="exportStatus === 'failed'" class="error-section">
           <span class="error-icon">❌ 导出失败</span>
           <p v-if="exportError" class="error-msg">{{ exportError }}</p>
-          <button class="btn btn-sm" @click="$emit('reset-export')">重试</button>
+          <button class="btn btn-sm" @click="$emit('start-export', selectedFormat)">重试</button>
         </div>
       </div>
     </div>
@@ -121,53 +112,14 @@ const props = defineProps({
   exportError: { type: String, default: '' },
   exportQualityReport: { type: Object, default: null },
   loading: { type: Boolean, default: false },
-  /** 教学意图对象（传给 deck-skill 生成 HTML 课件） */
-  intent: { type: Object, default: () => ({}) },
-  /** 当前版本节点树，直接渲染为幻灯片（跳过 LLM） */
-  nodes: { type: Array, default: () => [] }
-  ,courseTitle: { type: String, default: '未命名课件' }
+  courseTitle: { type: String, default: '未命名课件' }
   ,versionLabel: { type: String, default: 'v1' }
 })
 
-defineEmits(['start-export', 'reset-export', 'skill-preview'])
+defineEmits(['start-export', 'reset-export'])
 
 const selectedFormat = ref(props.exportFormat || 'pptx')
-const skillPreviewLoading = ref(false)
 const downloadError = ref('')
-
-async function handleSkillPreview() {
-  if (!props.genId) return
-  // intent 为空时用最小结构
-  const intent = props.intent?.title
-    ? props.intent
-    : { title: '课件预览', description: '智能互动课件', key_points: [] }
-  skillPreviewLoading.value = true
-  try {
-    const { teacherGenerationApi: api } = await import('../../services/v1/generationApi')
-    // 有节点树时直接渲染真实内容，无节点时走 LLM 生成
-    const data = await api.skillDeckPreview({
-      intent,
-      nodes: props.nodes?.length ? props.nodes : null
-    })
-    // html_url 可能是相对路径 /previews/xxx 或绝对 URL
-    let url = data?.html_url || ''
-    if (url.startsWith('/')) {
-      url = 'http://localhost:8000' + url
-    } else if (data?.html_path && !url) {
-      const filename = data.html_path.replace(/^.*[\\/]/, '')
-      url = `http://localhost:8000/previews/${filename}`
-    }
-    if (url) {
-      window.open(url, '_blank', 'noopener')
-    } else {
-      console.warn('[S4VersionExportCenter] 预览无返回', data)
-    }
-  } catch (err) {
-    console.error('[S4VersionExportCenter] HTML 预览失败', err)
-  } finally {
-    skillPreviewLoading.value = false
-  }
-}
 
 const exportIsActive = computed(() => ['pending', 'exporting'].includes(props.exportStatus))
 const exportFileName = computed(() => {

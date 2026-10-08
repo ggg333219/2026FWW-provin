@@ -8,6 +8,7 @@
 
 import os
 import json
+import tempfile
 import zipfile
 import unittest
 from pathlib import Path
@@ -136,10 +137,11 @@ class TestPPTExporter(unittest.TestCase):
             for shape in slide.shapes
             if hasattr(shape, "text")
         )
-        self.assertIn("导入 · 45秒", text)
-        self.assertIn("欢迎来到AI课堂", text)
-        self.assertIn("讲解", text)
-        self.assertIn("这是主要内容", text)
+        # 讲稿分段只在预览折叠区展示，PPT 仅保留学生可见正文。
+        self.assertNotIn("导入 · 45秒", text)
+        self.assertNotIn("欢迎来到AI课堂", text)
+        self.assertNotIn("讲解", text)
+        self.assertNotIn("这是主要内容", text)
 
     def test_type_precedes_node_type_like_preview(self):
         """与预览侧保持一致：冲突时 type 优先于 node_type。"""
@@ -262,7 +264,7 @@ class TestPPTExporter(unittest.TestCase):
         ]
         right_shapes = [
             shape for shape in prs.slides[0].shapes
-            if hasattr(shape, "text") and "右栏讲授内容" in shape.text
+            if hasattr(shape, "text") and "右栏正文回退" in shape.text
         ]
         self.assertEqual(len(left_shapes), 1)
         self.assertEqual(len(right_shapes), 1)
@@ -270,7 +272,7 @@ class TestPPTExporter(unittest.TestCase):
         self.assertGreater(right_shapes[0].left.inches, 6.0)
         all_text = "\n".join(shape.text for shape in prs.slides[0].shapes if hasattr(shape, "text"))
         self.assertIn("双栏教学", all_text)
-        self.assertIn("讲解 · 1分钟", all_text)
+        self.assertNotIn("讲解 · 1分钟", all_text)
 
     # ── 模板 ──
 
@@ -463,7 +465,7 @@ class TestExportLifecycle(unittest.TestCase):
         """字节流保存为文件后有效"""
         ppt = PPTExporter(ExportPPTConfig(output_dir="/tmp"))
         buf = ppt.export_to_bytes(_content_nodes(), "字节保存")
-        tmp = Path("/tmp") / f"_test_export_bytes_{hash(str(_content_nodes()))}.pptx"
+        tmp = Path(tempfile.gettempdir()) / f"_test_export_bytes_{hash(str(_content_nodes()))}.pptx"
         tmp.write_bytes(buf.getvalue())
         self.assertTrue(tmp.exists())
         self.assertGreater(tmp.stat().st_size, 0)

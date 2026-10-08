@@ -128,6 +128,9 @@
           :intent-id="intentStore.intentId"
           :intent-summary="intentStore.intentSummary"
           :evidence-packet="selectedEvidencePacket"
+          :presentation="{ template_id: templateId, palette, layout: layoutMode, font_family: fontFamily, density }"
+          generation-mode="full_pipeline"
+          :page-generation-mode="generateMode"
           :ready="outlineReady"
           :auto-restore="true"
           @confirm-complete="handleOutlineConfirmed"
@@ -231,9 +234,46 @@
               <span class="node-badge node-badge-empty" v-else>⏸ 待生成</span>
             </div>
             <div class="node-body">
+              <!-- 手动编辑态：直接改内容，不经过大模型 -->
+              <div v-if="editingNodeId === node.node_id" class="node-edit-area">
+                <label class="node-edit-field">
+                  <span class="node-edit-label">页面概述（这一页幻灯片上的一句话）</span>
+                  <textarea
+                    v-model="editDraft.summary"
+                    rows="3"
+                    class="node-edit-input"
+                    placeholder="例如：冒泡排序通过相邻元素两两比较，每轮把最大值推到末尾。"
+                  ></textarea>
+                </label>
+                <label class="node-edit-field">
+                  <span class="node-edit-label">讲稿（教师照着讲的正文，不上幻灯片）</span>
+                  <textarea
+                    v-model="editDraft.script"
+                    rows="6"
+                    class="node-edit-input"
+                    placeholder="教师课堂口述内容"
+                  ></textarea>
+                </label>
+                <label class="node-edit-field">
+                  <span class="node-edit-label">核心要点（一行一条）</span>
+                  <textarea
+                    v-model="editDraft.key_points_text"
+                    rows="4"
+                    class="node-edit-input"
+                    placeholder="每轮确定一个最大值&#10;相邻元素两两比较"
+                  ></textarea>
+                </label>
+                <div class="node-actions">
+                  <button class="btn btn-sm btn-primary" @click="saveManualEdit(node)">
+                    保存修改
+                  </button>
+                  <button class="btn btn-sm" @click="cancelManualEdit">取消</button>
+                  <span class="node-edit-hint">手动编辑不经过大模型，改什么就是什么。</span>
+                </div>
+              </div>
               <!-- 已生成内容 -->
               <div
-                v-if="contentStore.nodesContent[node.node_id]"
+                v-else-if="contentStore.nodesContent[node.node_id]"
                 class="node-content-area"
               >
                 <div class="node-summary">{{ node.summary }}</div>
@@ -260,6 +300,13 @@
                     @click="handleModifyNode(node.node_id)"
                   >
                     ✏️ AI 修改
+                  </button>
+                  <button
+                    class="btn btn-sm"
+                    :disabled="contentStore.modifying"
+                    @click="startManualEdit(node)"
+                  >
+                    📝 手动编辑
                   </button>
                 </div>
               </div>
@@ -314,7 +361,12 @@
                 outlineStore.outline_version
               }}</span
             >
-            <span class="gen-label" style="margin-left: 12px">生成模式</span>
+            <span class="gen-label" style="margin-left: 12px">生成范围</span>
+            <select v-model="generationScope" class="gen-mode-select">
+              <option value="content_only">仅生成内容（沿用已确认大纲）</option>
+              <option value="full_pipeline">全流程（重建大纲并生成内容）</option>
+            </select>
+            <span class="gen-label" style="margin-left: 12px">页面策略</span>
             <select v-model="generateMode" class="gen-mode-select">
               <option value="page_incremental">逐页增量生成</option>
               <option value="page_parallel">全页面并行生成</option>
@@ -427,7 +479,14 @@
         <label>配色 <select v-model="palette"><option value="classic">经典青绿</option><option value="klein-blue">克莱因蓝</option></select></label>
         <label>版式 <select v-model="layoutMode"><option value="balanced">图文均衡</option><option value="visual">视觉优先</option><option value="text">内容优先</option></select></label>
         <label>字体 <select v-model="fontFamily"><option value="system">系统默认</option><option value="source-han">思源黑体</option><option value="serif">中文宋体</option></select></label>
-        <label>信息密度 <select v-model="density"><option value="comfortable">舒展</option><option value="compact">紧凑</option><option value="minimal">极简</option></select></label>
+        <label>信息密度（疏密排版）
+          <select v-model="density" @change="applyPresentationStyle">
+            <option value="compact">紧凑 — 每页多放内容</option>
+            <option value="comfortable">舒展 — 默认</option>
+            <option value="loose">宽松 — 大留白</option>
+          </select>
+        </label>
+        <p class="style-density-hint">三档改的是同一套排版参数（区块间距、面板内边距、行距、字号、每页容量）：预览里看到的疏密与导出的 PPTX 是同一份，不会出现预览松、导出挤。</p>
         <div class="style-ai-hint">也可以在右侧直接告诉 AI：“整体换成简洁商务风”或“这一页改成左图右文”。样式调整只改呈现字段，不重新检索资料。</div>
         <div class="style-actions"><button class="btn btn-outline" @click="projectStore.saveNow(draftSnapshot())">保存样式草稿</button><button class="btn btn-primary" :disabled="generationStore.previewLoading" @click="applyPresentationStyle">{{ generationStore.previewLoading ? '正在刷新…' : '应用并刷新预览' }}</button></div>
       </div>
@@ -577,6 +636,7 @@ import ModifyPanel from "../components/teacher/ModifyPanel.vue";
 import EvidenceSidebar from "../components/teacher/EvidenceSidebar.vue";
 import { useGenerationStore } from "../stores/generationStore";
 import { useOutlineStore } from "../stores/outlineStore";
+import { readResumeDraft } from "../utils/coursewareDraft";
 import { useInteractiveStore } from "../stores/interactiveStore";
 import { useContentStore } from "../stores/contentStore";
 import { useIntentStore } from "../stores/intentStore";
@@ -604,6 +664,7 @@ const router = useRouter();
 const currentPhase = ref("outline");
 const generationMode = ref("");
 const generateMode = ref("page_incremental");
+const generationScope = ref("content_only");
 const genError = ref("");
 const generationPages = ref([]);
 const regeneratingPageId = ref("");
@@ -631,6 +692,18 @@ const palette = ref("classic");
 const layoutMode = ref("balanced");
 const fontFamily = ref("system");
 const density = ref("comfortable");
+/**
+ * 疏密档位只有三档：compact / comfortable / loose。
+ * 老草稿里存着 "minimal"（旧前端的「极简」），它不在引擎侧的三档里，
+ * 直接喂给下拉框会显示空白、看着像没保存住。引擎侧 resolve_density 把它
+ * 当 loose 处理（大留白），这里保持一致，恢复出来的档位才对得上。
+ */
+function normalizeDensity(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "compact" || raw === "comfortable" || raw === "loose") return raw;
+  if (raw === "minimal") return "loose";
+  return "comfortable";
+}
 const evidencePacket = ref(null);
 const selectedEvidenceIds = ref([]);
 const evidenceSelectionInitialized = ref(false);
@@ -677,7 +750,7 @@ const selectedEvidencePacket = computed(() => {
 });
 
 function draftSnapshot() {
-  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value } };
+  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, forked_from_version: outlineStore.forked_from_version, editable_after_rollback: outlineStore.forked_from_version > 0, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value }, generation_instruction_set: buildGenerationInstructionSet(selectedEvidencePacket.value, generationScope.value) };
 }
 
 function versionPageBindings() {
@@ -711,7 +784,9 @@ onMounted(async () => {
 	let restoredProjectOutline = false;
   // 恢复 S1 会话/意图（刷新或直接进入 S3 时 store 内存为空，
   // 不恢复会导致 sessionId 缺失 → AI 生成大纲被 "缺少 session_id" 拦截）
-  intentStore.initialize();
+  const projectId = String(route.query.project_id || projectStore.projectId || projectStore.restoreActiveId() || '');
+  projectStore.setActive(projectId);
+  intentStore.initialize(projectId);
   materialStore.activeSessionId = intentStore.sessionId || projectStore.projectId || "";
   if (typeof window !== "undefined") {
     generationMode.value =
@@ -725,7 +800,14 @@ onMounted(async () => {
   }
 
   // project_id 才是 AI 对话、草稿与版本的边界；generation_id 只是该项目的生成结果。
-  projectStore.setActive(String(route.query.project_id || projectStore.restoreActiveId() || ""));
+  const previousProjectId = projectStore.projectId || projectStore.restoreActiveId() || "";
+  projectStore.setActive(String(route.query.project_id || previousProjectId));
+  const hasProject = Boolean(projectStore.projectId);
+  if (!hasProject || previousProjectId !== projectStore.projectId) {
+    outlineStore.reset();
+    generationStore.reset();
+    contentStore.reset();
+  }
   if (projectStore.projectId) {
     // 契约 v1.0 §3.2：按 project_id 拉 /latest-generation-context 作为权威读源，
     // 一次性拿到项目 + 最新版本 + 当前所有页绑定，避免"切 PPT 不重置 AI 对话"
@@ -737,7 +819,7 @@ onMounted(async () => {
     // 刷新或直接打开 S3 时以后端草稿为准，不能只依赖页面跳转留下的本地缓存。
     await projectStore.resume(projectStore.projectId).catch(() => {});
     await projectStore.updateStep("s3_studio").catch(() => {});
-    // 后端草稿优先；只有后端没有可用草稿时才回退到统一恢复入口留下的本地缓存。
+    // 项目身份明确时只恢复服务端项目草稿，不读无项目归属的旧全局缓存。
     try {
       const backendDraft = projectStore.draft;
       let savedDraft = backendDraft;
@@ -747,12 +829,16 @@ onMounted(async () => {
       // 兼容旧版后端曾直接保存的节点数组，避免历史课件刷新后变成空白。
       if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
       if (!savedDraft || typeof savedDraft !== "object" || (!savedDraft.outline && !savedDraft.generation)) {
-        const rawDraft = window.localStorage.getItem("fuww_courseware_resume_draft");
-        savedDraft = rawDraft ? JSON.parse(rawDraft) : null;
+        savedDraft = readResumeDraft(projectStore.projectId) || null;
         if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
       }
-      if (savedDraft?.outline?.outline_id) {
-        if (savedDraft.outline.editable_after_rollback || route.query.from_rollback_version) {
+      const editableFork = Boolean(
+        savedDraft?.outline?.editable_after_rollback
+        || route.query.from_rollback_version
+        || route.query.editable_outline,
+      );
+      if (savedDraft?.outline && (savedDraft.outline.outline_id || savedDraft.outline.nodes?.length || editableFork)) {
+        if (editableFork) {
           outlineStore.restoreEditableSnapshot(savedDraft.outline);
         } else {
           outlineStore._applyOutlineData(savedDraft.outline);
@@ -789,20 +875,14 @@ onMounted(async () => {
           return binding ? { ...node, citation_refs: binding.evidence_refs || [], source_chunk_ids: binding.evidence_refs || [] } : node;
         }));
       }
-      if (savedDraft?.presentation) { templateId.value = savedDraft.presentation.template_id || "default"; palette.value = savedDraft.presentation.palette || "classic"; layoutMode.value = savedDraft.presentation.layout || "balanced"; fontFamily.value = savedDraft.presentation.font_family || "system"; density.value = savedDraft.presentation.density || "comfortable"; }
+      if (savedDraft?.presentation) { templateId.value = savedDraft.presentation.template_id || "default"; palette.value = savedDraft.presentation.palette || "classic"; layoutMode.value = savedDraft.presentation.layout || "balanced"; fontFamily.value = savedDraft.presentation.font_family || "system"; density.value = normalizeDensity(savedDraft.presentation.density); }
     } catch {}
   }
-  // 尝试从 localStorage 恢复大纲
-  const restored = restoredProjectOutline ? true : outlineStore.restore();
-  if (!restoredProjectOutline && restored && outlineStore.session_id && intentStore.sessionId
-      && outlineStore.session_id !== intentStore.sessionId) {
-    outlineStore.reset();
-  }
-  if (!restoredGenerationNodes && restored && outlineStore.isConfirmed) {
+  if (!restoredGenerationNodes && restoredProjectOutline && outlineStore.isConfirmed) {
     currentPhase.value = "generating";
   }
   // 恢复最近生成记录
-  generationStore.restoreLastGenId();
+  if (projectStore.projectId) generationStore.restoreLastGenId();
   if (generationStore.lastGenId) {
     interactiveStore.setGenerationId(generationStore.lastGenId);
     // 项目草稿已经包含完整节点时直接使用，避免全局缓存中的旧 task_id
@@ -817,18 +897,52 @@ onMounted(async () => {
       { genId: "" },
     ).catch(() => {});
   }
+  // 回滚/基于旧版本新建版本时，项目草稿、localStorage 和最新上下文可能
+  // 按不同顺序恢复。初始化末尾再次明确切换为可编辑分支，避免旧的
+  // confirmed 状态覆盖前面的 restoreEditableSnapshot。
+  const editableForkRoute = Boolean(route.query.from_rollback_version || route.query.editable_outline);
+  if (editableForkRoute && outlineStore.nodes.length) {
+    outlineStore.restoreEditableSnapshot({
+      outline_id: outlineStore.outline_id,
+      outline_version: outlineStore.outline_version || Number(route.query.base_version || 0),
+      title: outlineStore.title,
+      nodes: outlineStore.nodes,
+    });
+  }
   if (route.query.phase === "outline") currentPhase.value = "outline";
   const evidenceReady = await ensureAutomaticEvidence();
   outlineReady.value = evidenceReady || !requiresAutomaticEvidence.value;
   } finally {
     initializing.value = false;
   }
-  // 恢复内容生成状态
-  const contentRestored = contentStore.restore();
-  if (contentRestored && contentStore.hasContent) {
-    currentPhase.value = "content";
-  }
 });
+
+function buildGenerationInstructionSet(evidence, mode) {
+  return {
+    schema_version: 1,
+    intent: intentStore.intentSummary || {},
+    outline_nodes: (outlineStore.nodes || []).map((node) => ({ ...node })),
+    reference_materials: (evidence?.relevant_chunks || []).map((chunk) => ({
+      chunk_id: chunk.chunk_id,
+      source_ref: chunk.source_ref || chunk.source?.file_name || '',
+      page_ref: chunk.page_ref || chunk.source?.page || null,
+    })),
+    confirmed_evidence: evidence || null,
+    output_requirements: {
+      formats: intentStore.intentSummary?.output_format || ['ppt'],
+      with_interactive: Boolean(intentStore.intentSummary?.with_interactive),
+    },
+    presentation: {
+      template_id: templateId.value,
+      palette: palette.value,
+      layout: layoutMode.value,
+      font_family: fontFamily.value,
+      density: density.value,
+    },
+    generation_mode: mode,
+    page_generation_mode: generateMode.value,
+  };
+}
 
 watch(() => [outlineStore.nodes, generationStore.currentScriptNodes, templateId.value, palette.value, layoutMode.value, fontFamily.value, density.value], () => projectStore.scheduleSave(draftSnapshot()), { deep: true });
 watch(() => generationStore.currentScriptNodes, (nodes) => {
@@ -977,11 +1091,29 @@ async function handleStartContentGeneration() {
       enhanced: false,
       outline_id: outlineStore.outline_id,
       outline_version: outlineStore.outline_version,
+      generation_instruction_set: buildGenerationInstructionSet(selectedEvidencePacket.value, "content_only"),
     });
   } catch (err) {
     handleError("启动内容生成失败: " + (err?.message || ""));
   }
 }
+
+// ---- 内容层编辑：AI 修改 / 手动编辑 ----
+//
+// 这三个 ref 此前压根没有声明，模板和脚本却在用 `modifyNodeId.value`。
+// 点「AI 修改」按钮时 handleModifyNode 第一行赋值就抛 ReferenceError，
+// 指令框永远出不来 —— 按钮在、功能不在，就是 PRD 里「有 AI 编辑的按钮，但是编辑不了」。
+const modifyNodeId = ref("");
+const modifyMessage = ref("");
+/** 手动编辑：正在编辑的节点 ID 与表单草稿。 */
+const editingNodeId = ref("");
+const editDraft = ref({ summary: "", script: "", key_points_text: "" });
+
+/** 指令框标题里显示的节号，按当前大纲顺序算。 */
+const modifyNodeOrder = computed(() => {
+  const idx = (outlineStore.nodes || []).findIndex((n) => n.node_id === modifyNodeId.value);
+  return idx >= 0 ? idx + 1 : 1;
+});
 
 // AI 修改单个节点内容
 async function handleModifyNode(nodeId) {
@@ -989,6 +1121,7 @@ async function handleModifyNode(nodeId) {
     handleError("内容生成任务尚未就绪，请先完成节点内容生成");
     return;
   }
+  editingNodeId.value = "";
   modifyNodeId.value = nodeId;
   modifyMessage.value = "";
 }
@@ -999,19 +1132,127 @@ function cancelModifyNode() {
   modifyMessage.value = "";
 }
 
+/**
+ * 教师那句自然语言落到引擎认得的三档动作上。
+ *
+ * 引擎 partial_content 只认 simplify / expand / rewrite：动作决定提示词的骨架，
+ * 教师原话则原样进 modify_constraints，两边拼起来才是「精简 + 老师自己那句补充要求」。
+ * 认不出来就走 rewrite —— 它最保守，只换表述不改信息量，不会把内容改没。
+ */
+function inferModifyAction(message) {
+  const text = String(message || "").toLowerCase();
+  if (/精简|简化|缩短|减少|压缩|简洁/.test(text)) return "simplify";
+  if (/扩充|增加|添加|补充|展开|详细|丰富|案例|更多/.test(text)) return "expand";
+  return "rewrite";
+}
+
+/**
+ * 把引擎返回的整棵树里被改掉的那一节同步回大纲。
+ *
+ * 卡片上的「页面概述」读的是 outlineStore 的 node.summary。不同步就会出现
+ * 「内容其实改了、这一栏还是旧文字」，老师只能认为没改成功。
+ */
+function syncOutlineFromContent(nodes) {
+  if (!Array.isArray(nodes) || !nodes.length) return;
+  const byId = new Map(nodes.filter((n) => n?.node_id).map((n) => [n.node_id, n]));
+  outlineStore.nodes = (outlineStore.nodes || []).map((n) => {
+    const hit = byId.get(n.node_id);
+    if (!hit) return n;
+    return {
+      ...n,
+      summary: hit.summary ?? n.summary,
+      script: hit.script ?? hit.lecture_script ?? n.script,
+      key_points: hit.key_points?.length ? hit.key_points : n.key_points,
+      point_details: hit.point_details ?? n.point_details,
+      segments: hit.segments ?? n.segments,
+      source_chunk_ids: hit.source_chunk_ids ?? n.source_chunk_ids,
+    };
+  });
+}
+
 async function submitModifyNode() {
   const message = modifyMessage.value.trim();
   if (!modifyNodeId.value || !message) return;
   try {
-    await contentStore.modifyNode({
+    // 必须带当前节点树：引擎做的是「基于现有内容局部重生成」，只给一句话
+    // 等于让它凭空重写一节，老师看到的是内容被换掉而不是被改好。
+    const baseNodes = contentStore.mergeContentToOutline(outlineStore.nodes || []);
+    const result = await contentStore.modifyNode({
       content_id: contentStore.content_id,
       node_id: modifyNodeId.value,
       message,
+      nodes: baseNodes,
+      action: inferModifyAction(message),
+      course_name: outlineStore.title || "课件",
+      outline_id: outlineStore.outline_id,
+      outline_version: outlineStore.outline_version,
     });
+    syncOutlineFromContent(result?.nodes);
     cancelModifyNode();
+    projectStore.scheduleSave(draftSnapshot(), 0);
   } catch (err) {
     handleError("修改内容失败: " + (err?.message || ""));
   }
+}
+
+// ---- 手动编辑：直接改字段，不经过大模型 ----
+
+function startManualEdit(node) {
+  const content = contentStore.nodesContent[node.node_id] || {};
+  modifyNodeId.value = "";
+  editingNodeId.value = node.node_id;
+  editDraft.value = {
+    summary: node.summary ?? content.summary ?? "",
+    script: content.script || content.lecture_script || "",
+    key_points_text: (node.key_points || content.key_points || []).join("\n"),
+  };
+}
+
+function cancelManualEdit() {
+  editingNodeId.value = "";
+  editDraft.value = { summary: "", script: "", key_points_text: "" };
+}
+
+async function saveManualEdit(node) {
+  const nodeId = node.node_id;
+  const keyPoints = String(editDraft.value.key_points_text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const summary = editDraft.value.summary || "";
+  const script = editDraft.value.script || "";
+
+  contentStore.saveManualEdit({ node_id: nodeId, summary, script, key_points: keyPoints });
+
+  // 同步回大纲：下一步生成 PPT 用的是大纲节点，不同步等于白改。
+  outlineStore.nodes = (outlineStore.nodes || []).map((n) =>
+    n.node_id === nodeId ? { ...n, summary, key_points: keyPoints } : n,
+  );
+
+  // 已经生成过 PPT 的课件：把这一页换掉并重渲染预览，让改动立刻看得见。
+  if (generationStore.currentScriptNodes?.some((n) => n.node_id === nodeId)) {
+    generationStore.setNodes(
+      generationStore.currentScriptNodes.map((n) =>
+        n.node_id === nodeId
+          ? {
+              ...n,
+              summary,
+              content: summary,
+              key_points: keyPoints,
+              script,
+              lecture_script: script,
+            }
+          : n,
+      ),
+    );
+    await generationStore.renderCoursewarePreview(
+      outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
+      { genId: "" },
+    );
+  }
+
+  cancelManualEdit();
+  projectStore.scheduleSave(draftSnapshot(), 0);
 }
 
 // 从 content 阶段跳转到 generating 阶段
@@ -1036,8 +1277,12 @@ async function handleModifyApplied({ allNodes = [] } = {}) {
 
 // 开始生成内容
 async function handleStartGeneration() {
-  if (!outlineStore.outline_id || !outlineStore.isConfirmed) {
+  if (generationScope.value === "content_only" && (!outlineStore.outline_id || !outlineStore.isConfirmed)) {
     handleError("请先确认大纲");
+    return;
+  }
+  if (!intentStore.sessionId || !intentStore.intentSummary) {
+    handleError("缺少有效的 S1 意图会话，请返回 S1 完成意图确认");
     return;
   }
   genError.value = "";
@@ -1046,6 +1291,18 @@ async function handleStartGeneration() {
 
   try {
     const evidence = selectedEvidencePacket.value;
+
+    if (generationScope.value === "full_pipeline") {
+      generationStore.setGenerateProgress(10, "根据当前意图与已确认资料重新生成大纲");
+      await outlineStore.createOutline({
+        session_id: intentStore.sessionId,
+        intent_id: intentStore.intentId,
+        intent: intentStore.intentSummary,
+        evidence_packet: evidence,
+        generation_instruction_set: buildGenerationInstructionSet(evidence, "full_pipeline"),
+      });
+      await outlineStore.confirmOutline();
+    }
 
     generationStore.setGenerateProgress(15, "创建生成任务");
     const resp = await teacherV1Api.generation.createGeneration({
@@ -1056,8 +1313,11 @@ async function handleStartGeneration() {
       template_id: templateId.value,
       project_id: projectStore.projectId,
       generate_mode: generateMode.value,
+      generation_scope: generationScope.value,
       intent: intentStore.intentSummary || undefined,
       evidence_packet: evidence,
+      generation_instruction_set: buildGenerationInstructionSet(evidence, generationScope.value),
+      outline_nodes: outlineStore.nodes,
     });
 
     const task = resp?.data || resp || {};
@@ -1075,7 +1335,9 @@ async function handleStartGeneration() {
     generationStore.setGenerateProgress(25, "正在生成内容");
     const status = await generationStore.waitForCoursewareGeneration(taskId, {
       intervalMs: 800,
-      maxAttempts: 300,
+      // LLM 节点生成可能超过 4 分钟；保留较长轮询窗口，避免前端
+      // 提前超时后任务虽在后端完成，页面却永远收不到结果。
+      maxAttempts: 4500,
     });
 
     // 加载生成状态（页面列表）
@@ -1106,7 +1368,35 @@ async function loadGenerationStatus() {
   try {
     const resp = await teacherV1Api.generation.getGenerationStatus(taskId);
     const data = resp?.data || resp || {};
-    generationPages.value = (Array.isArray(data.nodes) ? data.nodes : []).map((node, index) => ({
+    const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+
+    // 状态轮询既用于展示页面列表，也用于刷新/恢复 S3 编辑状态。
+    // 之前这里只更新 generationPages，导致后端已 done 但
+    // currentScriptNodes 仍为空，预览和“保存新版本”按钮都不会出现。
+    if (data.task_id) generationStore.setLastTaskId(data.task_id);
+    if (data.generation_id) generationStore.setLastGenId(data.generation_id);
+    if (['done', 'completed', 'success'].includes(data.status) && nodes.length) {
+      generationStore.setNodes(nodes);
+      generationStore.setScript(
+        nodes
+          .map((node) => node.script || node.content || node.summary || '')
+          .filter(Boolean)
+          .join('\n\n'),
+      );
+      generationStore.setGenerateProgress(100, '生成完成');
+      generationStore.setGenerating(false);
+      currentPhase.value = 'pages';
+      await generationStore.renderCoursewarePreview(
+        outlineStore.title || intentStore.intentSummary?.topic || '课件预览',
+        { genId: data.generation_id || generationStore.lastGenId, backfillNodes: true },
+      ).catch((previewError) => {
+        console.warn('[S3StudioPage] 已完成任务预览恢复失败', previewError);
+      });
+      bindEvidenceToWholeDraft();
+      projectStore.scheduleSave(draftSnapshot(), 0);
+    }
+
+    generationPages.value = nodes.map((node, index) => ({
       ...node,
       page_id: node.page_id || node.node_id || `page_${index + 1}`,
       page_order: Number(node.page_order || node.order || index + 1),
@@ -1231,7 +1521,8 @@ async function applyPresentationStyle() {
   generationStore.setNodes((generationStore.currentScriptNodes || []).map((node) => ({
     ...node,
     layout_hint: layoutMode.value === "visual" ? "text_with_media" : (layoutMode.value === "text" ? "text_only" : (node.layout_hint || "two_column")),
-    font_size_hint: density.value === "minimal" ? "large" : (density.value === "compact" ? "small" : "medium"),
+    // 字号提示跟着疏密走：宽松档留白多，字放大才不显得空；紧凑档反之。
+    font_size_hint: density.value === "loose" ? "large" : (density.value === "compact" ? "small" : "medium"),
     slide_background: palette.value === "klein-blue" ? "preset_blue" : "preset_green",
     metadata: { ...(node.metadata || {}), presentation },
   })));
@@ -1250,10 +1541,10 @@ async function handleStyleRequest({ instruction = '', presentation = {} } = {}) 
   if (style.palette) palette.value = style.palette;
   if (style.layout) layoutMode.value = style.layout;
   if (style.font_family) fontFamily.value = style.font_family;
-  if (style.density) density.value = style.density;
+  if (style.density) density.value = normalizeDensity(style.density);
   // 兼容旧 AI 响应：仅当结构化字段为空时才使用本地兜底映射。
   if (!Object.values(style).some(Boolean)) {
-    if (/商务|business|简洁/.test(text)) { templateId.value = 'deck-swiss-edu'; density.value = 'minimal'; }
+    if (/商务|business|简洁/.test(text)) { templateId.value = 'deck-swiss-edu'; density.value = 'loose'; }
     if (/蓝|blue/.test(text)) palette.value = 'klein-blue';
     if (/图|视觉|visual/.test(text)) layoutMode.value = 'visual';
     if (/文字|内容优先/.test(text)) layoutMode.value = 'text';
@@ -1434,6 +1725,7 @@ async function handleSaveNewVersion() {
       outline_version: outlineStore.outline_version,
       page_bindings: versionPageBindings(),
       presentation: draftSnapshot().presentation,
+      generation_instruction_set: draftSnapshot().generation_instruction_set,
     });
     const data = response?.data || response || {};
     if (data.generation_id) generationStore.setLastGenId(data.generation_id);
@@ -1450,11 +1742,13 @@ async function handleSaveNewVersion() {
         content: generationStore.currentScriptNodes,
         page_bindings: versionPageBindings(),
         style: draftSnapshot().presentation,
+        generation_instruction_set: draftSnapshot().generation_instruction_set,
       };
       const projectResponse = await projectModifyApi.createVersion(projectStore.projectId, {
         nodes: generationStore.currentScriptNodes,
         presentation: draftSnapshot().presentation,
         page_bindings: versionPageBindings(),
+        generation_instruction_set: draftSnapshot().generation_instruction_set,
         version_summary: summary,
         version_no: Math.max(baseVersion.value + 1, generationVersion || 1),
         snapshot,
@@ -1935,7 +2229,49 @@ function handleError(msg) {
 .node-actions {
   margin-top: 8px;
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
+}
+.node-edit-area {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: #f8fbf9;
+  border: 1px solid #d5e8e0;
+  border-radius: 10px;
+}
+.node-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.node-edit-label {
+  font-size: 12px;
+  color: #607a71;
+}
+.node-edit-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #c6ded6;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+}
+.node-edit-input:focus { border-color: #5ca68f; }
+.node-edit-hint {
+  font-size: 12px;
+  color: #90a39c;
+}
+.style-density-hint {
+  font-size: 12px;
+  color: #7b8f88;
+  line-height: 1.6;
+  margin: -4px 0 6px;
 }
 .content-modify-bar {
   display: flex;

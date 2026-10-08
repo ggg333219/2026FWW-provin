@@ -57,8 +57,8 @@ const route = useRoute()
 const materialStore = useMaterialStore()
 const intentStore = useIntentStore()
 const projectStore = useCoursewareProjectStore()
-intentStore.initialize()
 projectStore.setActive(String(route.query.project_id || projectStore.restoreActiveId() || ''))
+intentStore.initialize(projectStore.projectId)
 
 const materialDraft = () => ({
   ...(projectStore.draft || {}),

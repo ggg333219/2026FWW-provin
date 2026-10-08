@@ -299,6 +299,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useOutlineStore } from '../../stores/outlineStore'
 import OutlineRevisionDialog from './OutlineRevisionDialog.vue'
 
@@ -314,12 +315,16 @@ const props = defineProps({
   /** S1 意图自动检索形成的整份课件证据包 */
   evidencePacket: { type: Object, default: null },
   /** 等待父级完成自动检索后再创建大纲，避免先生成后补证据 */
-  ready: { type: Boolean, default: true }
+  ready: { type: Boolean, default: true },
+  presentation: { type: Object, default: () => ({}) },
+  generationMode: { type: String, default: 'full_pipeline' },
+  pageGenerationMode: { type: String, default: 'page_incremental' }
 })
 
 const emit = defineEmits(['confirm-complete', 'outline-created', 'error'])
 
 const outlineStore = useOutlineStore()
+const route = useRoute()
 
 const showReviseDialog = ref(false)
 const showReviseInput = ref(false)
@@ -345,7 +350,13 @@ if (props.autoRestore) {
 // 多标签页编辑或其他操作已经创建了新版本）。进入 S3 后先同步一次，
 // 避免第一次 AI 修订直接因为过期 base_version 返回 409。
 onMounted(async () => {
-  if (!outlineStore.outline_id) return
+  // 基于历史版本创建的新分支已经由 S3 页面恢复为本地 draft。
+  // 此时不能再次从后端读取原 outline，否则会把 draft 覆盖回 confirmed，
+  // 编辑器就会重新变成只读。
+  const isEditableFork = Boolean(
+    route.query.from_rollback_version || route.query.editable_outline || outlineStore.forked_from_version > 0,
+  )
+  if (!outlineStore.outline_id || isEditableFork) return
   try {
     await outlineStore.loadOutline(outlineStore.outline_id)
     outlineStore._persist()
@@ -402,6 +413,23 @@ async function handleGenerateOutline() {
       intent_id: props.intentId,
       intent: props.intentSummary || {},
       evidence_packet: evidence,
+      generation_instruction_set: {
+        schema_version: 1,
+        intent: props.intentSummary || {},
+        reference_materials: (evidence?.relevant_chunks || []).map((chunk) => ({
+          chunk_id: chunk.chunk_id,
+          source_ref: chunk.source_ref || chunk.source?.file_name || '',
+          page_ref: chunk.page_ref || chunk.source?.page || null
+        })),
+        confirmed_evidence: evidence,
+        output_requirements: {
+          formats: props.intentSummary?.output_format || ['ppt'],
+          with_interactive: Boolean(props.intentSummary?.with_interactive)
+        },
+        presentation: props.presentation || {},
+        generation_mode: props.generationMode || 'full_pipeline',
+        page_generation_mode: props.pageGenerationMode || 'page_incremental'
+      },
       markdown
     })
     emit('outline-created', {

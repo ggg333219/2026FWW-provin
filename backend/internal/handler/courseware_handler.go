@@ -361,10 +361,11 @@ func (h *CoursewareHandler) versionDetail(v *service.CoursewareVersion) gin.H {
 		_ = json.Unmarshal([]byte(v.BeforeSnapshotJSON), &beforeNodes)
 	}
 	publicSnapshot := service.ContractVersionSnapshot{
-		Outline:      map[string]interface{}{},
-		Content:      snapshot.Nodes,
-		PageBindings: snapshot.PageBindings,
-		Style:        snapshot.Presentation,
+		Outline:                  map[string]interface{}{},
+		Content:                  snapshot.Nodes,
+		PageBindings:             snapshot.PageBindings,
+		Style:                    snapshot.Presentation,
+		GenerationInstructionSet: snapshot.GenerationInstructionSet,
 	}
 	if v.SnapshotJSON != "" {
 		var canonical service.ContractVersionSnapshot
