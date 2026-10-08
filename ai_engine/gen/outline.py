@@ -35,7 +35,7 @@ class OutlineConfig:
     max_nodes: int = 20  # 节点上限
 
 
-_INTERACTIVE_ADD_WORDS = ("互动", "投票", "选择题", "测验", "问答", "练习", "讨论", "抢答")
+_INTERACTIVE_ADD_WORDS = ("互动", "选择题", "测验", "问答", "练习", "讨论", "翻卡", "闪卡")
 _ADD_WORDS = ("增加", "添加", "新增", "加入", "插入", "补充")
 
 
@@ -49,12 +49,8 @@ def _is_interactive_add_request(message: str) -> bool:
 
 def _interactive_kind(message: str) -> tuple[str, int, bool]:
     text = str(message or "")
-    if "投票" in text:
-        return "poll", 1, False
     if "闪卡" in text:
         return "flashcard", 0, False
-    if "游戏" in text or "抢答" in text:
-        return "game", 1, False
     return "quiz", 2, True
 
 
@@ -91,9 +87,7 @@ def _build_interactive_add_revision(nodes: list[dict[str, Any]], message: str) -
     kind, question_count, auto_grading = _interactive_kind(message)
     target = original[insert_at - 1] if insert_at > 0 and insert_at <= len(original) else None
     target_title = str((target or {}).get("title") or "").strip()
-    if "投票" in message:
-        title = "课堂投票互动"
-    elif "选择题" in message or "测验" in message:
+    if "选择题" in message or "测验" in message:
         title = "课堂选择题互动"
     elif "讨论" in message:
         title = "课堂讨论互动"

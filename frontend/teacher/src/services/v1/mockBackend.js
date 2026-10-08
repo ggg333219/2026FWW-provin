@@ -2471,7 +2471,7 @@ function parseIntentFromMessages(messages = []) {
   const interactiveContract = teacherText.match(/互动设计[:：]\s*(需要|不需要|是|否)/)
   summary.with_interactive = interactiveContract
     ? /需要|是/.test(interactiveContract[1])
-    : /互动|测验|投票|讨论/.test(teacherText)
+    : /互动|测验|翻卡|闪卡/.test(teacherText)
   const diff = teacherText.match(/难点[:：]\s*([^\n]+)/)
   if (diff) summary.key_difficulties = diff[1].split(/[、，,；;]/).map((k) => k.trim()).filter(Boolean).slice(0, 5)
   const out = teacherText.match(/成果[:：]\s*([^\n]+)/)

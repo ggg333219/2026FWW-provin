@@ -8,7 +8,7 @@ import { requestJson } from './request'
  */
 
 /** 互动规划数据结构（InteractivePlan） */
-export const InteractiveKinds = ['quiz', 'flashcard', 'poll', 'game']
+export const InteractiveKinds = ['quiz', 'flashcard']
 export const InteractiveDeliveries = ['html5_link', 'ppt_native', 'standalone_html']
 const INTERACTIVE_GENERATE_TIMEOUT_MS = 60000
 

@@ -186,8 +186,6 @@
                     >
                       <option value="quiz">课堂测验</option>
                       <option value="flashcard">知识翻卡</option>
-                      <option value="poll">课堂投票</option>
-                      <option value="game">抢答游戏</option>
                     </select>
                   </label>
                   <label>

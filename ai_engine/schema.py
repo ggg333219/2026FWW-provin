@@ -67,7 +67,7 @@ def build_stage2_node_tree_schema() -> dict[str, Any]:
                                 "additionalProperties": False,
                                 "properties": {
                                     "enabled": {"type": "boolean"},
-                                    "kind": {"type": "string", "enum": ["quiz", "flashcard", "poll", "game"]},
+                                    "kind": {"type": "string", "enum": ["quiz", "flashcard"]},
                                     "duration_minutes": {"type": "number"},
                                     "question_count": {"type": "integer"},
                                     "auto_grading": {"type": "boolean"},
@@ -820,7 +820,7 @@ def _normalize_interactive_plan(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     kind = str(value.get("kind") or "quiz").strip().lower()
-    if kind not in {"quiz", "flashcard", "poll", "game"}:
+    if kind not in {"quiz", "flashcard"}:
         kind = "quiz"
     delivery = str(value.get("delivery") or "html5_link").strip().lower()
     if delivery not in {"html5_link", "ppt_native", "standalone_html"}:

@@ -1279,7 +1279,7 @@ async def export_doc_bytes(req: ExportPPTRequest):
 
 @app.post("/gen/interactive")
 async def generate_interactive(req: InteractiveRequest):
-    """[S3] 生成互动内容（测验/闪卡/投票）"""
+    """[S3] 生成互动内容（测验/知识翻卡）"""
     builder = InteractiveBuilder()
     try:
         return {"items": await asyncio.to_thread(builder.build_all, req.node)}

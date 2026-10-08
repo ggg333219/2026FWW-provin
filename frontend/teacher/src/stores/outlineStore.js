@@ -270,7 +270,7 @@ export const useOutlineStore = defineStore('outline', {
     ensureInteractivePlan(nodeId, kind = 'quiz') {
       const node = this.nodes.find((item) => item.node_id === nodeId)
       if (!node) return null
-      const normalizedKind = ['quiz', 'flashcard', 'poll', 'game'].includes(kind) ? kind : 'quiz'
+      const normalizedKind = ['quiz', 'flashcard'].includes(kind) ? kind : 'quiz'
       node.interactive_plan = {
         ...node.interactive_plan,
         enabled: true,

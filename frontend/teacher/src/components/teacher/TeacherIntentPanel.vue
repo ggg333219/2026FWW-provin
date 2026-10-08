@@ -167,7 +167,7 @@
         <label class="interaction-toggle">
           <input v-model="editForm.with_interactive" type="checkbox" />
           <span class="toggle-track"><i></i></span>
-          <span><b>加入互动设计</b><small>课堂游戏、投票、讨论或随堂测验</small></span>
+          <span><b>加入互动设计</b><small>课堂测验或知识翻卡</small></span>
         </label>
         <p v-if="editError" class="editor-error">{{ editError }}</p>
         <div class="editor-actions">

@@ -204,7 +204,7 @@ class IntentSummary(BaseModel):
     """期望输出格式（"ppt"/"doc"/"both"/"interactive"）"""
 
     with_interactive: bool = False
-    """是否需要互动环节（测验/投票/讨论）"""
+    """是否需要互动环节（测验/知识翻卡）"""
 
     key_difficulties: list[str] = Field(default_factory=list)
     """重点/难点"""

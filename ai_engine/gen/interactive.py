@@ -95,17 +95,10 @@ class InteractiveBuilder:
         kind = str(plan.get("kind") or "").strip().lower()
         if kind == "flashcard":
             items.extend(self.build_flashcards(node))
-        elif kind == "poll":
-            vote = self.build_vote(node)
-            if vote:
-                items.append(vote)
         else:
             items.extend(self.build_quiz(node, mode=mode))
-            if kind in {"", "game"}:
+            if kind == "":
                 items.extend(self.build_flashcards(node))
-                vote = self.build_vote(node)
-                if vote:
-                    items.append(vote)
         return items
 
     def _fallback_quiz(self, title: str, content: str) -> list[dict[str, Any]]:

@@ -543,7 +543,7 @@ const (
 // OutlineInteractivePlan —— 大纲节点的互动规划（规范 §2.2）。仅声明规划，不承载题目。
 type OutlineInteractivePlan struct {
 	Enabled       bool   `json:"enabled"`
-	Kind          string `json:"kind"` // quiz | flashcard | poll | game
+	Kind          string `json:"kind"` // quiz | flashcard
 	DurationMin   int    `json:"duration_minutes"`
 	QuestionCount int    `json:"question_count,omitempty"`
 	AutoGrading   bool   `json:"auto_grading,omitempty"`

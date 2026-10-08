@@ -138,7 +138,7 @@ def detect_interactive(text: str) -> bool:
             return False
         if re.search(r"需要|开启|要|是", value):
             return True
-    return bool(re.search(r"互动|练习|测验|小测|讨论|问答|游戏|投票|抢答|动画演示|角色扮演", text))
+    return bool(re.search(r"互动|练习|测验|小测|讨论|问答|翻卡|闪卡|动画演示|角色扮演", text))
 
 
 def extract_output_formats(text: str) -> list[str]:

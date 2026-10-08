@@ -292,10 +292,11 @@ class TestInteractiveBuilder(unittest.TestCase):
         cards = self.builder.build_flashcards(node)
         self.assertGreater(len(cards), 0)
 
-    def test_build_vote(self):
-        node = {"title": "你对AI的理解是"}
-        vote = self.builder.build_vote(node)
-        self.assertIsNotNone(vote)
+    def test_build_all_does_not_emit_vote_or_game(self):
+        node = {"title": "排序算法", "interactive_plan": {"kind": "quiz"}}
+        items = self.builder.build_all(node, mode="mock")
+        self.assertTrue(items)
+        self.assertNotIn("vote", {item.get("type") for item in items})
 
 
 # ── 套件 9: 集成测试 — 全链路 ──
