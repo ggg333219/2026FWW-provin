@@ -431,6 +431,9 @@ function formatTime(iso) {
 <style scoped>
 .s4-page {
   padding: 20px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   min-height: calc(100vh - 140px);
   background:
     radial-gradient(circle at 86% -15%, rgba(175, 221, 203, .2), transparent 30%),
@@ -481,7 +484,7 @@ function formatTime(iso) {
 /* 三栏布局 */
 .s4-layout {
   display: grid;
-  grid-template-columns: minmax(220px, .9fr) minmax(340px, 1.35fr) minmax(280px, 1fr);
+  grid-template-columns: minmax(180px, .8fr) minmax(0, 1.25fr) minmax(240px, .9fr);
   gap: 16px;
   margin-bottom: 20px;
   align-items: start;
@@ -514,10 +517,10 @@ function formatTime(iso) {
 
 /* 操作面板 */
 .action-group { display: flex; flex-direction: column; gap: 10px; }
-.action-row { display: flex; gap: 8px; align-items: center; }
+.action-row { display: flex; gap: 8px; align-items: center; min-width: 0; flex-wrap: wrap; }
 .action-row label { font-size: 13px; color: #607a71; min-width: 80px; }
-.action-select { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; background: #fff; flex: 1; }
-.action-input { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; flex: 2; }
+.action-select { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; background: #fff; flex: 1 1 160px; min-width: 0; max-width: 100%; }
+.action-input { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; flex: 2 1 180px; min-width: 0; max-width: 100%; }
 .action-divider { height: 1px; background: #e2e8f0; margin: 6px 0; }
 
 /* 修改指令迷你列表 */
