@@ -575,6 +575,7 @@ import { useIntentStore } from "../stores/intentStore";
 import { useMaterialStore, isEvidencePacketUsable } from "../stores/materialStore";
 import { useModifyStore } from "../stores/modifyStore";
 import { useCoursewareProjectStore } from "../stores/coursewareProjectStore";
+import { resolveSavedProjectVersion } from "../utils/coursewareVersion";
 import { teacherV1Api } from "../services/v1";
 import { projectModifyApi } from "../services/v1/projectModifyApi";
 import { API_BASE, AI_API_BASE } from "../config/api";
@@ -1386,12 +1387,12 @@ async function handleSaveNewVersion() {
         page_bindings: versionPageBindings(),
         generation_instruction_set: draftSnapshot().generation_instruction_set,
         version_summary: summary,
-        version_no: Math.max(baseVersion.value + 1, generationVersion || 1),
+        version_no: Math.max(baseVersion.value + 1, 1),
         snapshot,
         change_note: summary,
       });
       const projectVersion = projectResponse?.data || projectResponse || {};
-      if (!savedVersion) savedVersion = Number(projectVersion.version_no || 0);
+      savedVersion = resolveSavedProjectVersion(projectVersion, generationVersion);
     }
     lastSavedVersion.value = savedVersion;
     if (savedVersion > 0) baseVersion.value = savedVersion;

@@ -12,10 +12,6 @@
           <span class="fmt-label">PPTX 演示文稿</span>
         </label>
         <label>
-          <input v-model="selectedFormat" type="radio" value="docx" :disabled="exportIsActive" />
-          <span class="fmt-label">DOCX 教案文档</span>
-        </label>
-        <label>
           <input v-model="selectedFormat" type="radio" value="both" :disabled="exportIsActive" />
           <span class="fmt-label">同时导出</span>
         </label>
@@ -44,9 +40,10 @@
         :disabled="!genId || skillPreviewLoading"
         @click="handleSkillPreview"
       >
-        {{ skillPreviewLoading ? '生成中...' : 'HTML 课件预览' }}
+        {{ skillPreviewLoading ? '生成中...' : '互动课件预览' }}
       </button>
-      <p v-if="!genId" class="preview-hint">请先加载版本后再使用 HTML 预览</p>
+      <p v-if="previewError" class="error-msg">{{ previewError }}</p>
+      <p v-if="!genId" class="preview-hint">请先加载版本后再使用互动预览</p>
 
       <!-- 状态与进度 -->
       <div v-if="exportStatus !== 'idle'" class="export-status">
@@ -121,7 +118,7 @@ const props = defineProps({
   exportError: { type: String, default: '' },
   exportQualityReport: { type: Object, default: null },
   loading: { type: Boolean, default: false },
-  /** 教学意图对象（传给 deck-skill 生成 HTML 课件） */
+  /** 教学意图对象 */
   intent: { type: Object, default: () => ({}) },
   /** 当前版本节点树，直接渲染为幻灯片（跳过 LLM） */
   nodes: { type: Array, default: () => [] }
@@ -131,39 +128,41 @@ const props = defineProps({
 
 defineEmits(['start-export', 'reset-export', 'skill-preview'])
 
-const selectedFormat = ref(props.exportFormat || 'pptx')
+const selectedFormat = ref(props.exportFormat === 'docx' ? 'lesson_plan' : (props.exportFormat || 'pptx'))
 const skillPreviewLoading = ref(false)
 const downloadError = ref('')
+const previewError = ref('')
+
+watch(() => props.exportFormat, (format) => {
+  selectedFormat.value = format === 'docx' ? 'lesson_plan' : (format || 'pptx')
+})
 
 async function handleSkillPreview() {
   if (!props.genId) return
-  // intent 为空时用最小结构
-  const intent = props.intent?.title
-    ? props.intent
-    : { title: '课件预览', description: '智能互动课件', key_points: [] }
+  previewError.value = ''
+  const previewWindow = window.open('about:blank', '_blank')
+  if (!previewWindow) {
+    previewError.value = '浏览器拦截了预览窗口，请允许弹出窗口后重试'
+    return
+  }
   skillPreviewLoading.value = true
   try {
     const { teacherGenerationApi: api } = await import('../../services/v1/generationApi')
-    // 有节点树时直接渲染真实内容，无节点时走 LLM 生成
-    const data = await api.skillDeckPreview({
-      intent,
-      nodes: props.nodes?.length ? props.nodes : null
+    const data = await api.interactivePreview({
+      course_name: props.courseTitle,
+      nodes: props.nodes,
     })
-    // html_url 可能是相对路径 /previews/xxx 或绝对 URL
-    let url = data?.html_url || ''
-    if (url.startsWith('/')) {
-      url = 'http://localhost:8000' + url
-    } else if (data?.html_path && !url) {
-      const filename = data.html_path.replace(/^.*[\\/]/, '')
-      url = `http://localhost:8000/previews/${filename}`
-    }
-    if (url) {
-      window.open(url, '_blank', 'noopener')
-    } else {
-      console.warn('[S4VersionExportCenter] 预览无返回', data)
-    }
+    const objectUrl = URL.createObjectURL(new Blob([data.html], { type: 'text/html;charset=utf-8' }))
+    previewWindow.location.href = objectUrl
+    const releaseWhenClosed = window.setInterval(() => {
+      if (previewWindow.closed) {
+        window.clearInterval(releaseWhenClosed)
+        URL.revokeObjectURL(objectUrl)
+      }
+    }, 1000)
   } catch (err) {
-    console.error('[S4VersionExportCenter] HTML 预览失败', err)
+    previewWindow.close()
+    previewError.value = err?.message || '互动课件预览失败'
   } finally {
     skillPreviewLoading.value = false
   }

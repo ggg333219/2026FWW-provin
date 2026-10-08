@@ -50,7 +50,7 @@ _TYPE_ALIASES = {
     "agenda": "agenda", "toc": "agenda", "directory": "agenda", "目录": "agenda",
     "section": "section", "divider": "section", "chapter": "section",
     "summary": "summary", "conclusion": "summary", "recap": "summary",
-    "quiz": "quiz", "interactive": "quiz", "question": "quiz",
+    "quiz": "quiz", "interactive": "interactive", "question": "quiz",
     "two_column": "two_column", "content": "content", "slide": "content",
     "opening": "content", "explain": "content", "explanation": "content",
     "transition": "content",
@@ -261,7 +261,8 @@ class PPTExporter:
         return {
             "cover": self._add_cover_slide, "agenda": self._add_agenda_slide,
             "section": self._add_section_slide, "summary": self._add_summary_slide,
-            "quiz": self._add_quiz_slide, "two_column": self._add_two_column_slide,
+            "quiz": self._add_quiz_slide, "interactive": self._add_interactive_slide,
+            "two_column": self._add_two_column_slide,
             "content": self._add_content_slide,
         }.get(node_type, self._add_content_slide)
 
@@ -858,6 +859,39 @@ class PPTExporter:
                     y += 2.45
                 else:
                     y += 1.02
+
+    def _add_interactive_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
+        from .export_html5 import extract_front_back, extract_interactive_items
+
+        flashcards = [item for item in extract_interactive_items([node]) if item.get("type") == "flashcard"]
+        if not flashcards:
+            labeled = extract_front_back(node.get("content"))
+            if labeled:
+                flashcards = [{"front": labeled[0], "back": labeled[1]}]
+        if not flashcards:
+            self._add_quiz_slide(prs, node, index)
+            return
+
+        for item in flashcards:
+            slide = self._blank_slide(prs, index)
+            self._add_page_title(slide, str(node.get("title") or "知识翻卡"), index)
+            x, width = 0.85, 11.65
+            self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, 1.65, width, 2.1,
+                            self._theme.background, self._theme.muted)
+            self._add_textbox(slide, "问题", x + 0.28, 1.88, width - 0.56, 0.38,
+                              font_size=16, color=self._theme.primary, bold=True)
+            front = str(item.get("front") or "")
+            self._add_textbox(slide, front, x + 0.28, 2.35, width - 0.56, 1.15,
+                              font_size=self._fit_font(front, 16, 24, 45),
+                              color=self._theme.text, bold=True, valign=MSO_ANCHOR.MIDDLE)
+            self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, 4.0, width, 2.1,
+                            self._theme.surface, self._theme.muted)
+            self._add_textbox(slide, "答案", x + 0.28, 4.22, width - 0.56, 0.38,
+                              font_size=16, color=self._theme.primary, bold=True)
+            back = str(item.get("back") or "")
+            self._add_textbox(slide, back, x + 0.28, 4.65, width - 0.56, 1.15,
+                              font_size=self._fit_font(back, 15, 21, 50),
+                              color=self._theme.text, valign=MSO_ANCHOR.MIDDLE)
 
     _QUIZ_PLAIN_PER_PAGE = 5
 

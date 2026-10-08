@@ -108,6 +108,18 @@ export const teacherGenerationApi = {
       }),
     }),
 
+  /** Render the same playable HTML5 artifact used by S4 interactive export. */
+  interactivePreview: ({ nodes, course_name } = {}) =>
+    fetch(`${AI_API_BASE}/api/v1/gen/interactive-preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nodes: nodes || [], course_name: course_name || "课件" }),
+    }).then(async (response) => {
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || `预览失败 (${response.status})`);
+      return body;
+    }),
+
   /** 生成 HTML 课件预览（deck-skill，直连 AI Engine） */
   skillDeckPreview: (params = {}) => {
     const {

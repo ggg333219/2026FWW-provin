@@ -148,6 +148,24 @@ class TestPPTExporter(unittest.TestCase):
         self.assertIn("课堂互动", slide_text)
         self.assertIn("哪个字段优先？", slide_text)
 
+    def test_interactive_node_exports_explicit_front_and_back(self):
+        nodes = [{
+            "node_id": "flip_1",
+            "type": "interactive",
+            "node_type": "interactive",
+            "title": "定积分知识翻卡",
+            "content": "正面：定积分的几何意义是什么？\n背面：曲边梯形面积的代数和。",
+        }]
+
+        prs = Presentation(self.ppt.export_to_bytes(nodes, "定积分知识翻卡"))
+        text = "\n".join(
+            shape.text for slide in prs.slides for shape in slide.shapes if hasattr(shape, "text")
+        )
+
+        self.assertIn("定积分的几何意义是什么？", text)
+        self.assertIn("曲边梯形面积的代数和。", text)
+        self.assertNotIn("请结合本节内容提出一个关键问题。", text)
+
     def test_key_points_and_core_points_are_both_exported(self):
         """新旧要点字段同时存在时合并导出，不再产生空白要点页。"""
         nodes = [{

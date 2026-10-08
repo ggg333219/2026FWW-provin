@@ -168,3 +168,39 @@ def test_preview_and_html5_export_share_interactive_content():
     export_html = render_interactive_html(extract_interactive_items([node]), "快速排序")
     assert "快速排序的核心操作是什么？" in preview_html
     assert "快速排序的核心操作是什么？" in export_html
+
+
+def test_interactive_front_and_back_labels_become_flipcard_content():
+    from ai_engine.gen.export_html5 import extract_interactive_items
+
+    node = {
+        "node_id": "interactive_front_back",
+        "node_type": "interactive",
+        "title": "定积分知识翻卡",
+        "content": "正面：定积分的几何意义是什么？\n背面：曲边梯形面积的代数和。",
+    }
+
+    assert extract_interactive_items([node]) == [{
+        "type": "flashcard",
+        "front": "定积分的几何意义是什么？",
+        "back": "曲边梯形面积的代数和。",
+        "tags": [],
+    }]
+
+
+def test_interactive_preview_uses_playable_renderer():
+    from ai_engine.gen.export_html5 import extract_interactive_items, render_interactive_html
+
+    node = {
+        "node_id": "interactive_preview",
+        "node_type": "interactive",
+        "title": "定积分知识翻卡",
+        "content": "正面：定积分的几何意义是什么？\n背面：曲边梯形面积的代数和。",
+    }
+    html = render_interactive_html(
+        extract_interactive_items([node]), course_name="定积分知识翻卡",
+    )
+
+    assert "定积分的几何意义是什么？" in html
+    assert "曲边梯形面积的代数和。" in html
+    assert "flip-card" in html
