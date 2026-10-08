@@ -111,7 +111,7 @@
       <!-- ==================== 大纲阶段 ==================== -->
       <EvidenceSidebar
         :packet="evidencePacket"
-        :nodes="generationStore.currentScriptNodes.length ? generationStore.currentScriptNodes : outlineStore.nodes"
+        :nodes="bindableNodes"
         :searching="materialStore.searching"
         :default-query="intentStore.intentSummary?.topic || ''"
         :selected-evidence-ids="selectedEvidenceIds"
@@ -504,6 +504,52 @@
           </div>
         </div>
 
+        <!-- 课件首尾页（封面 / 目录 / 小结）：大纲里没有这三页，教师之前无从下手 -->
+        <div class="deck-structure-editor">
+          <h4>课件首尾页</h4>
+          <p class="deck-structure-hint">
+            封面、目录、小结这三页默认由系统按大纲补出来，不进大纲，所以在别处改不了。
+            在这里改过之后就固定成你写的内容，预览和导出的 PPTX 读的是同一份。
+          </p>
+          <div v-for="page in structurePages" :key="page.kind" class="structure-page-card">
+            <div class="structure-page-head">
+              <span class="structure-page-label">{{ page.label }}</span>
+              <span class="structure-page-state" :class="{ taken: page.takenOver }">{{
+                page.takenOver ? "已接管" : "系统默认"
+              }}</span>
+            </div>
+            <label class="structure-field"
+              >标题
+              <input v-model="page.draft.title" :placeholder="page.label + '标题'" />
+            </label>
+            <label class="structure-field"
+              >{{ page.kind === "cover" ? "副标题" : "引导语" }}
+              <input v-model="page.draft.content" placeholder="显示在标题下方的一句话" />
+            </label>
+            <label v-if="page.kind !== 'cover'" class="structure-field"
+              >{{ page.kind === "agenda" ? "目录条目" : "小结要点" }}（一行一条）
+              <textarea v-model="page.draft.key_points_text" rows="3"></textarea>
+            </label>
+            <div class="structure-page-actions">
+              <button
+                class="btn btn-sm btn-primary"
+                :disabled="savingStructureKind === page.kind"
+                @click="saveStructurePage(page)"
+              >
+                {{ savingStructureKind === page.kind ? "保存中…" : "保存并刷新预览" }}
+              </button>
+              <button
+                v-if="page.takenOver"
+                class="btn btn-sm"
+                :disabled="savingStructureKind === page.kind"
+                @click="resetStructurePage(page)"
+              >
+                恢复系统默认
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- 页面列表 -->
         <div v-if="generationPages.length > 0" class="pages-list">
           <div
@@ -718,6 +764,192 @@ const outlineReady = ref(false);
 const evidenceBootstrapState = ref("idle");
 const evidenceBootstrapError = ref("");
 const requiresAutomaticEvidence = computed(() => String(route.query.auto_evidence || "") === "1");
+
+/**
+ * 课件首尾页（封面 / 目录 / 小结）。
+ *
+ * 这三页默认由引擎在装配层按大纲补齐（ai_engine/gen/deck_structure.py），
+ * 大纲节点树里根本没有它们 —— 这就是「封面内容总结似乎改不了」的根因：
+ * 不是按钮坏了，是教师压根没有下手的地方。
+ *
+ * 教师在这里改过之后，该页以 __auto_ 前缀写进节点树：引擎认得这个前缀，
+ * 不会再重复注入一份（出现两个封面/两个目录），同时保留结构页的版面待遇。
+ * 预览与导出读的是同一棵树，所以改完两处同时生效。
+ */
+const STRUCTURE_PAGE_DEFS = [
+  { kind: "cover", node_id: "__auto_cover__", label: "封面页" },
+  { kind: "agenda", node_id: "__auto_toc__", label: "目录页" },
+  { kind: "summary", node_id: "__auto_summary__", label: "小结页" },
+];
+
+const structureDrafts = ref({});
+const savingStructureKind = ref("");
+
+function structureNodeOf(kind) {
+  const def = STRUCTURE_PAGE_DEFS.find((item) => item.kind === kind);
+  if (!def) return null;
+  return (
+    (generationStore.currentScriptNodes || []).find(
+      (node) => node?.node_id === def.node_id,
+    ) || null
+  );
+}
+
+/** 与 deck_structure.expand_deck_pages 同口径的默认值：教师接管前，界面上显示的就是它。 */
+function defaultStructureDraft(kind) {
+  const nodes = generationStore.currentScriptNodes || [];
+  const contentNodes = nodes.filter(
+    (node) => !String(node?.node_id || "").startsWith("__auto_"),
+  );
+  const courseName = outlineStore.title || intentStore.intentSummary?.topic || "课件";
+  if (kind === "cover") {
+    return { title: courseName, content: "AI 智能生成课件", key_points_text: "" };
+  }
+  if (kind === "agenda") {
+    const titles = contentNodes.map((node, i) => node?.title || `第 ${i + 1} 页`);
+    return {
+      title: "目录",
+      content: `本次课程共 ${contentNodes.length} 个环节`,
+      key_points_text: titles.join("\n"),
+    };
+  }
+  const points = contentNodes
+    .map((node) => (node?.key_points || [])[0] || node?.title || "")
+    .filter(Boolean)
+    .slice(0, 5);
+  return {
+    title: "本节小结",
+    content: "回顾本次课程的核心要点",
+    key_points_text: (points.length ? points : ["本节要点"]).join("\n"),
+  };
+}
+
+function nodeToStructureDraft(node) {
+  const keyPoints = Array.isArray(node?.key_points) ? node.key_points : [];
+  return {
+    title: node?.title || "",
+    content: node?.content || node?.summary || "",
+    key_points_text: keyPoints.join("\n"),
+  };
+}
+
+/**
+ * 草稿同步：没接管时跟随系统默认（大纲变了，默认目录也跟着变）；
+ * 接管后锁住，否则教师在输入框里打字会被默认值冲掉。
+ */
+function syncStructureDrafts() {
+  for (const def of STRUCTURE_PAGE_DEFS) {
+    if (structureDrafts.value[def.kind]?.takenOver) continue;
+    const node = structureNodeOf(def.kind);
+    structureDrafts.value[def.kind] = {
+      ...(node ? nodeToStructureDraft(node) : defaultStructureDraft(def.kind)),
+      takenOver: Boolean(node),
+    };
+  }
+}
+
+const structurePages = computed(() =>
+  STRUCTURE_PAGE_DEFS.map((def) => ({
+    ...def,
+    takenOver: Boolean(structureNodeOf(def.kind)),
+    draft: structureDrafts.value[def.kind] || defaultStructureDraft(def.kind),
+  })),
+);
+
+watch(
+  () => [generationStore.currentScriptNodes, outlineStore.title],
+  syncStructureDrafts,
+  { immediate: true, deep: true },
+);
+
+/**
+ * 参与证据绑定的节点：去掉封面 / 目录 / 小结这些合成页。
+ * 把资料挂到封面上没有意义，下拉里多三个选项只会让老师犹豫选哪个。
+ */
+const bindableNodes = computed(() => {
+  const source = generationStore.currentScriptNodes.length
+    ? generationStore.currentScriptNodes
+    : outlineStore.nodes || [];
+  const filtered = source.filter(
+    (node) => !String(node?.node_id || "").startsWith("__auto_"),
+  );
+  return filtered.length ? filtered : source;
+});
+
+async function refreshPreviewAfterStructureEdit() {
+  if (!generationStore.currentScriptNodes?.length) return;
+  await generationStore.renderCoursewarePreview(
+    outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
+    { genId: "" },
+  );
+}
+
+/** 保存首尾页：写入节点树 → 刷新预览 → 落草稿。 */
+async function saveStructurePage(page) {
+  if (!page) return;
+  savingStructureKind.value = page.kind;
+  try {
+    const keyPoints = String(page.draft.key_points_text || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const patch = {
+      node_id: page.node_id,
+      node_type: page.kind,
+      title: page.draft.title || "",
+      content: page.draft.content || "",
+      summary: page.draft.content || "",
+      key_points: keyPoints,
+    };
+    const current = [...(generationStore.currentScriptNodes || [])];
+    const idx = current.findIndex((node) => node?.node_id === page.node_id);
+    let next = current;
+    if (idx >= 0) {
+      next = current.map((node, i) => (i === idx ? { ...node, ...patch } : node));
+    } else if (page.kind === "cover") {
+      next = [patch, ...current];
+    } else if (page.kind === "agenda") {
+      const coverIdx = current.findIndex(
+        (node) => String(node?.node_type || node?.type || "").toLowerCase() === "cover",
+      );
+      next = [...current];
+      next.splice(coverIdx >= 0 ? coverIdx + 1 : 0, 0, patch);
+    } else {
+      next = [...current, patch];
+    }
+    generationStore.setNodes(next);
+    structureDrafts.value[page.kind] = { ...page.draft, takenOver: true };
+    await refreshPreviewAfterStructureEdit();
+    await projectStore.saveNow(draftSnapshot());
+  } catch (err) {
+    handleError("保存首尾页失败: " + (err?.message || ""));
+  } finally {
+    savingStructureKind.value = "";
+  }
+}
+
+/** 恢复系统默认：从节点树里摘掉，装配层会按大纲重新补一页。 */
+async function resetStructurePage(page) {
+  if (!page) return;
+  savingStructureKind.value = page.kind;
+  try {
+    generationStore.setNodes(
+      (generationStore.currentScriptNodes || []).filter(
+        (node) => node?.node_id !== page.node_id,
+      ),
+    );
+    structureDrafts.value[page.kind] = {
+      ...defaultStructureDraft(page.kind),
+      takenOver: false,
+    };
+    await refreshPreviewAfterStructureEdit();
+    await projectStore.saveNow(draftSnapshot());
+  } catch (err) {
+    handleError("恢复默认失败: " + (err?.message || ""));
+  } finally {
+    savingStructureKind.value = "";
+  }
+}
 
 const asyncActivity = computed(() => {
   if (modifyStore.modifying) {
@@ -2330,6 +2562,79 @@ function handleError(msg) {
 .pages-info {
   font-size: 13px;
   color: #475569;
+}
+.deck-structure-editor {
+  margin: 12px 0 16px;
+  padding: 12px 14px;
+  background: #f8fbf9;
+  border: 1px solid #e4ede8;
+  border-radius: 12px;
+}
+.deck-structure-editor h4 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: #1f2937;
+}
+.deck-structure-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #64748b;
+}
+.structure-page-card {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: #fff;
+  border: 1.5px solid #e2ece6;
+  border-radius: 10px;
+}
+.structure-page-card:last-child {
+  margin-bottom: 0;
+}
+.structure-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.structure-page-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+}
+.structure-page-state {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eef2f6;
+  color: #64748b;
+}
+.structure-page-state.taken {
+  background: #e3f4ea;
+  color: #1a7f47;
+}
+.structure-field {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #475569;
+}
+.structure-field input,
+.structure-field textarea {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  font-size: 13px;
+  color: #1f2937;
+  background: #fff;
+  border: 1px solid #d7e2dc;
+  border-radius: 8px;
+  resize: vertical;
+}
+.structure-page-actions {
+  display: flex;
+  gap: 8px;
 }
 .pages-list {
   display: flex;
