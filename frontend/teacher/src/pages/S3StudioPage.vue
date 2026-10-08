@@ -1532,21 +1532,7 @@ async function handleSaveNewVersion() {
   try {
     await projectStore.saveNow(draftSnapshot());
     const summary = `教师保存：${new Date().toLocaleString()}`;
-    const response = await teacherV1Api.generation.finalize({
-      generation_id: generationStore.lastGenId,
-      nodes: generationStore.currentScriptNodes,
-      course_name: outlineStore.title || intentStore.intentSummary?.topic || "未命名课件",
-      summary,
-      outline_id: outlineStore.outline_id,
-      outline_version: outlineStore.outline_version,
-      page_bindings: versionPageBindings(),
-      presentation: draftSnapshot().presentation,
-      generation_instruction_set: draftSnapshot().generation_instruction_set,
-    });
-    const data = response?.data || response || {};
-    if (data.generation_id) generationStore.setLastGenId(data.generation_id);
-    const generationVersion = Number(data.version_number || 0);
-    let savedVersion = generationVersion;
+    let savedVersion = 0;
     if (projectStore.projectId) {
       const snapshot = {
         outline: {
@@ -1566,13 +1552,37 @@ async function handleSaveNewVersion() {
         page_bindings: versionPageBindings(),
         generation_instruction_set: draftSnapshot().generation_instruction_set,
         version_summary: summary,
-        version_no: Math.max(baseVersion.value + 1, generationVersion || 1),
+        version_no: Math.max(baseVersion.value + 1, 1),
         snapshot,
         change_note: summary,
       });
       const projectVersion = projectResponse?.data || projectResponse || {};
-      savedVersion = resolveSavedProjectVersion(projectVersion, savedVersion);
+      savedVersion = resolveSavedProjectVersion(projectVersion, 0);
     }
+
+    // AI Engine finalize is a secondary snapshot; the project version above is
+    // already durable before this slower request starts.
+    let response = null;
+    try {
+      response = await teacherV1Api.generation.finalize({
+      generation_id: generationStore.lastGenId,
+      nodes: generationStore.currentScriptNodes,
+      course_name: outlineStore.title || intentStore.intentSummary?.topic || "未命名课件",
+      summary,
+      outline_id: outlineStore.outline_id,
+      outline_version: outlineStore.outline_version,
+      page_bindings: versionPageBindings(),
+      presentation: draftSnapshot().presentation,
+      generation_instruction_set: draftSnapshot().generation_instruction_set,
+      });
+    } catch (finalizeError) {
+      // 项目版本已经先保存；AI Engine 快照失败不应撤销可刷新的项目版本。
+      console.warn('[S3StudioPage] AI Engine finalize failed after project version save', finalizeError);
+    }
+    const data = response?.data || response || {};
+    if (data.generation_id) generationStore.setLastGenId(data.generation_id);
+    const generationVersion = Number(data.version_number || 0);
+    if (!savedVersion) savedVersion = generationVersion;
     lastSavedVersion.value = savedVersion;
     if (savedVersion > 0) baseVersion.value = savedVersion;
     saveVersionState.value = "saved";

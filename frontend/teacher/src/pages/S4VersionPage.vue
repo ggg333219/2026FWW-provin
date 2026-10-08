@@ -479,7 +479,14 @@ function formatTime(iso) {
 .btn-icon:hover { background: #f1f5f9; }
 
 /* 三栏布局 */
-.s4-layout { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.s4-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, .9fr) minmax(340px, 1.35fr) minmax(280px, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+  align-items: start;
+}
+.s4-layout > section { min-width: 0; }
 @media (max-width: 1200px) {
   .s4-layout { grid-template-columns: 1fr; }
 }
