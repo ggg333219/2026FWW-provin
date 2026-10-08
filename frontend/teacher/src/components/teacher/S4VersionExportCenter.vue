@@ -40,6 +40,15 @@
 
       <!-- HTML 课件预览 -->
       <!-- 状态与进度 -->
+      <button
+        class="btn btn-secondary"
+        :disabled="!genId || interactivePreviewLoading"
+        @click="handleInteractivePreview"
+      >
+        {{ interactivePreviewLoading ? '正在打开预览…' : '预览互动课件' }}
+      </button>
+      <p v-if="interactivePreviewError" class="error-msg">{{ interactivePreviewError }}</p>
+
       <div v-if="exportStatus !== 'idle'" class="export-status">
         <div class="status-row">
           <span class="status-label">状态:</span>
@@ -112,6 +121,7 @@ const props = defineProps({
   exportError: { type: String, default: '' },
   exportQualityReport: { type: Object, default: null },
   loading: { type: Boolean, default: false },
+  nodes: { type: Array, default: () => [] },
   courseTitle: { type: String, default: '未命名课件' }
   ,versionLabel: { type: String, default: 'v1' }
 })
@@ -120,6 +130,39 @@ defineEmits(['start-export', 'reset-export'])
 
 const selectedFormat = ref(props.exportFormat || 'pptx')
 const downloadError = ref('')
+const interactivePreviewLoading = ref(false)
+const interactivePreviewError = ref('')
+
+async function handleInteractivePreview() {
+  if (!props.genId) return
+  interactivePreviewError.value = ''
+  const previewWindow = window.open('about:blank', '_blank')
+  if (!previewWindow) {
+    interactivePreviewError.value = '浏览器阻止了新窗口，请允许弹窗后重试'
+    return
+  }
+  interactivePreviewLoading.value = true
+  try {
+    const { teacherGenerationApi: api } = await import('../../services/v1/generationApi')
+    const data = await api.interactivePreview({
+      course_name: props.courseTitle,
+      nodes: props.nodes,
+    })
+    const objectUrl = URL.createObjectURL(new Blob([data.html], { type: 'text/html;charset=utf-8' }))
+    previewWindow.location.href = objectUrl
+    const releaseWhenClosed = window.setInterval(() => {
+      if (previewWindow.closed) {
+        window.clearInterval(releaseWhenClosed)
+        URL.revokeObjectURL(objectUrl)
+      }
+    }, 1000)
+  } catch (err) {
+    previewWindow.close()
+    interactivePreviewError.value = err?.message || '互动预览失败'
+  } finally {
+    interactivePreviewLoading.value = false
+  }
+}
 
 const exportIsActive = computed(() => ['pending', 'exporting'].includes(props.exportStatus))
 const exportFileName = computed(() => {

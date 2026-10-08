@@ -248,7 +248,11 @@ class LessonPlanGenerator:
     def _get_llm_client(self) -> Any:
         if self._llm_client is None:
             from ai_engine.core.llm import LLMClient
-            self._llm_client = LLMClient(max_attempts=1)
+            self._llm_client = LLMClient(
+                max_attempts=1,
+                timeout=25,
+                stop_schema_fallback_on_error=True,
+            )
         return self._llm_client
 
     def generate(

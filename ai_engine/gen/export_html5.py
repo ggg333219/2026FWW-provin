@@ -37,6 +37,7 @@ __all__ = [
     "render_interactive_html",
     "extract_interactive_items",
     "export_interactive_html",
+    "extract_front_back",
     "ExportHTML5Config",
 ]
 
@@ -111,6 +112,19 @@ def _normalize_question(q: Any) -> dict[str, Any] | None:
     }
 
 
+def extract_front_back(content: Any) -> tuple[str, str] | None:
+    """Extract an explicitly authored flashcard front/back pair from text."""
+    text = str(content or "")
+    matches = list(re.finditer(
+        r"(?:^|\n)\s*(正面|背面|front|back)\s*[:：]\s*(.*?)(?=\n\s*(?:正面|背面|front|back)\s*[:：]|$)",
+        text, re.IGNORECASE | re.DOTALL,
+    ))
+    values = {match.group(1).lower(): match.group(2).strip() for match in matches}
+    front = values.get("正面") or values.get("front") or ""
+    back = values.get("背面") or values.get("back") or ""
+    return (front, back) if front or back else None
+
+
 def _node_to_items(node: dict[str, Any]) -> list[dict[str, Any]]:
     """从单个节点抽取互动物料（quiz dict 题 + knowledge_card 闪卡 + 文本题转闪卡）。"""
     items: list[dict[str, Any]] = []
@@ -140,6 +154,15 @@ def _node_to_items(node: dict[str, Any]) -> list[dict[str, Any]]:
     questions = [q for q in questions if q]
     if questions:
         items.append({"type": "quiz", "title": title, "questions": questions})
+
+    front = str(node.get("front") or "").strip()
+    back = str(node.get("back") or "").strip()
+    if not front and not back:
+        labeled = extract_front_back(node.get("content"))
+        if labeled:
+            front, back = labeled
+    if front and not any(item.get("type") == "flashcard" and item.get("front") == front for item in items):
+        items.append({"type": "flashcard", "front": front, "back": back, "tags": []})
 
     # 3) segments 知识卡 → 闪卡
     flashcards: list[dict[str, Any]] = []

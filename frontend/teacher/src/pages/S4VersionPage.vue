@@ -161,6 +161,7 @@
               :export-error="versionStore.exportError"
               :export-quality-report="versionStore.exportQualityReport"
               :loading="versionStore.loading"
+              :nodes="versionStore.currentVersionDetail?.nodes || []"
               :course-title="courseTitle"
               :version-label="currentVersionLabel"
               @start-export="handleStartExport"

@@ -198,6 +198,7 @@
                       :export-error="versionStore.exportError"
                       :export-quality-report="versionStore.exportQualityReport"
                       :loading="versionStore.loading"
+                      :nodes="versionStore.currentVersionDetail?.nodes || []"
                       @start-export="(fmt) => versionStore.startExport(versionStore.genId, fmt)"
                       @reset-export="versionStore.resetExport()"
                     />

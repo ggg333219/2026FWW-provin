@@ -685,6 +685,11 @@ class PreviewRequest(BaseModel):
     version: int | None = None  # 指定版本号，缺省加载最新版
 
 
+class InteractivePreviewRequest(BaseModel):
+    course_name: str = "互动课件"
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ModifyRequest(BaseModel):
     """修改命令请求"""
     generation_id: str | None = None
@@ -1409,6 +1414,23 @@ async def render_preview(req: PreviewRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"预览渲染失败: {str(e)}")
+
+
+@app.post("/api/v1/gen/interactive-preview")
+async def render_interactive_preview(req: InteractivePreviewRequest):
+    """Render the same playable HTML5 artifact used by interactive export."""
+    from ai_engine.gen.export_html5 import extract_interactive_items, render_interactive_html
+
+    items = extract_interactive_items(req.nodes)
+    if not items:
+        raise HTTPException(status_code=422, detail="当前内容没有可预览的互动题或翻卡")
+    has_quiz = any(item.get("type") == "quiz" for item in items)
+    has_flash = any(item.get("type") == "flashcard" for item in items)
+    title = "互动测验与知识翻卡" if has_quiz and has_flash else ("互动测验" if has_quiz else "知识翻卡")
+    return {
+        "html": render_interactive_html(items, course_name=req.course_name, title=title),
+        "interactive_count": len(items),
+    }
 
 
 def _load_page_evidence(evidence_refs: list[str] | None) -> tuple[str, list[str]]:

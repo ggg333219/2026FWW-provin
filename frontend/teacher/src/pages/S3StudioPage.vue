@@ -599,6 +599,7 @@ import { useModifyStore } from "../stores/modifyStore";
 import { useCoursewareProjectStore } from "../stores/coursewareProjectStore";
 import { teacherV1Api } from "../services/v1";
 import { projectModifyApi } from "../services/v1/projectModifyApi";
+import { resolveSavedProjectVersion } from "../utils/coursewareVersion";
 import { API_BASE, AI_API_BASE } from "../config/api";
 import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline } from "../utils/intentEvidence";
 import { patchPreview, PATCH_MODE } from "../utils/previewPatch";
@@ -1570,7 +1571,7 @@ async function handleSaveNewVersion() {
         change_note: summary,
       });
       const projectVersion = projectResponse?.data || projectResponse || {};
-      if (!savedVersion) savedVersion = Number(projectVersion.version_no || 0);
+      savedVersion = resolveSavedProjectVersion(projectVersion, savedVersion);
     }
     lastSavedVersion.value = savedVersion;
     if (savedVersion > 0) baseVersion.value = savedVersion;

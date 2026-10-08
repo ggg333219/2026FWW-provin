@@ -101,6 +101,17 @@ export const teacherGenerationApi = {
    *    - inline nodes：直接渲染当前节点树
    *    - 版本快照：传 gen_id（可选 version），后端按版本恢复节点渲染
    */
+  interactivePreview: ({ nodes, course_name } = {}) =>
+    fetch(`${AI_API_BASE}/api/v1/gen/interactive-preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nodes: nodes || [], course_name: course_name || "互动课件" }),
+    }).then(async (response) => {
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || `预览失败 (${response.status})`);
+      return body;
+    }),
+
   preview: ({ nodes, course_name, gen_id, version } = {}) =>
     requestJson("/api/v1/gen/preview", {
       method: "POST",
