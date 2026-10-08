@@ -219,17 +219,41 @@ export const teacherGenerationApi = {
   getContentStatus: (contentId) =>
     requestJson(`/api/v1/gen/content/status/${encodeURIComponent(contentId)}`),
 
-  /** POST /api/v1/gen/content/modify — AI 修改节点内容（自然语言指令） */
-  modifyContent: ({ content_id, node_id, message } = {}) =>
+  /**
+   * POST /api/v1/gen/content/modify — AI 修改单个节点内容（自然语言指令）
+   *
+   * nodes 必须带上：引擎侧是「基于当前节点内容做局部重生成」，只给一句指令
+   * 等于让它凭空重写一节，老师看到的就是内容被换掉而不是被改好。
+   * action 可留空，后端会按 message 兜底推断 simplify / expand / rewrite。
+   */
+  modifyContent: ({
+    content_id,
+    node_id,
+    message,
+    nodes = [],
+    action = "",
+    course_name = "",
+    context_markdown = "",
+    outline_id = "",
+    outline_version = 0,
+    intent = undefined,
+  } = {}) =>
     requestJson("/api/v1/gen/content/modify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // 节点重生成会调用真实大模型，允许较长响应时间。
+      // 节点重生成会调用真实大模型，还要等引擎侧的异步任务轮询完成。
       timeoutMs: 120000,
       body: JSON.stringify({
-        content_id,
-        node_id,
+        content_id: content_id || "",
+        node_id: node_id || "",
         message: message || "",
+        action: action || "",
+        nodes: nodes || [],
+        course_name: course_name || "",
+        context_markdown: context_markdown || "",
+        outline_id: outline_id || "",
+        outline_version: outline_version || 0,
+        intent: intent || undefined,
       }),
     }),
 

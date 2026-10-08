@@ -160,21 +160,33 @@ export const useContentStore = defineStore('content', {
     /**
      * AI 修改节点内容（自然语言指令）
      * 对应后端 POST /api/v1/gen/content/modify
+     *
+     * nodes 是必带的改写基础：引擎只重生成 target 节点，其余原样返回，
+     * 所以这里回写的其实是「整棵树里被换掉的那一节」。
      */
-    async modifyNode({ content_id, node_id, message }) {
+    async modifyNode({ content_id, node_id, message, nodes = [], action = '',
+      course_name = '', context_markdown = '', outline_id = '', outline_version = 0,
+      intent = undefined } = {}) {
       this.modifying = true
       this.modifyError = ''
       try {
         const resp = await teacherV1Api.generation.modifyContent({
           content_id: content_id || this.content_id,
           node_id,
-          message
+          message,
+          nodes,
+          action,
+          course_name,
+          context_markdown,
+          outline_id,
+          outline_version,
+          intent
         })
         const data = resp?.data || resp || {}
+        const returned = Array.isArray(data.nodes) ? data.nodes : []
 
-        // 更新节点内容（如果返回了新内容）
-        if (data.nodes && Array.isArray(data.nodes)) {
-          for (const node of data.nodes) {
+        if (returned.length) {
+          for (const node of returned) {
             if (node.node_id) {
               this.nodesContent[node.node_id] = node
             }
@@ -182,13 +194,35 @@ export const useContentStore = defineStore('content', {
           this._persist()
         }
 
-        return data
+        return { ...data, nodes: returned }
       } catch (err) {
         this.modifyError = err?.message || '修改内容失败'
         throw err
       } finally {
         this.modifying = false
       }
+    },
+
+    /**
+     * 手动编辑节点内容并落缓存。
+     *
+     * 与 modifyNode 的区别：这一条不经过大模型，教师改什么就是什么。
+     * script 与 lecture_script 写同一份 —— 预览读前者、讲稿区读后者，
+     * 只写一个会让「页面上改了、讲稿区没动」。
+     */
+    saveManualEdit({ node_id, summary, script, key_points } = {}) {
+      if (!node_id) return null
+      const current = this.nodesContent[node_id] || {}
+      const next = { ...current, node_id }
+      if (summary != null) next.summary = summary
+      if (script != null) {
+        next.script = script
+        next.lecture_script = script
+      }
+      if (key_points != null) next.key_points = key_points
+      this.nodesContent[node_id] = next
+      this._persist()
+      return next
     },
 
     /**

@@ -441,6 +441,8 @@ func unmarshalOutlineRow(row *outlineVersionRow) (*Outline, error) {
 // OutlineService 只调用大纲构建与修订两个端点；依赖窄接口便于测试注入桩。
 type outlineClient interface {
 	GenerateOutline(ctx context.Context, req OutlineGenerateRequest) (*OutlineGenerateResponse, error)
+	// StreamOutline [H3] 流式生成；不支持流式的实现返回错误（前端降级同步端点）。
+	StreamOutline(ctx context.Context, req OutlineGenerateRequest, onEvent func(event string, data []byte) error) error
 	ReviseOutline(ctx context.Context, req OutlineReviseAIRequest) (*OutlineReviseAIResponse, error)
 }
 
@@ -476,6 +478,80 @@ func (s *OutlineService) CreateOutline(ctx context.Context, req OutlineGenerateR
 	if err != nil {
 		return nil, err
 	}
+	return s.persistNewDraft(ctx, req, resp)
+}
+
+// CreateOutlineStream [H3] 生成大纲草稿（流式版）。
+//
+// 事件链路：引擎 /gen/outline/stream 逐节点产出 → StreamOutline 回调 onEvent
+//（HTTP 处理器借它向浏览器转发 SSE）→ 本服务在回调内累积节点 → done 事件到达后
+// 走与 CreateOutline 完全相同的校验与落库。返回落库后的大纲（处理器据此发
+// saved 事件回传 outline_id / outline_version）。
+func (s *OutlineService) CreateOutlineStream(ctx context.Context, req OutlineGenerateRequest,
+	onEvent func(event string, data []byte) error) (*Outline, error) {
+	if req.SessionID == "" {
+		return nil, fmt.Errorf("session_id 不能为空")
+	}
+	var (
+		nodes    []OutlineNode
+		usedFB   bool
+		fbReason string
+	)
+	accumulate := func(event string, data []byte) error {
+		if onEvent != nil {
+			if err := onEvent(event, data); err != nil {
+				return err
+			}
+		}
+		switch event {
+		case "node":
+			var ev struct {
+				Index int         `json:"index"`
+				Node  OutlineNode `json:"node"`
+			}
+			if err := json.Unmarshal(data, &ev); err == nil && ev.Node.NodeID != "" {
+				nodes = append(nodes, ev.Node)
+			}
+		case "done":
+			var ev struct {
+				Nodes          []OutlineNode `json:"nodes"`
+				UsedFallback   bool          `json:"used_fallback"`
+				FallbackReason string        `json:"fallback_reason"`
+				NodesCount     int           `json:"nodes_count"`
+			}
+			if err := json.Unmarshal(data, &ev); err == nil {
+				// done 事件带全量节点时以它为准；否则信任逐节点累积结果
+				if len(ev.Nodes) > 0 {
+					nodes = ev.Nodes
+				}
+				usedFB = ev.UsedFallback
+				fbReason = ev.FallbackReason
+			}
+		case "error":
+			var ev struct {
+				Message string `json:"message"`
+			}
+			_ = json.Unmarshal(data, &ev)
+			if ev.Message == "" {
+				ev.Message = "引擎流式生成异常"
+			}
+			return fmt.Errorf("AI 引擎大纲流式生成失败: %s", ev.Message)
+		}
+		return nil
+	}
+	if err := s.aiClient.StreamOutline(ctx, req, accumulate); err != nil {
+		return nil, err
+	}
+	return s.persistNewDraft(ctx, req, &OutlineGenerateResponse{
+		Nodes:          nodes,
+		UsedFallback:   usedFB,
+		FallbackReason: fbReason,
+	})
+}
+
+// persistNewDraft 把引擎返回的大纲节点落库为 draft v1（Create 与 CreateStream 共用）。
+func (s *OutlineService) persistNewDraft(ctx context.Context, req OutlineGenerateRequest,
+	resp *OutlineGenerateResponse) (*Outline, error) {
 	// 若无 markdown 且 intent.topic 存在，回填标题
 	title := ""
 	if req.Markdown == "" && req.Intent != nil && req.Intent.Topic != nil {

@@ -48,6 +48,7 @@ from typing import Any
 # 要点展开的归一逻辑由 schema.py 持有（它不依赖任何 ai_engine 子模块，是唯一不会
 # 引起循环导入的共享位置），这里只做「从节点上取字段」这一层。
 from ..schema import normalize_point_details as _normalize_point_details_raw
+from .deck_structure import is_auto_node
 
 
 def xml_escape(text: Any) -> str:
@@ -134,6 +135,97 @@ MAX_MATRIX_ROWS = 6
 #: 大字结论的长度上限。结论必须是**一句话** —— 超长的（模型偶发把整段正文塞进
 #: key_conclusion）判为不可用，宁可不显示，也不要一个占满半页的"结论"。
 MAX_CONCLUSION_CHARS = 60
+
+
+# ---- 疏密排版三档（H5）----
+#
+# 密度参数表是预览（svg_renderer）与导出（export_ppt）共用的**唯一**取值来源：
+# 行距 / 段距 / 边距 / 每页容量都定义在这里，两个渲染器只负责把同一份 token
+# 换算成自己的单位（px@96dpi 或 pt），不再各写各的数字。
+#
+# comfortable 一档对齐改造前的既有行为（svg 的 _BLOCK_GAP=10 / _REGION_PADDING=16、
+# 导出的 line_spacing=1.13 / 段距 7pt / 要点卡 pad 7px gap 10px / _BODY_FILL=0.97），
+# 因此「没选密度」的课件导出结果不变。
+DENSITY_TIERS = ("compact", "comfortable", "loose")
+
+#: 历史取值映射：presentation 层旧数据里的 "minimal"（极简，大留白）即宽松档
+DENSITY_ALIASES = {"minimal": "loose"}
+
+FALLBACK_DENSITY = "comfortable"
+
+#: token 语义与单位：
+#:   block_gap_px       区块之间的垂直间距（预览 px@96dpi；导出按段距联动）
+#:   region_padding_px  版面区域内容距面板边缘的内边距（预览 px；导出面板内边距联动）
+#:   line_spacing       行距倍数（预览 line-height；导出 PPTX paragraph.line_spacing）
+#:   paragraph_gap_pt   段距（导出 PPTX space_after，磅）
+#:   point_card_pad_px  要点卡片内边距（两端 px 同源，导出换算英寸）
+#:   point_card_gap_px  要点卡片间距（两端 px 同源，导出换算英寸）
+#:   body_fill          每页容量系数（导出正文面板分页容量 × 该值：越小每页放得越少）
+#:   panel_units_scale  左栏要点面板的每页容量倍率（导出 _chunk_weighted）
+#:   body_font_scale    正文字号缩放（1.0 = 现状；紧凑略小、宽松略大）
+#:   css_padding        预览 .slide 的内边距（CSS，原 presentation.DENSITY_PADDING）
+DENSITY_PROFILES: dict[str, dict[str, Any]] = {
+    "compact": {
+        "block_gap_px": 6.0,
+        "region_padding_px": 12.0,
+        "line_spacing": 1.06,
+        "paragraph_gap_pt": 4.0,
+        "point_card_pad_px": 5.0,
+        "point_card_gap_px": 6.0,
+        "body_fill": 1.0,
+        "panel_units_scale": 1.15,
+        "body_font_scale": 0.94,
+        "css_padding": "36px 44px 40px",
+    },
+    "comfortable": {
+        "block_gap_px": 10.0,
+        "region_padding_px": 16.0,
+        "line_spacing": 1.13,
+        "paragraph_gap_pt": 7.0,
+        "point_card_pad_px": 7.0,
+        "point_card_gap_px": 10.0,
+        "body_fill": 0.97,
+        "panel_units_scale": 1.0,
+        "body_font_scale": 1.0,
+        "css_padding": "44px 52px 48px",
+    },
+    "loose": {
+        "block_gap_px": 16.0,
+        "region_padding_px": 20.0,
+        "line_spacing": 1.24,
+        "paragraph_gap_pt": 11.0,
+        "point_card_pad_px": 10.0,
+        "point_card_gap_px": 15.0,
+        "body_fill": 0.88,
+        "panel_units_scale": 0.82,
+        "body_font_scale": 1.06,
+        "css_padding": "56px 64px 60px",
+    },
+}
+
+
+def resolve_density(value: Any) -> str:
+    """把 presentation 层传来的 density 归一到三档之一。
+
+    脏值 / 缺失一律回 comfortable（改造前行为），历史 "minimal" 映射到 loose。
+    """
+    raw = str(value or "").strip().lower()
+    raw = DENSITY_ALIASES.get(raw, raw)
+    return raw if raw in DENSITY_TIERS else FALLBACK_DENSITY
+
+
+def density_profile(value: Any) -> dict[str, Any]:
+    """取密度参数表（结果总是三档之一的同一份 dict，不复制）。"""
+    return DENSITY_PROFILES[resolve_density(value)]
+
+
+def pptx_line_height_factor(value: Any) -> float:
+    """导出侧排版行高系数：1.2（单倍行距的基线高）× 行距倍数。
+
+    comfortable ≈ 1.356，与改造前写死的 1.35 一致 —— 分页估算与渲染共用的
+    那把尺子从此跟随密度档位，而不是固定值。
+    """
+    return 1.2 * float(density_profile(value)["line_spacing"])
 
 
 # ---- IR ----
@@ -243,14 +335,28 @@ def resolve_export_key_points(node: Any) -> list[str]:
 
 
 def body_paragraphs(node: dict[str, Any]) -> list[str]:
-    """内容页正文来源：content 优先，其次 summary。均为空时返回 []。"""
+    """内容页正文来源：content 优先。
+
+    M4：大纲节点的 ``summary`` 是「内容概述」，只供讲稿与教师侧使用，不再直接
+    打进 PPT 正文 —— 学生看到的正文只来自 ``content``（真实生成链路不给它赋值，
+    但历史课件与手工编辑会写）。
+
+    deck_structure 的合成节点（node_id 以 ``__auto_`` 开头，如目录页）其
+    content/summary 是**有意的版面文案**，保留 summary 兜底，避免误杀。
+    """
+    keys = ["content"]
+    if is_auto_node(node):
+        keys.append("summary")
     paragraphs: list[str] = []
-    for key in ("content", "summary"):
+    for key in keys:
         value = node.get(key)
         if isinstance(value, str) and value.strip():
             paragraphs.append(value.strip())
         elif isinstance(value, list):
             paragraphs.extend(str(v).strip() for v in value if str(v).strip())
+        if paragraphs:
+            # 合成目录页的 content 与 summary 常是同一句话，取到即止，不重复排
+            break
     return paragraphs
 
 
@@ -694,13 +800,21 @@ def build_page_spec(node: dict[str, Any], index: int, kind: str | None = None) -
     spec = PageSpec(node_id=str(node.get("node_id") or ""), index=index, kind=kind, title=title)
 
     if kind == "cover":
-        spec.subtitle = str(node.get("subtitle") or node.get("content") or node.get("summary") or "").strip()
+        # M4：真实节点的 summary（内容概述）不上 PPT；合成封面保留 summary 兜底
+        subtitle = str(node.get("subtitle") or node.get("content") or "").strip()
+        if not subtitle and is_auto_node(node):
+            subtitle = str(node.get("summary") or "").strip()
+        spec.subtitle = subtitle
         points = extract_key_points(node)
         if points:
             spec.blocks.append(Block(kind="bullets", cls="cover-points", items=points))
 
     elif kind == "section":
-        spec.subtitle = str(node.get("content") or node.get("summary") or "").strip()
+        # M4：同封面 —— 章节页副标题只认 content，大纲概述不再直接上页面
+        subtitle = str(node.get("content") or "").strip()
+        if not subtitle and is_auto_node(node):
+            subtitle = str(node.get("summary") or "").strip()
+        spec.subtitle = subtitle
         # 目录项优先取 children（子节点标题），其次取要点
         children = as_list(node.get("children"))
         items = children or extract_key_points(node)

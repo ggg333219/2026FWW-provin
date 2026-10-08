@@ -29,11 +29,13 @@ from typing import Any
 from .diagrams import render_figure_svg
 from .page_spec import (
     Block,
+    FALLBACK_DENSITY,
     PageSpec,
     ROLE_PRIMARY,
     ROLE_SECONDARY,
     block_to_html,
     build_page_spec,
+    density_profile,
     extract_key_points,
     resolve_kind,
     xml_escape,
@@ -50,10 +52,11 @@ _PT_TO_PX = 4 / 3
 #: 区块最小高度（px），避免次要区块被挤压到不可读
 _MIN_BLOCK_HEIGHT = 0.55 * _PX_PER_INCH
 
-#: 区块之间的垂直间距（px）
+#: 区块之间的垂直间距（px）—— comfortable 档的默认值；实际取值随密度参数表
+#: （page_spec.DENSITY_PROFILES）变化，此处仅作函数默认参数与历史行为对照。
 _BLOCK_GAP = 10.0
 
-#: 区域内容距面板边缘的内边距（px）
+#: 区域内容距面板边缘的内边距（px）—— 同上，comfortable 档默认值。
 _REGION_PADDING = 16.0
 
 #: 页面类型 → 版式 JSON。summary 走自己的卡片版式，quiz/interactive 共用骨架。
@@ -265,10 +268,11 @@ def _foreign_object(x: float, y: float, w: float, h: float, html: str, role: str
     )
 
 
-def _allocate_heights(blocks: list[Block], available: float) -> list[float]:
+def _allocate_heights(blocks: list[Block], available: float,
+                      gap: float = _BLOCK_GAP) -> list[float]:
     """按内容量把可用高度分给各区块，并保证每个区块不低于最小高度。"""
     min_h = _MIN_BLOCK_HEIGHT
-    gaps = _BLOCK_GAP * (len(blocks) - 1)
+    gaps = gap * (len(blocks) - 1)
     distributable = max(available - gaps, min_h * len(blocks))
 
     weights = [_block_units(b) for b in blocks]
@@ -292,12 +296,14 @@ def _lay_out_blocks(
     theme: PPTTheme,
     title_elem: dict | None = None,
     origin: tuple[float, float] = (0.0, 0.0),
+    gap: float = _BLOCK_GAP,
 ) -> str:
     """在 (0,0,width,height) 内纵向堆叠区块；调用方负责用 <g transform> 平移。
 
     区块 HTML 自带 <h4> 的（segments / script）不再另画标题；
     不带的（bullets / questions）用版式里的标题元素位置补一个。
     origin 仅用于把「绝对定位的版式标题元素」换算到本区域的相对坐标。
+    gap 是区块间距，来自密度参数表（H5 三处联动）。
     """
     blocks = [b for b in blocks if b]
     if not blocks or width <= 0 or height <= 0:
@@ -312,12 +318,12 @@ def _lay_out_blocks(
         heading = next((b.heading for b in blocks if b.heading and b.kind == "bullets"), "")
         label = _render_slot_label(title_elem, heading, theme, origin)
         if label:
-            reserved = float(title_elem.get("height", 0.36)) * _PX_PER_INCH + _BLOCK_GAP
+            reserved = float(title_elem.get("height", 0.36)) * _PX_PER_INCH + gap
             parts.append(label)
             cursor += reserved
             available -= reserved
 
-    for block, block_height in zip(blocks, _allocate_heights(blocks, available)):
+    for block, block_height in zip(blocks, _allocate_heights(blocks, available, gap)):
         if block.kind == "figure":
             # 图示走原生 SVG 图元、不套 foreignObject：它正是最需要「SVG → 位图」
             # 也活下来的部分，而 foreignObject 在部分转换器里不渲染。
@@ -328,7 +334,7 @@ def _lay_out_blocks(
             parts.append(
                 _foreign_object(0.0, cursor, width, block_height, block_to_html(block), block.role)
             )
-        cursor += block_height + _BLOCK_GAP
+        cursor += block_height + gap
 
     return "".join(parts)
 
@@ -340,8 +346,14 @@ def _lay_out_region(
     region_elem: dict,
     theme: PPTTheme,
     title_elem: dict | None = None,
+    gap: float = _BLOCK_GAP,
+    padding: float = _REGION_PADDING,
 ) -> str:
-    """区域 = 一个 <g> 平移 + 内边距，内部按矩形摆区块。"""
+    """区域 = 一个 <g> 平移 + 内边距，内部按矩形摆区块。
+
+    gap / padding 来自密度参数表（H5）：同一份 page_spec.DENSITY_PROFILES，
+    与导出侧 export_ppt 共用，预览与导出的疏密因此同源。
+    """
     if not blocks:
         return ""
 
@@ -349,21 +361,22 @@ def _lay_out_region(
     if region_elem.get("type") == "card_list":
         # 卡片列表区域：把「最多几张卡」的可视范围当作边界，与版式观感一致
         card_h = float(region_elem.get("card_height", 0.78))
-        gap = float(region_elem.get("card_gap", 0.12))
+        gap_cards = float(region_elem.get("card_gap", 0.12))
         max_cards = int(region_elem.get("max_cards", 5))
-        h = (card_h * max_cards + gap * (max_cards - 1)) * _PX_PER_INCH
+        h = (card_h * max_cards + gap_cards * (max_cards - 1)) * _PX_PER_INCH
 
     inner = _lay_out_blocks(
         blocks,
-        w - _REGION_PADDING * 2,
-        h - _REGION_PADDING,
+        w - padding * 2,
+        h - padding,
         theme,
         title_elem,
-        origin=(x + _REGION_PADDING, y + _REGION_PADDING),
+        origin=(x + padding, y + padding),
+        gap=gap,
     )
     if not inner:
         return ""
-    return f'<g transform="translate({x + _REGION_PADDING:.1f}, {y + _REGION_PADDING:.1f})">{inner}</g>'
+    return f'<g transform="translate({x + padding:.1f}, {y + padding:.1f})">{inner}</g>'
 
 
 def _merge_right_column(elements: dict[str, dict]) -> dict[str, dict]:
@@ -427,6 +440,7 @@ def render_page_spec_to_svg(
     *,
     paint_background: bool = False,
     responsive: bool = True,
+    density: str = FALLBACK_DENSITY,
 ) -> str:
     """把一个 PageSpec 渲染成完整 SVG 字符串。
 
@@ -436,7 +450,12 @@ def render_page_spec_to_svg(
         paint_background: 是否画整页底色。嵌在 HTML 里时由 .slide 卡片提供背景，
             所以默认 False；需要独立成图时传 True。
         responsive: 宽度用 100% 由 CSS 定高，还是写死像素尺寸。嵌 iframe 用前者。
+        density: 疏密排版三档（compact/comfortable/loose），取值来自
+            page_spec.DENSITY_PROFILES —— 与 PPTX 导出共用的同一张参数表。
     """
+    profile = density_profile(density)
+    block_gap = float(profile["block_gap_px"])
+    region_padding = float(profile["region_padding_px"])
     layout = get_layout(_LAYOUT_BY_KIND.get(spec.kind, "content_left_right"))
     elements: dict[str, dict] = layout.get("elements", {})
     slide_w, slide_h = layout.get("slide_size", [13.333, 7.5])
@@ -521,6 +540,8 @@ def render_page_spec_to_svg(
                 region_elem,
                 theme,
                 elements.get(_REGION_TITLE_ELEMENTS.get(region_name, "")),
+                gap=block_gap,
+                padding=region_padding,
             )
         )
 

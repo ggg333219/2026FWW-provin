@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import shutil
 import os
+import threading
 import uuid
 import json
 import wave
@@ -36,6 +37,7 @@ from ai_engine.gen.evidence_binding import bind_evidence_to_draft_nodes
 from ai_engine.gen.node import NodeGenerator, NodeGenConfig, merge_script_into_node
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig
+from ai_engine.gen.page_spec import resolve_kind as resolve_page_kind
 from ai_engine.gen.preview import PreviewRenderer
 from ai_engine.gen.validator import ContentValidator
 from ai_engine.gen.commands import CommandParser, EditCommand, CommandType
@@ -739,6 +741,58 @@ async def revise_outline(req: GenOutlineReviseRequest):
         raise _llm_endpoint_error(e, "大纲修订失败")
 
 
+@app.post("/gen/outline/stream")
+async def generate_outline_stream(req: GenOutlineRequest):
+    """[S3][H3] 大纲逐节点流式生成（SSE）。同步端点 /gen/outline 保留作降级。
+
+    事件流：
+      event: start  data: {"mode": "llm"|"mock"}
+      event: node   data: {"index": i, "node": {...}}     —— 逐节点出现
+      event: done   data: {"used_fallback": bool, "nodes_count": n, "fallback_reason"?: str}
+      event: error  data: {"message": "..."}              —— 生成器自身异常
+    """
+    from fastapi.responses import StreamingResponse
+
+    from ai_engine.core.sse import SSEMessage
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _produce() -> None:
+        try:
+            builder = OutlineBuilder()
+            for event in builder.build_streaming(
+                intent=req.intent,
+                evidence_packet=req.evidence_packet,
+                markdown=req.markdown,
+                course_name=req.course_name,
+            ):
+                loop.call_soon_threadsafe(queue.put_nowait, event)
+        except Exception as exc:  # 生成器自身异常 → error 事件，不让连接悬挂
+            loop.call_soon_threadsafe(
+                queue.put_nowait, {"event": "error", "message": str(exc)}
+            )
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    threading.Thread(target=_produce, name="outline-stream", daemon=True).start()
+
+    async def _sse():
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            name = str(event.get("event") or "message")
+            payload = {k: v for k, v in event.items() if k != "event"}
+            yield SSEMessage(payload, event_type=name).to_string()
+
+    return StreamingResponse(
+        _sse(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/gen/nodes")
 async def generate_nodes(req: GenNodesRequest):
     """[S3] 逐节点生成讲稿"""
@@ -1228,10 +1282,29 @@ async def generate_single_node(req: dict[str, Any]):
 
 @app.post("/gen/export/ppt")
 async def export_ppt(req: ExportPPTRequest):
-    """[S3] 导出 PPTX"""
+    """[S3] 导出 PPTX。课件含 quiz/interactive 页时，同目录附带 html5 互动文件，
+    互动页占位形状超链接指向它（H8）。"""
     exporter = PPTExporter()
     try:
-        return exporter.export(req.nodes, req.course_name, req.template_id)
+        html5_filename = ""
+        if _deck_has_interactive_pages(req.nodes):
+            safe_name = "".join(
+                c if c.isalnum() or c in " _-" else "_" for c in (req.course_name or "课件")
+            ).strip() or "课件"
+            html5_filename = f"{safe_name}.html"
+            try:
+                export_interactive_html(
+                    req.nodes, req.course_name,
+                    output_dir=exporter.config.output_dir, file_name=html5_filename,
+                )
+            except Exception as html5_exc:
+                logging.warning("[PPT导出] HTML5 互动文件生成失败，PPTX 超链接将不可用: %s", html5_exc)
+                html5_filename = ""
+        result = exporter.export(req.nodes, req.course_name, req.template_id,
+                                 html5_filename=html5_filename or None)
+        if html5_filename:
+            result["html5_path"] = str(Path(exporter.config.output_dir) / html5_filename)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PPTX 导出失败: {str(e)}")
 
@@ -2303,6 +2376,17 @@ async def export_create(gen_id: str, req: ExportRequest):
     )
 
 
+def _deck_has_interactive_pages(nodes: list[dict]) -> bool:
+    """H8：课件里是否存在 quiz / interactive 页（决定 PPTX 是否附带 html5 互动文件）。"""
+    for node in nodes or []:
+        try:
+            if resolve_page_kind(node if isinstance(node, dict) else {}) in ("quiz", "interactive"):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 async def _run_export(
     job_id: str, nodes: list[dict], fmt: ExportFormat, intent: dict | None = None,
     generation_instruction_set: dict[str, Any] | None = None,
@@ -2342,8 +2426,26 @@ async def _run_export(
             job.file_size = doc_path.stat().st_size
 
         if fmt in (ExportFormat.BOTH, ExportFormat.PPTX):
+            # H8：课件含 quiz/interactive 页时，先落 html5 互动文件（与 pptx 同目录、
+            # 同一 job 前缀），PPTX 互动页的占位形状超链接指向这个相对路径。
+            html5_filename = ""
+            if _deck_has_interactive_pages(nodes):
+                html5_filename = f"{job_id}.html"
+                try:
+                    html5 = export_interactive_html(
+                        nodes, course_name,
+                        output_dir=str(export_dir), file_name=html5_filename,
+                    )
+                    job.metadata = job.metadata or {}
+                    job.metadata["html_path"] = html5["path"]
+                except Exception as html5_exc:
+                    logging.warning(
+                        "[导出 %s] HTML5 互动文件生成失败，PPTX 互动页超链接将不可用: %s",
+                        job_id, html5_exc,
+                    )
+                    html5_filename = ""
             exporter = PPTExporter()
-            buf = exporter.export_to_bytes(nodes, course_name)
+            buf = exporter.export_to_bytes(nodes, course_name, html5_filename=html5_filename or None)
             ppt_path = export_dir / f"{job_id}.pptx"
             ppt_path.write_bytes(buf.getvalue())
             job.metadata = job.metadata or {}
@@ -2372,8 +2474,9 @@ async def _run_export(
                     await _persist_export_job(job)
                     return
 
-        # HTML5 互动小游戏（A12 赛题 4c/5c）：both/interactive 模式下随 pptx/docx 一起产出
-        if fmt in (ExportFormat.BOTH, ExportFormat.INTERACTIVE):
+        # HTML5 互动小游戏（A12 赛题 4c/5c）：interactive 模式独立产出；
+        # both 模式已在上方 PPTX 分支随 pptx 一起产出（H8：互动页超链接同目录）。
+        if fmt == ExportFormat.INTERACTIVE:
             html5 = export_interactive_html(
                 nodes, course_name,
                 output_dir=str(export_dir), file_name=f"{job_id}.html",

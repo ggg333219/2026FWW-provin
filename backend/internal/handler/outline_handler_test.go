@@ -37,6 +37,19 @@ func (f *fakeAIOutline) ReviseOutline(_ context.Context, _ service.OutlineRevise
 	return &service.OutlineReviseAIResponse{Nodes: f.nodes, ChangeSummary: []string{"AI 修订"}}, nil
 }
 
+// StreamOutline 只为满足 service.outlineClient 接口（H3 引入），本文件的用例不覆盖流式路径。
+func (f *fakeAIOutline) StreamOutline(ctx context.Context, req service.OutlineGenerateRequest, onEvent func(event string, data []byte) error) error {
+	resp, err := f.GenerateOutline(ctx, req)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	return onEvent("done", raw)
+}
+
 func setupOutlineRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

@@ -13,8 +13,9 @@
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from ..schema import (
     DEFAULT_TOTAL_DURATION_MINUTES,
@@ -176,21 +177,16 @@ class OutlineBuilder:
         markdown = self._append_generation_instructions(markdown, generation_instruction_set)
         fallback = self._fallback_outline(title, key_points, total_duration)
 
-        try:
-            nodes = self._run_node_tree_generation(markdown, key_points, total_duration)
-            if not nodes:
-                return {
-                    "nodes": self._finalize(fallback["nodes"], total_duration),
-                    "used_fallback": True,
-                    "fallback_reason": "empty_model_response",
-                }
-            return {"nodes": self._finalize(nodes, total_duration), "used_fallback": False}
-        except Exception as exc:
-            return {
-                "nodes": self._finalize(fallback["nodes"], total_duration),
-                "used_fallback": True,
-                "fallback_reason": self._fallback_reason(exc),
-            }
+        nodes, used_fallback, fallback_reason = self._run_with_fallback(
+            markdown, key_points, total_duration, fallback
+        )
+        result: dict[str, Any] = {
+            "nodes": self._finalize(nodes, total_duration),
+            "used_fallback": used_fallback,
+        }
+        if used_fallback:
+            result["fallback_reason"] = fallback_reason
+        return result
 
     def build_from_markdown(
         self,
@@ -202,22 +198,19 @@ class OutlineBuilder:
         # 无 intent 时没有课时来源，用默认总课时，保证输出仍可被 Go 大纲确认接受。
         total_duration = DEFAULT_TOTAL_DURATION_MINUTES
         fallback = self._fallback_outline(course_name or "未命名课程", None, total_duration)
+        # 统一生成指令（指令集）在进模型之前追加到 markdown 尾部，
+        # 让「输出要求 / 呈现偏好 / 生成模式」全链路共享同一份约束。
         markdown = self._append_generation_instructions(markdown, generation_instruction_set)
-        try:
-            nodes = self._run_node_tree_generation(markdown, [], total_duration)
-            if not nodes:
-                return {
-                    "nodes": self._finalize(fallback["nodes"], total_duration),
-                    "used_fallback": True,
-                    "fallback_reason": "empty_model_response",
-                }
-            return {"nodes": self._finalize(nodes, total_duration), "used_fallback": False}
-        except Exception as exc:
-            return {
-                "nodes": self._finalize(fallback["nodes"], total_duration),
-                "used_fallback": True,
-                "fallback_reason": self._fallback_reason(exc),
-            }
+        nodes, used_fallback, fallback_reason = self._run_with_fallback(
+            markdown, [], total_duration, fallback
+        )
+        result: dict[str, Any] = {
+            "nodes": self._finalize(nodes, total_duration),
+            "used_fallback": used_fallback,
+        }
+        if used_fallback:
+            result["fallback_reason"] = fallback_reason
+        return result
 
     @staticmethod
     def _append_generation_instructions(markdown: str, instruction_set: dict[str, Any] | None) -> str:
@@ -304,6 +297,96 @@ class OutlineBuilder:
         }
 
     # ── LLM 节点树生成 ──
+
+    def _run_with_fallback(
+        self,
+        markdown: str,
+        key_points: list[str],
+        total_duration_minutes: float | None,
+        fallback: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], bool, str]:
+        """跑一次节点树生成；为空/异常时回退兜底大纲。
+
+        返回 (nodes, used_fallback, fallback_reason)，build 与 build_streaming 共用，
+        保证同步与流式两条路径的生成行为完全一致。
+        """
+        try:
+            nodes = self._run_node_tree_generation(markdown, key_points, total_duration_minutes)
+            if not nodes:
+                return fallback["nodes"], True, "empty_model_response"
+            return nodes, False, ""
+        except Exception as exc:
+            return fallback["nodes"], True, self._fallback_reason(exc)
+
+    def _mock_mode(self) -> bool:
+        """是否处于 mock / 缺 key 模式（与 LLMClient._call 的判定口径一致）。"""
+        from ..core.config import settings as _settings
+
+        if bool(getattr(_settings, "is_mock", False)):
+            return True
+        try:
+            return not self._get_llm().api_key
+        except Exception:
+            return True
+
+    def build_streaming(
+        self,
+        intent: dict[str, Any] | None = None,
+        evidence_packet: dict[str, Any] | None = None,
+        markdown: str | None = None,
+        course_name: str | None = None,
+        mock_node_delay: float = 0.12,
+    ) -> Iterator[dict[str, Any]]:
+        """[H3] 逐节点产出大纲事件的同步生成器。
+
+        事件序列（由 main.py 的 /gen/outline/stream 包装成 SSE）：
+          {"event": "start", "mode": "llm" | "mock"}
+          {"event": "node", "index": i, "node": {...}}   i 从 1 起，节点契约与 build 相同
+          {"event": "done", "used_fallback": bool, "nodes_count": n, "fallback_reason"?: str}
+
+        说明：上游 LLM 是一次结构化调用（chat_with_schema），模型返回后节点逐个
+        过 finalize 立刻产出 —— 流式保证的是「连接不超时 + 节点一就绪就可见」。
+        mock / 缺 key 模式下为演示流式效果，节点间加 mock_node_delay 秒间隔
+        （数据仍是同一份本地大纲，不引入对上游的额外请求）；真实 LLM 模式不掺人工延迟。
+        """
+        mock_mode = self._mock_mode()
+        yield {"event": "start", "mode": "mock" if mock_mode else "llm"}
+
+        if markdown:
+            total_duration = DEFAULT_TOTAL_DURATION_MINUTES
+            fallback = self._fallback_outline(course_name or "未命名课程", None, total_duration)
+            nodes, used_fallback, fallback_reason = self._run_with_fallback(
+                markdown, [], total_duration, fallback
+            )
+        else:
+            intent = intent or {}
+            title = str(intent.get("title") or intent.get("topic") or "未命名课件")
+            description = str(intent.get("description") or intent.get("subtitle") or "")
+            key_points = intent.get("key_points") or intent.get("knowledge_points") or []
+            total_duration = self._intent_duration_minutes(intent)
+            evidence_text = self._format_evidence(evidence_packet)
+            context_markdown = self._build_markdown_context(
+                title, description, key_points, evidence_text, total_duration
+            )
+            fallback = self._fallback_outline(title, key_points, total_duration)
+            nodes, used_fallback, fallback_reason = self._run_with_fallback(
+                context_markdown, key_points, total_duration, fallback
+            )
+
+        finalized = self._finalize(nodes, total_duration)
+        for index, node in enumerate(finalized, start=1):
+            if mock_mode and mock_node_delay > 0 and index > 1:
+                time.sleep(mock_node_delay)
+            yield {"event": "node", "index": index, "node": node}
+
+        done: dict[str, Any] = {
+            "event": "done",
+            "used_fallback": used_fallback,
+            "nodes_count": len(finalized),
+        }
+        if used_fallback:
+            done["fallback_reason"] = fallback_reason
+        yield done
 
     def _run_node_tree_generation(
         self,

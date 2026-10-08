@@ -25,6 +25,11 @@ func (f *fakeOutlineAI) GenerateOutline(_ context.Context, _ OutlineGenerateRequ
 	return f.generateResp, nil
 }
 
+// StreamOutline [H3] 桩：不支持流式（返回错误即可，与 Dify 兼容层同语义）。
+func (f *fakeOutlineAI) StreamOutline(_ context.Context, _ OutlineGenerateRequest, _ func(string, []byte) error) error {
+	return errors.New("测试桩不支持大纲流式生成")
+}
+
 func (f *fakeOutlineAI) ReviseOutline(_ context.Context, _ OutlineReviseAIRequest) (*OutlineReviseAIResponse, error) {
 	if f.reviseErr != nil {
 		return nil, f.reviseErr
