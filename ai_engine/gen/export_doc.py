@@ -386,9 +386,11 @@ class LessonPlanDOCExporter:
         board_design = str(p.get("board_design") or "").strip()
         if board_design:
             self._add_section(doc, "七、板书设计")
-            for line in board_design.splitlines():
-                if line.strip():
-                    _set_run(doc.add_paragraph().add_run(line.strip()), size=12)
+            board_lines = [line.strip() for line in board_design.splitlines() if line.strip()]
+            if board_lines:
+                board_para = doc.add_paragraph()
+                board_para.paragraph_format.keep_together = True
+                _set_run(board_para.add_run("\n".join(board_lines)), size=12)
 
         return doc
 
@@ -397,6 +399,7 @@ class LessonPlanDOCExporter:
         para = doc.add_paragraph()
         para.paragraph_format.space_before = Pt(8)
         para.paragraph_format.space_after = Pt(4)
+        para.paragraph_format.keep_with_next = True
         _set_run(para.add_run(text), size=14, bold=True)
 
     def _add_process_table(self, doc: Document, phases: list[Any]) -> None:
