@@ -93,6 +93,13 @@
                 </div>
 
                 <!-- 锁定 -->
+                <div v-if="projectStore.projectId && versionStore.currentVersionDetail" class="action-row fork-outline-row">
+                  <button class="btn btn-sm btn-primary" :disabled="versionStore.loading" @click="handleContinueFromLocked">
+                    基于当前版本编辑大纲
+                  </button>
+                  <span class="action-help">复制当前版本为新草稿，不重新生成整份大纲</span>
+                </div>
+
                 <div v-if="!projectStore.projectId" class="action-row">
                   <button
                     class="btn btn-sm btn-warn"
@@ -518,6 +525,7 @@ function formatTime(iso) {
 /* 操作面板 */
 .action-group { display: flex; flex-direction: column; gap: 10px; }
 .action-row { display: flex; gap: 8px; align-items: center; min-width: 0; flex-wrap: wrap; }
+.action-help { color: #71847d; font-size: 12px; line-height: 1.4; }
 .action-row label { font-size: 13px; color: #607a71; min-width: 80px; }
 .action-select { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; background: #fff; flex: 1 1 160px; min-width: 0; max-width: 100%; }
 .action-input { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; flex: 2 1 180px; min-width: 0; max-width: 100%; }

@@ -91,13 +91,21 @@ class InteractiveBuilder:
     def build_all(self, node: dict[str, Any], *, mode: str = "llm") -> list[dict[str, Any]]:
         """一键生成该节点所有互动物料"""
         items = []
-        quiz = self.build_quiz(node, mode=mode)
-        items.extend(quiz)
-        cards = self.build_flashcards(node)
-        items.extend(cards)
-        vote = self.build_vote(node)
-        if vote:
-            items.append(vote)
+        plan = node.get("interactive_plan") or {}
+        kind = str(plan.get("kind") or "").strip().lower()
+        if kind == "flashcard":
+            items.extend(self.build_flashcards(node))
+        elif kind == "poll":
+            vote = self.build_vote(node)
+            if vote:
+                items.append(vote)
+        else:
+            items.extend(self.build_quiz(node, mode=mode))
+            if kind in {"", "game"}:
+                items.extend(self.build_flashcards(node))
+                vote = self.build_vote(node)
+                if vote:
+                    items.append(vote)
         return items
 
     def _fallback_quiz(self, title: str, content: str) -> list[dict[str, Any]]:
