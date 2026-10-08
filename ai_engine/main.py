@@ -705,6 +705,7 @@ class ModifyRequest(BaseModel):
 class InteractiveRequest(BaseModel):
     """互动内容生成请求"""
     node: dict[str, Any]
+    interactive_plan: dict[str, Any] = Field(default_factory=dict)
 
 
 # — S3 课件生成接口 —
@@ -1282,7 +1283,12 @@ async def generate_interactive(req: InteractiveRequest):
     """[S3] 生成互动内容（测验/知识翻卡）"""
     builder = InteractiveBuilder()
     try:
-        return {"items": await asyncio.to_thread(builder.build_all, req.node)}
+        node = dict(req.node or {})
+        # The gateway sends the edited plan beside the node.  Merge it here so
+        # selecting flashcard in the outline actually changes generation mode.
+        if req.interactive_plan:
+            node["interactive_plan"] = req.interactive_plan
+        return {"items": await asyncio.to_thread(builder.build_all, node)}
     except Exception as e:
         raise _llm_endpoint_error(e, "互动内容生成失败")
 
