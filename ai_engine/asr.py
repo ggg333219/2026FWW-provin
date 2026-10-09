@@ -83,12 +83,27 @@ def local_whisper_enabled() -> bool:
     return _whisper_installed()
 
 
+def _dashscope_usable() -> bool:
+    """有 key 且 SDK 装了才算真的可用（否则只会白跑一次再落到下一个 provider）。"""
+    if not _dashscope_api_key():
+        return False
+    try:
+        return importlib.util.find_spec("dashscope") is not None
+    except Exception:
+        return False
+
+
 def asr_provider_name() -> str:
-    """当前生效（或优先）的 provider，用于 /health 展示。"""
-    if _dashscope_api_key():
+    """当前真正会生效的 provider，用于 /health 展示（不谎报可用）。"""
+    if _dashscope_usable():
         return "dashscope"
     if local_whisper_enabled():
-        return "local_whisper" if _whisper_installed() else "local_whisper(not_installed)"
+        if not _whisper_installed():
+            return "local_whisper(not_installed)"
+        # 有云端 key 但 SDK 没装：实际会先失败再落到本地，把链路说清楚
+        return "local_whisper" if not _dashscope_api_key() else "dashscope(unusable)->local_whisper"
+    if _dashscope_api_key():
+        return "dashscope(unusable)"
     return "none"
 
 
