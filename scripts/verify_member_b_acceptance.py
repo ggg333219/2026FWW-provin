@@ -19,7 +19,7 @@ from ai_engine.gen.export_doc import LessonPlanDOCExporter
 from ai_engine.gen.export_html5 import extract_interactive_items, render_interactive_html
 from ai_engine.gen.lesson_plan import LessonPlanGenerator
 
-OUT_DIR = PROJECT_ROOT / "docs" / "导出验证"
+OUT_DIR = PROJECT_ROOT / "output" / "verification" / "member_b"
 
 NODES = [
     {

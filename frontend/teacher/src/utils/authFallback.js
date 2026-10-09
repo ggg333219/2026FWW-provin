@@ -23,7 +23,7 @@ export function saveLocalAuthStore(store, storage = window.localStorage) {
   }
 }
 
-export function registerLocalUser(username, password, role, storage = window.localStorage) {
+export function registerLocalUser(username, password, storage = window.localStorage) {
   const normalizedUsername = String(username || '').trim().toLowerCase()
   if (!normalizedUsername || !String(password || '').trim()) {
     throw new Error('用户名和密码不能为空')
@@ -33,7 +33,7 @@ export function registerLocalUser(username, password, role, storage = window.loc
   const user = {
     username: normalizedUsername,
     password: String(password || '').trim(),
-    role: role === 'student' ? 'student' : 'teacher'
+    role: 'teacher'
   }
   store[normalizedUsername] = user
   saveLocalAuthStore(store, storage)
@@ -46,9 +46,9 @@ export function authenticateLocalUser(username, password, storage = window.local
   const store = getLocalAuthStore(storage)
   const user = store[normalizedUsername]
 
-  if (!user || user.password !== normalizedPassword) {
+  if (!user || user.password !== normalizedPassword || user.role === 'student') {
     throw new Error('账号或密码错误')
   }
 
-  return { username: user.username, role: user.role }
+  return { username: user.username, role: 'teacher' }
 }

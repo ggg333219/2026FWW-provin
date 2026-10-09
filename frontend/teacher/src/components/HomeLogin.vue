@@ -82,7 +82,7 @@
         <div class="card-inner">
           <h2 class="card-title">{{ isRegisterMode ? '注册新账号' : '欢迎回来' }}</h2>
           <p class="card-sub">
-            {{ isRegisterMode ? '创建一个教师或学生账号' : '请登录您的账号继续使用' }}
+            {{ isRegisterMode ? '创建教师账号' : '请登录您的账号继续使用' }}
           </p>
           <p v-if="sessionExpired && !isRegisterMode" class="error-text" role="alert">登录已过期，请重新登录。成功后会返回之前的页面。</p>
 
@@ -92,7 +92,7 @@
               <label>账号</label>
               <div class="input-wrap">
                 <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                <input type="text" v-model="username" placeholder="教师账号 / 学生账号" autocomplete="username" required />
+                <input type="text" v-model="username" placeholder="教师账号" autocomplete="username" required />
               </div>
             </div>
 
@@ -138,20 +138,6 @@
               </div>
             </div>
 
-            <div class="field">
-              <label>角色</label>
-              <div class="role-radio-group">
-                <label class="radio-item">
-                  <input type="radio" value="teacher" v-model="role" />
-                  <span>教师</span>
-                </label>
-                <label class="radio-item">
-                  <input type="radio" value="student" v-model="role" />
-                  <span>学生</span>
-                </label>
-              </div>
-            </div>
-
             <button type="submit" class="submit" :disabled="loading">
               <span v-if="!loading">注 册</span>
               <span v-else class="loading-dots">
@@ -190,7 +176,6 @@ const password = ref('')
 const remember = ref(false)
 const loading = ref(false)
 const isRegisterMode = ref(false)
-const role = ref('teacher')
 const errorMessage = ref('')
 
 // M1：登录页主文案使用赛题产品全名，替换早期占位名“启智云”。
@@ -356,7 +341,7 @@ const handleRegister = async () => {
       body: JSON.stringify({
         username: username.value,
         password: password.value,
-        role: role.value
+        role: 'teacher'
       })
     })
     const payload = await res.json().catch(() => ({}))
@@ -369,7 +354,7 @@ const handleRegister = async () => {
   } catch (err) {
     if (String(err?.message || '').includes('Failed to fetch')) {
       try {
-        registerLocalUser(username.value, password.value, role.value)
+        registerLocalUser(username.value, password.value)
         isRegisterMode.value = false
         password.value = ''
         errorMessage.value = '注册成功，请使用本地账号登录'

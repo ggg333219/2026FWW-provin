@@ -101,3 +101,4 @@ lark_auth_qr.png
 
 # Local AI session artifacts (HANDOFF / backups / scratch / drafts) — 不入库
 .rivet/
+.docx_review/

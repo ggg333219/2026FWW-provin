@@ -1,0 +1,21 @@
+# Only the Go teacher service and its committed runtime config enter the
+# Docker build context. Git ignores do not protect Docker build contexts.
+*
+!go.mod
+!go.sum
+!cmd/
+!cmd/teacher/
+!cmd/teacher/**
+!internal/
+!internal/**
+!pkg/
+!pkg/**
+!config/
+!config/config.docker.yaml
+
+# Defense in depth for files accidentally placed in an included directory.
+**/.env
+**/.env.*
+**/config.local.yaml
+**/*.exe
+**/*.exe~

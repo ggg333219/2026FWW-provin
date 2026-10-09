@@ -57,7 +57,6 @@ if (Test-Path $pidFile) {
 
 Stop-ProcessesMatchingCommandLine -Pattern "vite --host" -Description "teacher frontend"
 Stop-ProcessesMatchingCommandLine -Pattern "conda run -n fuww_ai python ai_engine/main.py" -Description "AI engine"
-Stop-ProcessesMatchingCommandLine -Pattern "go run ./api/main.go" -Description "backend"
 Stop-ProcessesMatchingCommandLine -Pattern "go run ./cmd/teacher/main.go" -Description "teacher backend"
 
 function Invoke-DockerCompose {

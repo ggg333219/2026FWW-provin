@@ -37,7 +37,7 @@ from ai_engine.gen.export_html5 import (
 
 RESULTS = []
 
-DOC_OUT_DIR = PROJECT_ROOT / "docs" / "导出验证"
+DOC_OUT_DIR = PROJECT_ROOT / "output" / "verification" / "html5"
 
 
 def check(name, condition, detail=""):

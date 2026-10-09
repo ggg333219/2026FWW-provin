@@ -42,7 +42,7 @@ def main() -> int:
     print(f"GET /health -> {r.status_code}")
     print(r.text[:500] or "(empty)")
     if r.status_code != 200:
-        print("\n后端未就绪，请先: cd backend && go run ./api/main.go", file=sys.stderr)
+        print("\n后端未就绪，请先: cd backend && go run ./cmd/teacher", file=sys.stderr)
         return 1
 
     # 2) 取课件 ID

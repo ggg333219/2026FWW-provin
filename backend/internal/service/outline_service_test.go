@@ -337,8 +337,8 @@ func TestCreateOutlineFromVersionNodesDoesNotCallAI(t *testing.T) {
 }
 
 func TestOutlineEngineTimeoutBudget(t *testing.T) {
-	if outlineRequestTimeout != 120*time.Second {
-		t.Fatalf("outline engine timeout = %s, want 120s", outlineRequestTimeout)
+	if outlineRequestTimeout != 180*time.Second {
+		t.Fatalf("outline engine timeout = %s, want 180s", outlineRequestTimeout)
 	}
 }
 
