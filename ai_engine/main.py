@@ -1344,11 +1344,11 @@ async def export_doc_bytes(req: ExportPPTRequest):
         buf = exporter.export_to_bytes(req.nodes, req.course_name)
         from fastapi.responses import StreamingResponse
         _raw_d = req.course_name or "课件"
-        _safe_d = "".join(c if (c.isascii() and (c.isalnum() or c in " _-")) else "_" for c in _raw).strip("_ ") or "kejian"
+        _safe_d = "".join(c if (c.isascii() and (c.isalnum() or c in " _-")) else "_" for c in _raw_d).strip("_ ") or "kejian"
         import urllib.parse as _up
-        _disp_d = 'attachment; filename="%s.docx"; filename*=UTF-8''%s' % (_safe, _up.quote(_raw + ".docx"))
+        _disp_d = 'attachment; filename="%s.docx"; filename*=UTF-8''%s' % (_safe_d, _up.quote(_raw_d + ".docx"))
         return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                 headers={"Content-Disposition": _disp})
+                                 headers={"Content-Disposition": _disp_d})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DOCX 导出失败: {str(e)}")
 
