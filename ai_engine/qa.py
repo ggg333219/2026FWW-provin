@@ -44,7 +44,7 @@ def resolve_llm_base_url(model: str) -> tuple[str, str]:
 @dataclass
 class QAConfig:
     mode: str = "llm"  # 默认使用真实模型
-    model: str = os.getenv("AI_MODEL", "qwen-turbo")
+    model: str = os.getenv("AI_MODEL", "deepseek-v4-flash-0731")
     temperature: float = 0.2
 
 
@@ -55,7 +55,7 @@ class QAResponder:
         self.parsed_document = parsed_document
         self.config = config or QAConfig(
             mode=os.getenv("AI_GEN_MODE", "llm"),
-            model=os.getenv("AI_MODEL", "qwen-turbo"),
+            model=os.getenv("AI_MODEL", "deepseek-v4-flash-0731"),
             temperature=float(os.getenv("AI_TEMPERATURE", "0.2")),
         )
         self.page_map = {

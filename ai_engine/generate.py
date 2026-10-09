@@ -14,7 +14,7 @@ def main() -> None:
     cli = argparse.ArgumentParser(description="从文档生成讲稿与思维导图")
     cli.add_argument("file", help="输入文件路径（.pdf 或 .pptx）")
     cli.add_argument("--mode", default="llm", choices=["mock", "llm"], help="生成模式")
-    cli.add_argument("--model", default=os.getenv("AI_MODEL", "qwen-turbo"), help="LLM 模型名（mode=llm 时生效）")
+    cli.add_argument("--model", default=os.getenv("AI_MODEL", "deepseek-v4-flash-0731"), help="LLM 模型名（mode=llm 时生效）")
     cli.add_argument("--out", default=None, help="输出 JSON 文件路径")
     args = cli.parse_args()
 

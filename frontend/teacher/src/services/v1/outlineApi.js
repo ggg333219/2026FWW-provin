@@ -14,7 +14,7 @@ import { requestJson } from './request'
 // 大纲创建/修订内部要等 LLM 返回节点树，耗时远高于普通 JSON 接口。
 // request.js 默认超时只有 10s，实测 LLM 路径耗时 9.4s~15.4s，
 // 超时抛出的 AbortError 不会走 mock 回退，前端表现为「点了没反应」。
-const OUTLINE_LLM_TIMEOUT_MS = 150000
+const OUTLINE_LLM_TIMEOUT_MS = 180000
 
 export const teacherOutlineApi = {
   /**
@@ -34,6 +34,14 @@ export const teacherOutlineApi = {
         generation_instruction_set: generation_instruction_set || {},
         markdown: markdown || ''
       })
+    }),
+
+  /** 从课件版本的已有节点创建独立草稿；不调用大纲生成模型。 */
+  createFromNodes: ({ session_id, intent_id, course_name, nodes } = {}) =>
+    requestJson('/api/v1/outlines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id, intent_id: intent_id || '', course_name: course_name || '', nodes: nodes || [] })
     }),
 
   /**

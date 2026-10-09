@@ -85,16 +85,7 @@ export const useAuthStore = defineStore('auth', {
       const role = String(params.get('role') || '').trim().toLowerCase()
       const username = String(params.get('username') || '').trim().toLowerCase()
 
-      if (role === 'student') {
-        // 学生跳转到学生端
-        const studentOrigin = typeof window !== 'undefined'
-          ? (localStorage.getItem('fuww_student_origin') || 'http://localhost:8081')
-          : 'http://localhost:8081'
-        window.location.replace(`${studentOrigin}/?studentId=${encodeURIComponent(username)}&role=student&username=${encodeURIComponent(username)}`)
-        return true
-      }
-
-      if (role && username) {
+      if (role === 'teacher' && username) {
         this.login({ username, role })
         if (typeof window !== 'undefined') {
           window.history.replaceState({}, document.title, window.location.pathname)

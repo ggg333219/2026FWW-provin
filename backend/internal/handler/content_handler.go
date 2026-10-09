@@ -199,3 +199,32 @@ func (h *ContentHandler) Modify(c *gin.Context) {
 		},
 	})
 }
+
+// ModifyScript POST /api/v1/gen/content/modify-script — 对单节点现有讲稿应用教师指令（讲稿 AI 编辑）。
+// 不重跑大纲和整批节点；调用者负责把返回的讲稿保存到项目草稿/版本。
+// 注意与 Modify（内容层整节点重生成）区分：本接口只改讲稿文本，同步返回。
+func (h *ContentHandler) ModifyScript(c *gin.Context) {
+	var req service.GenScriptModifyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.NodeID) == "" || strings.TrimSpace(req.Script) == "" || strings.TrimSpace(req.Message) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "node_id、script 和 message 不能为空"})
+		return
+	}
+	resp, err := h.aiClient.ModifyContentScript(c.Request.Context(), req)
+	if err != nil {
+		if httpErr, isHTTP := err.(*service.AIEngineHTTPError); isHTTP {
+			c.JSON(httpErr.StatusCode, gin.H{"code": httpErr.StatusCode, "message": httpErr.Detail})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "修改讲稿失败: " + err.Error()})
+		return
+	}
+	if resp.UsedFallback || strings.TrimSpace(resp.Script) == "" || resp.NodeID != req.NodeID {
+		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "AI 未返回有效的当前节点讲稿，原稿未修改"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
+}

@@ -204,6 +204,27 @@ export const useContentStore = defineStore('content', {
     },
 
     /**
+     * AI 讲稿编辑：按自然语言指令改写单节点讲稿（POST /gen/content/modify-script）。
+     * 只返回建议讲稿文本，调用方确认后用 saveManualEdit 落库。
+     */
+    async modifyNodeScript({ node_id, title, message, course_name = '' } = {}) {
+      const current = this.nodesContent[node_id]
+      if (!current) throw new Error('当前节点尚无讲稿')
+      const resp = await teacherV1Api.generation.modifyScript({
+        node_id,
+        title: title || current.title || '',
+        script: current.script ?? current.lecture_script ?? '',
+        message,
+        course_name,
+      })
+      const data = resp?.data || resp || {}
+      if (data.node_id !== node_id || !data.script?.trim() || data.used_fallback) {
+        throw new Error('AI 未返回有效的当前节点讲稿，原稿未修改')
+      }
+      return data
+    },
+
+    /**
      * 手动编辑节点内容并落缓存。
      *
      * 与 modifyNode 的区别：这一条不经过大模型，教师改什么就是什么。

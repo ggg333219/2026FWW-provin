@@ -14,6 +14,22 @@ import (
 	"smart-teaching-backend/internal/service"
 )
 
+// 教师侧讲授会话和音频片段仍共用这两个数值/文本兜底函数；
+// 不应再依赖已停用的学生端 handler 文件来提供它们。
+func defaultStringValue(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func ensureDialogueSession(db *gorm.DB, sessionID, userID, courseID string, page int, nodeID string, currentTimeSec int) string {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {

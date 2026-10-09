@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { projectModifyApi } from '../services/v1/projectModifyApi'
+import { clearResumeDraft, writeResumeDraft } from '../utils/coursewareDraft'
 
 const PROJECT_KEY = 'fuww_active_courseware_project'
 
@@ -65,6 +66,7 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
     async remove(projectId) {
       await projectModifyApi.remove(projectId)
       this.items = this.items.filter((item) => String(item.id || item.project_id) !== String(projectId))
+      clearResumeDraft(String(projectId || ''))
       if (String(this.projectId) === String(projectId)) {
         this.projectId = ''; this.project = null; this.draft = null
         if (typeof window !== 'undefined') window.localStorage.removeItem(PROJECT_KEY)
@@ -85,6 +87,9 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
     scheduleSave(draft, delay = 1500) {
       if (!this.projectId) return
       this._lastDraft = draft; this.saveState = 'dirty'
+      // 浏览器刷新/关闭时，异步 PUT 可能来不及完成；按项目保存一份本地快照，
+      // 仅作为后端草稿暂时不可读时的恢复兜底，不替代 PostgreSQL 持久化。
+      writeResumeDraft(this.projectId, draft)
       if (this._timer) clearTimeout(this._timer)
       this._timer = setTimeout(() => this.saveNow().catch(() => {}), delay)
     },
@@ -93,6 +98,7 @@ export const useCoursewareProjectStore = defineStore('coursewareProject', {
       const projectId = this.projectId
       if (this._timer) { clearTimeout(this._timer); this._timer = 0 }
       this._lastDraft = draft
+      writeResumeDraft(projectId, draft)
       const save = async () => {
         this.saving = true
         if (this.projectId === projectId) { this.saveState = 'saving'; this.error = '' }

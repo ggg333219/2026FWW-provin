@@ -72,7 +72,8 @@ class InteractiveBuilder:
                 if kc.get("term"):
                     cards.append({"type": "flashcard", "front": kc["term"],
                                   "back": kc.get("definition", ""), "tags": kc.get("tags", [])})
-            return cards
+            if cards:
+                return cards
         return self._fallback_flashcards(node.get("title", "知识点"),
                                          node.get("script") or node.get("summary") or "")
 
@@ -91,13 +92,14 @@ class InteractiveBuilder:
     def build_all(self, node: dict[str, Any], *, mode: str = "llm") -> list[dict[str, Any]]:
         """一键生成该节点所有互动物料"""
         items = []
-        quiz = self.build_quiz(node, mode=mode)
-        items.extend(quiz)
-        cards = self.build_flashcards(node)
-        items.extend(cards)
-        vote = self.build_vote(node)
-        if vote:
-            items.append(vote)
+        plan = node.get("interactive_plan") or {}
+        kind = str(plan.get("kind") or "").strip().lower()
+        if kind == "flashcard":
+            items.extend(self.build_flashcards(node))
+        else:
+            items.extend(self.build_quiz(node, mode=mode))
+            if kind == "":
+                items.extend(self.build_flashcards(node))
         return items
 
     def _fallback_quiz(self, title: str, content: str) -> list[dict[str, Any]]:

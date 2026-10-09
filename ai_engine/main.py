@@ -567,7 +567,7 @@ def _llm_parse_knowledge(text: str, mode: str) -> dict[str, Any]:
     if not api_key:
         raise RuntimeError("缺少环境变量 AI_API_KEY，无法调用大模型")
 
-    model = os.getenv("AI_MODEL", "qwen-turbo")
+    model = os.getenv("AI_MODEL", "deepseek-v4-flash-0731")
     base_url, _ = resolve_llm_base_url(model)
     client = OpenAI(api_key=api_key, base_url=base_url, timeout=resolve_llm_timeout())
 
@@ -607,7 +607,7 @@ async def parse_knowledge(req: ParseKnowledgeRequest):
 
 def _llm_health_payload() -> dict[str, Any]:
     api_key = (os.getenv("AI_API_KEY") or "").strip()
-    model = (os.getenv("AI_MODEL") or "qwen-turbo").strip()
+    model = (os.getenv("AI_MODEL") or "deepseek-v4-flash-0731").strip()
     base_url, normalize_reason = resolve_llm_base_url(model)
     return {
         "configured": bool(api_key),
@@ -1316,8 +1316,12 @@ async def export_ppt_bytes(req: ExportPPTRequest):
     try:
         buf = exporter.export_to_bytes(req.nodes, req.course_name, req.template_id)
         from fastapi.responses import StreamingResponse
+        _raw = req.course_name or "课件"
+        _safe = "".join(c if (c.isascii() and (c.isalnum() or c in " _-")) else "_" for c in _raw).strip("_ ") or "kejian"
+        import urllib.parse as _up
+        _disp = 'attachment; filename="%s.pptx"; filename*=UTF-8''%s' % (_safe, _up.quote(_raw + ".pptx"))
         return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                 headers={"Content-Disposition": f"attachment; filename={req.course_name}.pptx"})
+                                 headers={"Content-Disposition": _disp})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PPTX 导出失败: {str(e)}")
 
@@ -1339,10 +1343,48 @@ async def export_doc_bytes(req: ExportPPTRequest):
     try:
         buf = exporter.export_to_bytes(req.nodes, req.course_name)
         from fastapi.responses import StreamingResponse
+        _raw_d = req.course_name or "课件"
+        _safe_d = "".join(c if (c.isascii() and (c.isalnum() or c in " _-")) else "_" for c in _raw).strip("_ ") or "kejian"
+        import urllib.parse as _up
+        _disp_d = 'attachment; filename="%s.docx"; filename*=UTF-8''%s' % (_safe, _up.quote(_raw + ".docx"))
         return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                 headers={"Content-Disposition": f"attachment; filename={req.course_name}.docx"})
+                                 headers={"Content-Disposition": _disp})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DOCX 导出失败: {str(e)}")
+
+
+class GenScriptModifyRequest(BaseModel):
+    node_id: str
+    title: str = ""
+    script: str
+    message: str
+    course_name: str = "课件"
+
+
+@app.post("/gen/content/modify-script")
+async def modify_content_script(req: GenScriptModifyRequest):
+    """只改当前节点讲稿；不重新生成大纲、页面或其他节点（讲稿 AI 编辑）。"""
+    if not req.node_id.strip() or not req.script.strip() or not req.message.strip():
+        raise HTTPException(status_code=400, detail="node_id、script 和 message 不能为空")
+
+    from ai_engine.core.llm import LLMClient
+
+    system = (
+        "你是教师讲稿编辑助手。严格按教师的修改指令改写当前节点讲稿，"
+        "保持原有事实、知识范围和教学口吻；不要添加未经证实的知识。"
+        "只输出修改后的讲稿正文，不输出说明、标题、Markdown 代码块或 JSON。"
+    )
+    user = (
+        f"课程：{req.course_name}\n节点：{req.title}\n"
+        f"原讲稿：\n{req.script}\n\n教师指令：\n{req.message}"
+    )
+    try:
+        result = await asyncio.to_thread(LLMClient(max_attempts=1).chat, system, user)
+    except Exception as exc:
+        raise _llm_endpoint_error(exc, "讲稿修改失败") from exc
+    if result.used_fallback or not result.content.strip():
+        raise HTTPException(status_code=503, detail="AI 未返回有效讲稿，原稿未修改")
+    return {"node_id": req.node_id, "script": result.content.strip(), "used_fallback": False}
 
 
 @app.post("/gen/interactive")
@@ -2612,10 +2654,16 @@ async def export_download(job_id: str, extension: str):
     title = str(meta.get("courseware_title") or "课件")
     safe_title = "".join("_" if ch in '\\/:*?\"<>|' else ch for ch in title).strip(" .") or "课件"
     version = int(meta.get("version") or job.version or 1)
+    ascii_title = "".join(c if ord(c) < 128 else "_" for c in title).strip(" ._") or "kejian"
+    import urllib.parse as _up
+    ext = extension.lower()
+    cd = 'attachment; filename="%s_v%s.%s"; filename*=UTF-8''%s' % (
+        ascii_title, version, ext, _up.quote("%s_v%s.%s" % (title, version, ext)))
     return FileResponse(
         path,
-        media_type=media_types[extension.lower()],
-        filename=f"{safe_title}_v{version}.{extension.lower()}",
+        media_type=media_types[ext],
+        filename=f"{ascii_title}_v{version}.{ext}",
+        headers={"Content-Disposition": cd},
     )
 
 

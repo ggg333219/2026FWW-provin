@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -710,34 +711,42 @@ func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, in
 	if err != nil {
 		return nil, err
 	}
+	// 封面/目录/总结的“标题改成……”是确定性字段编辑，不需要启动整页
+	// LLM 重生成，避免为了改一个标题等待局部生成超时。
+	updatedNodes, directModifiedIDs, directTitleEdit := applyDirectSpecialPageTitle(instruction, intent, updatedNodes)
+	if directTitleEdit {
+		modifiedIDs = directModifiedIDs
+	}
 
 	// 4) 内容类动作（simplify/expand/rewrite）→ B6 局部重生成
-	switch intent.Action {
-	case "simplify", "expand", "rewrite":
-		// CourseName 与 EvidenceRefs 都必须显式带上：Python 侧靠它们决定
-		// 「基于哪份材料改」。此前只传 nodes，局部修改等于凭空重写，
-		// 与 S3 大纲/内容生成走 RAG 的行为不一致。
-		resp, err := s.aiClient.GenerateContent(ctx, GenContentRequest{
-			Nodes:             updatedNodes,
-			Mode:              "partial",
-			CourseName:        project.Title,
-			TargetNodeIDs:     intent.TargetIDs,
-			ModifyAction:      intent.Action,
-			ModifyConstraints: intent.Constraints,
-			EvidenceRefs:      s.targetEvidenceRefs(ctx, projectID, intent.TargetIDs),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("局部重生成失败: %w", err)
+	if !directTitleEdit {
+		switch intent.Action {
+		case "simplify", "expand", "rewrite":
+			// CourseName 与 EvidenceRefs 都必须显式带上：Python 侧靠它们决定
+			// 「基于哪份材料改」。此前只传 nodes，局部修改等于凭空重写，
+			// 与 S3 大纲/内容生成走 RAG 的行为不一致。
+			resp, err := s.aiClient.GenerateContent(ctx, GenContentRequest{
+				Nodes:             updatedNodes,
+				Mode:              "partial",
+				CourseName:        project.Title,
+				TargetNodeIDs:     intent.TargetIDs,
+				ModifyAction:      intent.Action,
+				ModifyConstraints: intent.Constraints,
+				EvidenceRefs:      s.targetEvidenceRefs(ctx, projectID, intent.TargetIDs),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("局部重生成失败: %w", err)
+			}
+			partial, err := s.waitContentResult(ctx, resp)
+			if err != nil {
+				return nil, fmt.Errorf("局部重生成失败: %w", err)
+			}
+			updatedNodes = mergePartialResult(updatedNodes, partial, intent.TargetIDs)
+			if intent.Action == "expand" && !hasVisibleTargetChange(nodes, updatedNodes, intent.TargetIDs) {
+				return nil, fmt.Errorf("AI 引擎没有生成可见的课件内容，请重试或明确指定要添加的内容")
+			}
+			modifiedIDs = intent.TargetIDs
 		}
-		partial, err := s.waitContentResult(ctx, resp)
-		if err != nil {
-			return nil, fmt.Errorf("局部重生成失败: %w", err)
-		}
-		updatedNodes = mergePartialResult(updatedNodes, partial, intent.TargetIDs)
-		if intent.Action == "expand" && !hasVisibleTargetChange(nodes, updatedNodes, intent.TargetIDs) {
-			return nil, fmt.Errorf("AI 引擎没有生成可见的课件内容，请重试或明确指定要添加的内容")
-		}
-		modifiedIDs = intent.TargetIDs
 	}
 	if wantsRemoveTeachingText(instruction, intent.Constraints) {
 		updatedNodes = clearTeachingText(updatedNodes, intent.TargetIDs)
@@ -798,6 +807,37 @@ func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, in
 		ModifiedElementIDs: append([]string(nil), intent.TargetElementIDs...),
 		RiskLevel:          intent.RiskLevel,
 	}, nil
+}
+
+var explicitSpecialTitlePattern = regexp.MustCompile(`(?i)(?:title|标题|標題)\s*(?:换成|改成|改为|换为|设置为|设为|to)\s*(.+)$`)
+
+func applyDirectSpecialPageTitle(instruction string, intent ModifyIntent, nodes []TeachingNodeItem) ([]TeachingNodeItem, []string, bool) {
+	match := explicitSpecialTitlePattern.FindStringSubmatch(strings.TrimSpace(instruction))
+	if len(match) != 2 || len(intent.TargetIDs) == 0 {
+		return nodes, nil, false
+	}
+	title := strings.Trim(strings.TrimSpace(match[1]), " \t\r\n\"'“”‘’。.!！?？")
+	if title == "" {
+		return nodes, nil, false
+	}
+	targets := make(map[string]struct{}, len(intent.TargetIDs))
+	for _, id := range intent.TargetIDs {
+		targets[strings.TrimSpace(id)] = struct{}{}
+	}
+	updated := append([]TeachingNodeItem(nil), nodes...)
+	modified := make([]string, 0, len(intent.TargetIDs))
+	for index := range updated {
+		if _, ok := targets[updated[index].NodeID]; !ok {
+			continue
+		}
+		kind := strings.ToLower(strings.TrimSpace(updated[index].NodeType))
+		if kind != "cover" && kind != "agenda" && kind != "summary" && kind != "toc" && kind != "directory" {
+			continue
+		}
+		updated[index].Title = title
+		modified = append(modified, updated[index].NodeID)
+	}
+	return updated, modified, len(modified) > 0
 }
 
 func hasVisibleTargetChange(before, after []TeachingNodeItem, targetIDs []string) bool {

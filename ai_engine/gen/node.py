@@ -364,6 +364,12 @@ class NodeGenerator:
                 # 局部修改时多要一个 summary：它是幻灯片正文（page_spec.body_paragraphs
                 # 优先读 content，其次 summary），不给就改不动页面上的正文段落。
                 system_prompt += _SLIDE_REVISION_CLAUSE
+                node_kind = str(node.get("node_type") or node.get("type") or "content").strip().lower()
+                if node_kind in {"cover", "title", "title_slide", "agenda", "toc", "directory", "summary", "conclusion", "recap", "目录"}:
+                    system_prompt += (
+                        "\n这是封面、目录或总结页的特殊修改：允许返回新的 title、summary、content、key_points，"
+                        "这些字段会直接显示在 PPT 页面上；不要只改讲稿 script。\n"
+                    )
             user_prompt = (
                 f"课程名: {course_name or '未提供'}\n"
                 f"节点标题: {title}\n摘要: {summary}\n"
@@ -411,6 +417,12 @@ class NodeGenerator:
                 # 只在局部修改路径上多带这一个键：新建/批量路径的返回形状保持不变。
                 # 空串不写回（由 partial_content 按「有值才覆盖」处理）。
                 output["summary"] = self._clean_text(result.get("summary"))
+                node_kind = str(node.get("node_type") or node.get("type") or "content").strip().lower()
+                if node_kind in {"cover", "title", "title_slide", "agenda", "toc", "directory", "summary", "conclusion", "recap", "目录"}:
+                    output["title"] = self._clean_text(result.get("title")) or title
+                    output["content"] = self._clean_text(result.get("content"))
+                    if isinstance(result.get("key_points"), list):
+                        output["key_points"] = result.get("key_points")
             return output
         except Exception:
             return fallback

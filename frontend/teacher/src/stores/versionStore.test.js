@@ -140,7 +140,7 @@ describe('versionStore S4 导出闭环（Mock）', () => {
     await store.startExport('stale_generation', 'pptx', 2, '高等数学', [{ node_id: 'node_001' }], 'project_1')
 
     expect(create).toHaveBeenCalledWith(
-      'stale_generation', 'pptx', 2, '高等数学', [{ node_id: 'node_001' }], 'project_1', {}
+      'stale_generation', 'pptx', 2, '高等数学', [{ node_id: 'node_001' }], 'project_1', {}, {}
     )
   })
 
@@ -154,7 +154,21 @@ describe('versionStore S4 导出闭环（Mock）', () => {
     await store.startExport('project_1', 'docx', 3, '图搜索', [{ node_id: 'n1' }], 'project_1', instructions)
 
     expect(create).toHaveBeenCalledWith(
-      'project_1', 'docx', 3, '图搜索', [{ node_id: 'n1' }], 'project_1', instructions
+      'project_1', 'docx', 3, '图搜索', [{ node_id: 'n1' }], 'project_1', instructions, {}
+    )
+  })
+
+  it('selected project version forwards its saved presentation to export', async () => {
+    const store = useVersionStore()
+    const presentation = { font_family: 'serif', layout: 'visual', density: 'minimal' }
+    const create = vi.spyOn(teacherV1Api.version, 'exportCreate').mockResolvedValue({
+      data: { job_id: 'exp_style', status: 'done' }
+    })
+
+    await store.startExport('project_1', 'pptx', 4, '排序算法', [{ node_id: 'n1' }], 'project_1', {}, presentation)
+
+    expect(create).toHaveBeenCalledWith(
+      'project_1', 'pptx', 4, '排序算法', [{ node_id: 'n1' }], 'project_1', {}, presentation
     )
   })
 

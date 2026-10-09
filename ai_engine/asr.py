@@ -4,7 +4,7 @@
 改为前端 MediaRecorder 录音 → 上传本端点 → 服务端转写 → 返回文本。
 
 Provider 链（按序尝试，首个可用者生效）：
-  1. dashscope   — 配置了 DASHSCOPE_API_KEY / AI_API_KEY 时走阿里云 Paraformer
+  1. dashscope   — 配置了 DASHSCOPE_API_KEY 时走阿里云 Paraformer
                    （短音频同步识别，与 LLM 共用同一把 key）
   2. local_whisper — 环境开启 ASR_ALLOW_LOCAL_WHISPER=1 且安装了 faster-whisper 时，
                    用本地模型转写（默认 tiny int8，CPU 可跑；模型经 HF_ENDPOINT 镜像下载）
@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
+import subprocess
 import threading
 import time
 from typing import Any, Optional
@@ -43,7 +45,10 @@ def _env(key: str, default: str = "") -> str:
 
 
 def _dashscope_api_key() -> str:
-    return _env("DASHSCOPE_API_KEY") or _env("AI_API_KEY")
+    # AI_API_KEY belongs to the LLM gateway and may not be an Alibaba Cloud
+    # key.  Do not silently send it to DashScope: that produces an opaque
+    # Unauthorized response and makes the frontend look like networking failed.
+    return _env("DASHSCOPE_API_KEY")
 
 
 def local_whisper_enabled() -> bool:
@@ -89,23 +94,71 @@ def _transcribe_dashscope(data: bytes, content_type: str, language: str) -> dict
 
     started = time.monotonic()
     tmp_path = ""
+    converted_path = ""
     try:
         with tempfile.NamedTemporaryFile(prefix="asr_", suffix=f".{ext}", delete=False) as tmp:
             tmp.write(data)
             tmp_path = tmp.name
         lang_code = "zh" if language.startswith("zh") else "en"
-        response = Recognition.call(
+        recognition_path = tmp_path
+        recognition_format = ext if ext != "m4a" else "mp4"
+        # Browser MediaRecorder normally produces WebM/Opus.  The synchronous
+        # DashScope Recognition API rejects that container, so normalize it to
+        # mono 16 kHz PCM WAV before submitting the file.
+        if ext in {"webm", "ogg", "m4a"}:
+            ffmpeg = shutil.which("ffmpeg")
+            if not ffmpeg:
+                try:
+                    import imageio_ffmpeg
+                    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+                except Exception:
+                    ffmpeg = None
+            if not ffmpeg:
+                raise ASRError(
+                    "ASR_FORMAT_UNSUPPORTED",
+                    "浏览器录音格式需要 FFmpeg 转换，请安装 FFmpeg 后重试",
+                    501,
+                )
+            converted_path = f"{tmp_path}.wav"
+            try:
+                subprocess.run(
+                    [ffmpeg, "-y", "-i", tmp_path, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", converted_path],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ASRError("ASR_AUDIO_CONVERT_FAILED", "音频格式转换超时", 502) from exc
+            except subprocess.CalledProcessError as exc:
+                detail = exc.stderr.decode(errors="replace")[-300:].strip()
+                raise ASRError("ASR_AUDIO_CONVERT_FAILED", f"音频格式转换失败: {detail}", 502) from exc
+            recognition_path = converted_path
+            recognition_format = "wav"
+        # dashscope 1.27.x exposes call() as an instance method.  Older
+        # examples used Recognition.call(...) as if it were a class method,
+        # which raises ``missing 1 required positional argument: self``.
+        recognizer = Recognition(
             model="paraformer-realtime-v2",
-            file_url=None,
-            file=tmp_path,
-            format=ext if ext != "m4a" else "mp4",
+            callback=None,
+            format=recognition_format,
             sample_rate=16000,
             language_hints=[lang_code],
         )
+        response = recognizer.call(recognition_path)
+    except ASRError:
+        raise
+    except Exception as exc:
+        raise ASRError("ASR_PROVIDER_FAILED", f"dashscope 识别失败: {exc}", 502) from exc
     finally:
         if tmp_path:
             try:
                 os.unlink(tmp_path)
+            except OSError:
+                pass
+        if converted_path:
+            try:
+                os.unlink(converted_path)
             except OSError:
                 pass
 
@@ -117,9 +170,14 @@ def _transcribe_dashscope(data: bytes, content_type: str, language: str) -> dict
     text_parts: list[str] = []
     output = getattr(response, "output", None)
     if output:
-        # Recognition 同步调用直接返回 sentence 列表
-        for item in getattr(output, "sentence", None) or []:
-            text = str(getattr(item, "text", "") or "").strip()
+        # dashscope 1.27.x returns output as a dict, with sentence items also
+        # represented as dicts rather than objects.
+        sentence_items = output.get("sentence") if isinstance(output, dict) else getattr(output, "sentence", None)
+        if isinstance(sentence_items, dict):
+            sentence_items = [sentence_items]
+        for item in sentence_items or []:
+            text = item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")
+            text = str(text or "").strip()
             if text:
                 text_parts.append(text)
     text = "".join(text_parts).strip()

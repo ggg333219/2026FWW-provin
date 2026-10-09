@@ -92,7 +92,7 @@ services:
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile.api
+      dockerfile: Dockerfile.teacher
     container_name: teaching-test-backend
     environment:
       GIN_MODE: release

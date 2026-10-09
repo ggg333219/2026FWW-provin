@@ -6,7 +6,7 @@
 使用方式：
     from ai_engine.core import LLMClient
 
-    client = LLMClient(model="qwen-turbo", temperature=0.1)
+    client = LLMClient(model="deepseek-v4-flash-0731", temperature=0.1)
     response = client.chat("你是助教", "帮我写大纲")
     # -> "好的，以下是大纲..."
 

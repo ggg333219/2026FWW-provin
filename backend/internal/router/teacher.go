@@ -75,7 +75,7 @@ func RegisterTeacherRoutes(api *gin.RouterGroup,
 		// Specialized AI V1 for teachers
 		aiV1 := v1.Group("/ai")
 		{
-			aiV1.POST("/parse-knowledge", compatHandler.ParseKnowledgeV1)
+			aiV1.POST("/parse-knowledge", weakPointHandler.ParseKnowledge)
 		}
 
 		// ---- S2: 素材库（真实路由，替换前端 Mock 回退）----
@@ -242,6 +242,7 @@ func RegisterNewSkillRoutes(
 		content.POST("/content", contentHandler.Create)
 		content.GET("/content/status/:content_id", contentHandler.Status)
 		content.POST("/content/modify", contentHandler.Modify)
+		content.POST("/content/modify-script", contentHandler.ModifyScript)
 	}
 
 	// ---- S4: 版本管理 ----

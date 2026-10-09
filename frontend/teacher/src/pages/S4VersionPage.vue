@@ -93,6 +93,13 @@
                 </div>
 
                 <!-- 锁定 -->
+                <div v-if="projectStore.projectId && versionStore.currentVersionDetail" class="action-row fork-outline-row">
+                  <button class="btn btn-sm btn-primary" :disabled="versionStore.loading" @click="handleContinueFromLocked">
+                    基于当前版本编辑大纲
+                  </button>
+                  <span class="action-help">复制当前版本为新草稿，不重新生成整份大纲</span>
+                </div>
+
                 <div v-if="!projectStore.projectId" class="action-row">
                   <button
                     class="btn btn-sm btn-warn"
@@ -160,7 +167,11 @@
               :export-files="versionStore.exportFiles"
               :export-error="versionStore.exportError"
               :export-quality-report="versionStore.exportQualityReport"
+              :export-lesson-plan-source="versionStore.exportLessonPlanSource"
+              :export-lesson-plan-fallback-reason="versionStore.exportLessonPlanFallbackReason"
+              :export-lesson-plan-filled-sections="versionStore.exportLessonPlanFilledSections"
               :loading="versionStore.loading"
+              :nodes="exportVersionNodes"
               :course-title="courseTitle"
               :version-label="currentVersionLabel"
               @start-export="handleStartExport"
@@ -217,6 +228,9 @@ import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
 import AppShell from '../components/layout/AppShell.vue'
 import S4VersionExportCenter from '../components/teacher/S4VersionExportCenter.vue'
 import { writeResumeDraft } from '../utils/coursewareDraft'
+import { withOutlineInteractivePlans } from '../utils/interactiveExport'
+import { outlineFromVersion } from '../utils/versionOutline'
+import { teacherV1Api } from '../services/v1'
 
 const versionStore = useVersionStore()
 const generationStore = useGenerationStore()
@@ -253,6 +267,24 @@ onMounted(() => {
 })
 const courseTitle = computed(() => projectStore.project?.title || intentStore.intentSummary?.topic || '未命名课件')
 const exportGenId = computed(() => versionStore.genId || (projectStore.projectId && versionStore.currentVersionDetail ? projectStore.projectId : ''))
+const exportVersionNodes = computed(() => {
+  const nodes = withOutlineInteractivePlans(
+    versionStore.currentVersionDetail?.nodes || [],
+    versionStore.currentVersionDetail?.outline?.nodes || [],
+  )
+  const presentation = versionStore.currentVersionDetail?.presentation || {}
+  if (!nodes.length || !Object.keys(presentation).length) return nodes
+  // Keep old Go gateways compatible: they already forward node metadata even
+  // when they do not yet understand the separate presentation request field.
+  const first = nodes[0]
+  return [{
+    ...first,
+    metadata: {
+      ...(first.metadata || {}),
+      presentation: { ...(first.metadata?.presentation || {}), ...presentation },
+    },
+  }, ...nodes.slice(1)]
+})
 const currentVersionLabel = computed(() => `v${versionStore.currentVersionDetail?.version || versionStore.versions?.[0]?.version || 1}`)
 const rollbackTarget = ref(null)
 const changeType = ref('update_node')
@@ -322,12 +354,13 @@ async function handleRollback() {
       outline: targetDetail?.outline,
       pageBindings: data.page_bindings || targetDetail?.pageBindings || [],
       presentation: data.presentation || targetDetail?.presentation || {},
+      generationInstructionSet: targetDetail?.generationInstructionSet || {},
     })
     await projectStore.updateStep('s3_studio').catch(() => {})
     rollbackTarget.value = null
     await router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: targetVersion, phase: 'outline' } })
-  } catch {
-    // 错误已在 store 中设置
+  } catch (error) {
+    versionStore.error = error?.message || '基于所选版本创建分支失败'
   }
 }
 
@@ -364,58 +397,76 @@ function handleStartExport(format) {
     format,
     versionStore.currentVersionDetail?.version || null,
     courseTitle.value,
-    versionStore.currentVersionDetail?.nodes || [],
+    exportVersionNodes.value,
     projectStore.projectId,
     versionStore.currentVersionDetail?.generationInstructionSet || projectStore.draft?.generation_instruction_set || {},
+    versionStore.currentVersionDetail?.presentation || {},
   )
 }
 
 async function handleContinueFromLocked() {
   const version = versionStore.currentVersionDetail?.version
   if (!version || (!versionStore.genId && !projectStore.projectId)) return
-  // 在创建分支前先保存当前锁定版本的大纲快照。回滚接口刷新版本详情后，
-  // 新草稿的详情可能只返回内容节点，不能再依赖刷新后的 currentVersionDetail。
-  const sourceOutline = versionStore.currentVersionDetail?.outline || projectStore.draft?.outline
-  const nodes = versionStore.currentVersionDetail?.nodes || []
-  const result = projectStore.projectId
-    ? await versionStore.rollbackProject(projectStore.projectId, version)
-    : await versionStore.rollbackTo(versionStore.genId, version)
-  const data = result?.data || result || {}
-  const newVersion = Number(data.new_draft_version_no || data.current_version || data.new_version_no || version + 1)
-  generationStore.setLastGenId(versionStore.genId)
-  const restoredNodes = data.nodes || nodes
-  generationStore.setNodes(restoredNodes)
-  await persistRollbackDraft({
-    nodes: restoredNodes,
-    outline: sourceOutline,
-    pageBindings: data.page_bindings || versionStore.currentVersionDetail?.pageBindings || [],
-    presentation: data.presentation || versionStore.currentVersionDetail?.presentation || {},
-  })
-  await projectStore.updateStep('s3_studio').catch(() => {})
-  router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: version, editable_outline: '1', phase: 'outline' } })
+  try {
+    // rollbackProject 会刷新 currentVersionDetail；先固定教师选中的版本。
+    const selected = versionStore.currentVersionDetail
+    const result = projectStore.projectId
+      ? await versionStore.rollbackProject(projectStore.projectId, version)
+      : await versionStore.rollbackTo(versionStore.genId, version)
+    const data = result?.data || result || {}
+    const newVersion = Number(data.new_draft_version_no || data.current_version || data.new_version_no || version + 1)
+    generationStore.setLastGenId(versionStore.genId)
+    const restoredNodes = data.nodes || selected.nodes || []
+    generationStore.setNodes(restoredNodes)
+    await persistRollbackDraft({
+      nodes: restoredNodes,
+      outline: selected.outline,
+      pageBindings: data.page_bindings || selected.pageBindings || [],
+      presentation: data.presentation || selected.presentation || {},
+      generationInstructionSet: selected.generationInstructionSet || {},
+    })
+    await projectStore.updateStep('s3_studio').catch(() => {})
+    await router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: version, editable_outline: '1', phase: 'outline' } })
+  } catch (error) {
+    versionStore.error = error?.message || '基于当前版本创建分支失败'
+  }
 }
 
-async function persistRollbackDraft({ nodes, outline, pageBindings, presentation }) {
+async function persistRollbackDraft({ nodes, outline, pageBindings, presentation, generationInstructionSet }) {
   if (!projectStore.projectId) return
+  const source = outlineFromVersion(outline, nodes, courseTitle.value)
+  if (!source.nodes.length) throw new Error('所选版本没有可复用的大纲或内容节点，无法创建编辑分支')
+  const response = await teacherV1Api.outline.createFromNodes({
+    session_id: source.session_id || intentStore.sessionId || projectStore.projectId,
+    intent_id: source.intent_id || intentStore.intentId || '',
+    course_name: source.title,
+    nodes: source.nodes,
+  })
+  const created = response?.data || response || {}
+  if (!created.outline_id) throw new Error('从版本快照建立大纲草稿失败')
   const current = projectStore.draft && typeof projectStore.draft === 'object' ? projectStore.draft : {}
   const restored = {
     ...current,
-    outline: outline && typeof outline === 'object' ? {
-      ...outline,
+    outline: {
+      ...source,
+      ...created,
       status: 'draft',
       confirmed_at: null,
-      forked_from_version: Number(outline.outline_version || 0),
       editable_after_rollback: true,
-    } : current.outline,
+    },
     generation: {
       ...(current.generation || {}),
-      generation_id: versionStore.genId,
+      generation_id: versionStore.genId || generationStore.lastGenId || '',
       nodes: nodes || [],
     },
+    // 删除记录只属于上一份正在编辑的草稿，不能带到新选中的历史版本。
+    deleted_outline_node_ids: [],
+    needs_version_save: false,
     page_bindings: pageBindings || [],
-    presentation: { ...(current.presentation || {}), ...(presentation || {}) },
+    presentation: presentation || current.presentation || {},
+    generation_instruction_set: generationInstructionSet || current.generation_instruction_set || {},
   }
-  await projectStore.saveNow(restored).catch(() => {})
+  await projectStore.saveNow(restored)
   writeResumeDraft(String(route.query.project_id || projectStore.projectId || ''), restored)
 }
 
@@ -430,6 +481,9 @@ function formatTime(iso) {
 <style scoped>
 .s4-page {
   padding: 20px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   min-height: calc(100vh - 140px);
   background:
     radial-gradient(circle at 86% -15%, rgba(175, 221, 203, .2), transparent 30%),
@@ -478,7 +532,14 @@ function formatTime(iso) {
 .btn-icon:hover { background: #f1f5f9; }
 
 /* 三栏布局 */
-.s4-layout { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+.s4-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, .8fr) minmax(0, 1.25fr) minmax(240px, .9fr);
+  gap: 16px;
+  margin-bottom: 20px;
+  align-items: start;
+}
+.s4-layout > section { min-width: 0; }
 @media (max-width: 1200px) {
   .s4-layout { grid-template-columns: 1fr; }
 }
@@ -506,10 +567,11 @@ function formatTime(iso) {
 
 /* 操作面板 */
 .action-group { display: flex; flex-direction: column; gap: 10px; }
-.action-row { display: flex; gap: 8px; align-items: center; }
+.action-row { display: flex; gap: 8px; align-items: center; min-width: 0; flex-wrap: wrap; }
+.action-help { color: #71847d; font-size: 12px; line-height: 1.4; }
 .action-row label { font-size: 13px; color: #607a71; min-width: 80px; }
-.action-select { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; background: #fff; flex: 1; }
-.action-input { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; flex: 2; }
+.action-select { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; background: #fff; flex: 1 1 160px; min-width: 0; max-width: 100%; }
+.action-input { padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; flex: 2 1 180px; min-width: 0; max-width: 100%; }
 .action-divider { height: 1px; background: #e2e8f0; margin: 6px 0; }
 
 /* 修改指令迷你列表 */

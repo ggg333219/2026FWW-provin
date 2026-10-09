@@ -108,7 +108,7 @@
                 v-if="outlineStore.canEdit"
                 v-model="node.node_type"
                 class="node-type-select"
-                @change="outlineStore.updateNode(node.node_id, { node_type: node.node_type })"
+                @change="handleNodeTypeChange(node)"
               >
                 <option value="content">📖 知识讲解</option>
                 <option value="section">📂 章节标题</option>
@@ -178,6 +178,16 @@
               <details>
                 <summary class="plan-toggle">🎯 互动规划</summary>
                 <div class="plan-fields">
+                  <label>
+                    互动类型
+                    <select
+                      v-model="node.interactive_plan.kind"
+                      @change="outlineStore.updateNode(node.node_id, { interactive_plan: { ...node.interactive_plan } })"
+                    >
+                      <option value="quiz">课堂测验</option>
+                      <option value="flashcard">知识翻卡</option>
+                    </select>
+                  </label>
                   <label>
                     时长（分钟）
                     <input
@@ -302,6 +312,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useOutlineStore } from '../../stores/outlineStore'
 import OutlineRevisionDialog from './OutlineRevisionDialog.vue'
+import { shouldAutoGenerateOutline } from '../../utils/versionOutline'
 
 const props = defineProps({
   /** 所属 session_id（从 S1 透传） */
@@ -312,6 +323,8 @@ const props = defineProps({
   intentSummary: { type: Object, default: null },
   /** 是否自动尝试从 localStorage 恢复大纲 */
   autoRestore: { type: Boolean, default: true },
+  /** 历史版本分支必须等待快照恢复，禁止空状态触发 AI 重生成。 */
+  allowAutoGenerate: { type: Boolean, default: true },
   /** S1 意图自动检索形成的整份课件证据包 */
   evidencePacket: { type: Object, default: null },
   /** 等待父级完成自动检索后再创建大纲，避免先生成后补证据 */
@@ -321,7 +334,7 @@ const props = defineProps({
   pageGenerationMode: { type: String, default: 'page_incremental' }
 })
 
-const emit = defineEmits(['confirm-complete', 'outline-created', 'error'])
+const emit = defineEmits(['confirm-complete', 'outline-created', 'node-deleted', 'error'])
 
 const outlineStore = useOutlineStore()
 const route = useRoute()
@@ -367,9 +380,9 @@ onMounted(async () => {
 
 // 若无大纲且有 intent，自动创建
 watch(
-  () => [outlineStore.outline_id, outlineStore.nodes.length, props.ready],
-  ([oid, nc, ready]) => {
-    if (ready && !oid && nc === 0 && props.intentSummary) {
+  () => [outlineStore.outline_id, outlineStore.nodes.length, props.ready, props.allowAutoGenerate],
+  ([oid, nc, ready, allowAutoGenerate]) => {
+    if (shouldAutoGenerateOutline({ allowAutoGenerate, ready, outlineId: oid, nodeCount: nc, intentSummary: props.intentSummary })) {
       handleGenerateOutline()
     }
   },
@@ -448,12 +461,21 @@ function handleAddNode() {
   outlineStore.addNode(lastNodeId)
 }
 
+function handleNodeTypeChange(node) {
+  if (node.node_type === 'interactive' || node.node_type === 'quiz') {
+    outlineStore.ensureInteractivePlan(node.node_id, node.interactive_plan?.kind || 'quiz')
+  } else {
+    outlineStore.updateNode(node.node_id, { node_type: node.node_type })
+  }
+}
+
 function handleDeleteNode(nodeId) {
   if (outlineStore.nodes.length <= 1) {
     emit('error', '大纲至少需要一个节点')
     return
   }
   outlineStore.removeNode(nodeId)
+  emit('node-deleted', nodeId)
 }
 
 function handleDragStart(event, nodeId) {

@@ -23,7 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from ai_engine.gen.preview import PreviewRenderer  # noqa: E402
 
-OUT_PATH = PROJECT_ROOT / "docs" / "预览验证" / "sample_preview.html"
+OUT_PATH = PROJECT_ROOT / "output" / "verification" / "preview" / "sample_preview.html"
 
 SAMPLE_NODES = [
     # 1. 封面
@@ -136,10 +136,11 @@ def main() -> int:
 
     # a2. 局部刷新的锚：每页都带 data-node-id，且互不重复
     page_ids = re.findall(r'<div class="slide [^"]*" data-node-id="([^"]*)"', html_out)
+    expected_ids = [n["node_id"] for n in SAMPLE_NODES] + ["__auto_summary__"]
     all_ok &= check("每页都有 data-node-id（局部刷新的锚）",
-                    len(page_ids) == len(SAMPLE_NODES) and all(page_ids))
+                    len(page_ids) == html_out.count('<div class="slide ') and all(page_ids))
     all_ok &= check("data-node-id 与节点一一对应且不重复",
-                    page_ids == [n["node_id"] for n in SAMPLE_NODES])
+                    page_ids == expected_ids and len(page_ids) == len(set(page_ids)))
 
     # b. key_points 视觉高亮（断言渲染产物而非 CSS 定义）
     all_ok &= check("key_points 高亮文本 class（kp-highlight）",

@@ -24,7 +24,7 @@ if str(_ROOT) not in sys.path:
 from ai_engine.gen.export_ppt import ExportPPTConfig, PPTExporter  # noqa: E402
 from ai_engine.gen.preview import PreviewRenderer  # noqa: E402
 
-OUT_DIR = _ROOT / "docs" / "预览验证"
+OUT_DIR = _ROOT / "output" / "verification" / "figures"
 COURSE = "图示渲染样本"
 
 

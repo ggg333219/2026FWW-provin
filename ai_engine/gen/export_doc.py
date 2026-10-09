@@ -19,6 +19,7 @@ from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.style import WD_STYLE_TYPE
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 
@@ -356,20 +357,45 @@ class LessonPlanDOCExporter:
         self._add_section(doc, "四、教学过程")
         self._add_process_table(doc, p.get("teaching_process") or [])
 
+        # S3 已生成的教师讲稿作为教学过程的逐页补充，保留原文；长文本放在
+        # 表格外，避免五列表格把讲稿压成难以阅读的窄列。
+        scripts = p.get("teacher_scripts") or []
+        if scripts:
+            heading = doc.add_paragraph()
+            heading.paragraph_format.space_before = Pt(8)
+            heading.paragraph_format.space_after = Pt(4)
+            heading.paragraph_format.keep_with_next = True
+            _set_run(heading.add_run("教师讲稿（按课件节点）"), size=12, bold=True)
+            for index, item in enumerate(scripts, start=1):
+                if not isinstance(item, dict):
+                    continue
+                script = str(item.get("script") or "").strip()
+                if not script:
+                    continue
+                title = str(item.get("title") or f"第{index}页").strip()
+                label = doc.add_paragraph()
+                label.paragraph_format.space_before = Pt(5)
+                label.paragraph_format.keep_with_next = True
+                _set_run(label.add_run(f"{index}. {title}"), size=11, bold=True)
+                body = doc.add_paragraph()
+                body.paragraph_format.space_after = Pt(5)
+                _set_run(body.add_run(script), size=11)
+
         self._add_section(doc, "五、课堂活动设计")
         activities = p.get("classroom_activities") or []
-        activity_lines = [
-            (f"{i}. {a.get('name') or '课堂活动'}"
-             + (f"：{a.get('description')}" if str(a.get('description') or '').strip() else ""))
-            for i, a in enumerate(activities, start=1) if isinstance(a, dict)
-        ]
-        activity_lines += [
-            f"{len(activity_lines) + 1}. {a}"
-            for a in _as_str_list(activities)
-        ]
+        activity_lines = []
+        for activity in activities:
+            if isinstance(activity, dict):
+                name = str(activity.get("name") or "课堂活动").strip()
+                description = str(activity.get("description") or "").strip()
+                activity_lines.append(
+                    f"{name}：{description}" if description else name
+                )
+            elif str(activity).strip():
+                activity_lines.append(str(activity).strip())
         if activity_lines:
-            for line in activity_lines:
-                _set_run(doc.add_paragraph().add_run(line), size=12)
+            for index, line in enumerate(activity_lines, start=1):
+                _set_run(doc.add_paragraph().add_run(f"{index}. {line}"), size=12)
         else:
             _set_run(doc.add_paragraph().add_run("结合课堂互动环节灵活组织。"), size=12)
 
@@ -384,9 +410,11 @@ class LessonPlanDOCExporter:
         board_design = str(p.get("board_design") or "").strip()
         if board_design:
             self._add_section(doc, "七、板书设计")
-            for line in board_design.splitlines():
-                if line.strip():
-                    _set_run(doc.add_paragraph().add_run(line.strip()), size=12)
+            board_lines = [line.strip() for line in board_design.splitlines() if line.strip()]
+            if board_lines:
+                board_para = doc.add_paragraph()
+                board_para.paragraph_format.keep_together = True
+                _set_run(board_para.add_run("\n".join(board_lines)), size=12)
 
         return doc
 
@@ -395,6 +423,7 @@ class LessonPlanDOCExporter:
         para = doc.add_paragraph()
         para.paragraph_format.space_before = Pt(8)
         para.paragraph_format.space_after = Pt(4)
+        para.paragraph_format.keep_with_next = True
         _set_run(para.add_run(text), size=14, bold=True)
 
     def _add_process_table(self, doc: Document, phases: list[Any]) -> None:
@@ -411,6 +440,7 @@ class LessonPlanDOCExporter:
 
         table = doc.add_table(rows=1 + len(rows), cols=len(headers))
         table.style = "Table Grid"
+        self._repeat_table_header(table.rows[0])
         for c, header in enumerate(headers):
             cell = table.cell(0, c)
             cell.text = ""
@@ -427,6 +457,24 @@ class LessonPlanDOCExporter:
                 cell = table.cell(r, c)
                 cell.text = ""
                 _set_run(cell.paragraphs[0].add_run(val), size=10.5)
+
+            # Keep a teaching phase together when it can fit on a page. This
+            # prevents the first row from being split into an orphaned tail.
+            self._prevent_row_split(table.rows[r])
+
+    @staticmethod
+    def _repeat_table_header(row: Any) -> None:
+        tr_pr = row._tr.get_or_add_trPr()
+        tbl_header = OxmlElement("w:tblHeader")
+        tbl_header.set(qn("w:val"), "true")
+        tr_pr.append(tbl_header)
+
+    @staticmethod
+    def _prevent_row_split(row: Any) -> None:
+        tr_pr = row._tr.get_or_add_trPr()
+        cant_split = OxmlElement("w:cantSplit")
+        cant_split.set(qn("w:val"), "true")
+        tr_pr.append(cant_split)
 
 
 def _plan_as_mapping(plan: Any) -> dict[str, Any]:

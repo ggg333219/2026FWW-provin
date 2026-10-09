@@ -267,6 +267,23 @@ export const useOutlineStore = defineStore('outline', {
       this._persist()
     },
 
+    ensureInteractivePlan(nodeId, kind = 'quiz') {
+      const node = this.nodes.find((item) => item.node_id === nodeId)
+      if (!node) return null
+      const normalizedKind = ['quiz', 'flashcard'].includes(kind) ? kind : 'quiz'
+      node.interactive_plan = {
+        ...node.interactive_plan,
+        enabled: true,
+        kind: normalizedKind,
+        duration_minutes: Number(node.interactive_plan?.duration_minutes) || 5,
+        question_count: Number(node.interactive_plan?.question_count) || (normalizedKind === 'flashcard' ? 0 : 3),
+        auto_grading: normalizedKind === 'quiz',
+        delivery: node.interactive_plan?.delivery || 'html5_link',
+      }
+      this._persist()
+      return node.interactive_plan
+    },
+
     /** 交换两个节点的顺序（真换数组位置，再重排 order） */
     swapNodes(nodeIdA, nodeIdB) {
       if (!this.canReorder) return

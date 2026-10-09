@@ -16,7 +16,10 @@ import (
 
 const (
 	intentExtractRequestTimeout = 120 * time.Second
-	outlineRequestTimeout       = 120 * time.Second
+	outlineRequestTimeout       = 180 * time.Second
+	// 意图解析会先调用一次结构化 LLM。允许它完成一次慢请求，
+	// 但不把 AI Engine 的内部重试周期再叠加到 Go 网关上。
+	modifyIntentRequestTimeout = 180 * time.Second
 )
 
 // AIEngine 定义所有向后端 AI Engine 的调用契约。
@@ -63,6 +66,7 @@ type AIEngine interface {
 	// ---- P1: S3 大纲 → 内容生成（独立阶段）----
 	GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error)
 	ContentStatus(ctx context.Context, contentID string) (*GenContentStatusResponse, error)
+	ModifyContentScript(ctx context.Context, req GenScriptModifyRequest) (*GenScriptModifyResponse, error)
 
 	// ---- S4: 个性化 & 版本 & 导出 ----
 	GenerationModify(ctx context.Context, req GenerationModifyRequest) (*GenerationModifyResponse, error)
@@ -544,7 +548,7 @@ const (
 // OutlineInteractivePlan —— 大纲节点的互动规划（规范 §2.2）。仅声明规划，不承载题目。
 type OutlineInteractivePlan struct {
 	Enabled       bool   `json:"enabled"`
-	Kind          string `json:"kind"` // quiz | flashcard | poll | game
+	Kind          string `json:"kind"` // quiz | flashcard
 	DurationMin   int    `json:"duration_minutes"`
 	QuestionCount int    `json:"question_count,omitempty"`
 	AutoGrading   bool   `json:"auto_grading,omitempty"`
@@ -574,6 +578,8 @@ type OutlineGenerateRequest struct {
 	GenerationInstructionSet map[string]any  `json:"generation_instruction_set,omitempty"`
 	Markdown                 string          `json:"markdown,omitempty"`
 	CourseName               string          `json:"course_name,omitempty"`
+	// 版本分支可直接用已保存的节点创建草稿；提供时不得重新调用 AI 生成。
+	Nodes []OutlineNode `json:"nodes,omitempty"`
 }
 
 // OutlineGenerateResponse —— POST /gen/outline 响应（Python 返回裸 {"nodes": [...], "used_fallback": ...}）。
@@ -598,24 +604,32 @@ type OutlineReviseAIResponse struct {
 // TeachingNodeItem —— 引擎 TeachingNode 的 Go 镜像（字段=ai_engine/core/schema.py）。
 // 字段只增不删：node 由 S3 生成 → S4 版本快照 / 导出 / 前端渲染全链路共用本结构。
 type TeachingNodeItem struct {
-	NodeID               string         `json:"node_id"`
-	Title                string         `json:"title"`
-	NodeType             string         `json:"node_type,omitempty"` // 引擎枚举渲染类型（slide/section/quiz/cover/...）
-	Content              string         `json:"content"`             // 完整节点内容（markdown / html）
-	Summary              string         `json:"summary"`
-	PageRef              int            `json:"page_ref,omitempty"`
-	SourceChunkIDs       []string       `json:"source_chunk_ids"` // 引用证据 chunk 列表
-	CorePoints           []string       `json:"core_points"`
-	KeyPoints            []string       `json:"key_points"` // 与 core_points 等效（兼容主流 AI-PPT 规范）
-	Examples             []string       `json:"examples"`
-	KeyDifficulties      []string       `json:"key_difficulties"`
-	ExpectedOutcomes     []string       `json:"expected_outcomes"`
-	DurationMin          float64        `json:"estimated_duration_minutes"` // 单位统一为分钟
-	InteractiveQuestions []string       `json:"interactive_questions"`      // 与 questions 等效
+	NodeID           string   `json:"node_id"`
+	Title            string   `json:"title"`
+	NodeType         string   `json:"node_type,omitempty"` // 引擎枚举渲染类型（slide/section/quiz/cover/...）
+	Content          string   `json:"content"`             // 完整节点内容（markdown / html）
+	Summary          string   `json:"summary"`
+	PageRef          int      `json:"page_ref,omitempty"`
+	SourceChunkIDs   []string `json:"source_chunk_ids"` // 引用证据 chunk 列表
+	CorePoints       []string `json:"core_points"`
+	KeyPoints        []string `json:"key_points"` // 与 core_points 等效（兼容主流 AI-PPT 规范）
+	Examples         []string `json:"examples"`
+	KeyDifficulties  []string `json:"key_difficulties"`
+	ExpectedOutcomes []string `json:"expected_outcomes"`
+	DurationMin      float64  `json:"estimated_duration_minutes"` // 单位统一为分钟
+	// AI Engine 历史响应既可能返回字符串数组，也可能返回带题干/选项的对象数组；
+	// 使用 interface{} 保留两种合法形态，避免轮询 done 状态时整份响应解析失败。
+	InteractiveQuestions []any          `json:"interactive_questions"` // 与 questions 等效
 	CitationRefs         []string       `json:"citation_refs"`
 	NextNodeID           string         `json:"next_node_id,omitempty"`
 	PrevNodeID           string         `json:"prev_node_id,omitempty"`
 	Metadata             map[string]any `json:"metadata"`
+	// S3 翻卡计划和已生成的互动物料必须透传到 S4/AI Engine 导出；否则
+	// encoding/json 解码到本结构时会静默丢弃，HTML5 只剩空白模板。
+	InteractivePlan  map[string]any   `json:"interactive_plan,omitempty"`
+	InteractiveItems []map[string]any `json:"interactive_items,omitempty"`
+	Front            string           `json:"front,omitempty"`
+	Back             string           `json:"back,omitempty"`
 	// 透传字段：版本快照 / 预览返回节点带有的讲授分段与互动问答等元数据。
 	// Questions 引擎侧已归一为 list[str]（normalize_text_list 产出，见 schema.py 注释）；
 	// Go 侧用 interface 透传仅为兼容历史 dict 缓存，收到的一律是字符串列表。
@@ -793,6 +807,7 @@ type ExportCreateRequest struct {
 	Formats                  []string           `json:"formats,omitempty"`
 	CoursewareTitle          string             `json:"courseware_title,omitempty"`
 	Nodes                    []TeachingNodeItem `json:"nodes,omitempty"`
+	Presentation             map[string]any     `json:"presentation,omitempty"`
 	GenerationInstructionSet map[string]any     `json:"generation_instruction_set,omitempty"`
 }
 
@@ -814,14 +829,17 @@ type ExportStatusResponse struct {
 	DownloadURL  string `json:"download_url,omitempty"`
 	Error        string `json:"error,omitempty"`
 	// 引擎侧导出产物上传状态等扩展字段（字段只增不删），透传给前端。
-	UploadStatus    string               `json:"upload_status,omitempty"`
-	MinioPath       string               `json:"minio_path,omitempty"`
-	FileSize        int64                `json:"file_size,omitempty"`
-	CoursewareTitle string               `json:"courseware_title,omitempty"`
-	Version         int                  `json:"version,omitempty"`
-	VersionNo       int                  `json:"version_no,omitempty"`
-	Files           map[string]string    `json:"files,omitempty"`
-	QualityReport   *ExportQualityReport `json:"quality_report,omitempty"`
+	UploadStatus             string               `json:"upload_status,omitempty"`
+	MinioPath                string               `json:"minio_path,omitempty"`
+	FileSize                 int64                `json:"file_size,omitempty"`
+	CoursewareTitle          string               `json:"courseware_title,omitempty"`
+	Version                  int                  `json:"version,omitempty"`
+	VersionNo                int                  `json:"version_no,omitempty"`
+	LessonPlanSource         string               `json:"lesson_plan_source,omitempty"`
+	LessonPlanFallbackReason string               `json:"lesson_plan_fallback_reason,omitempty"`
+	LessonPlanFilledSections []string             `json:"lesson_plan_filled_sections,omitempty"`
+	Files                    map[string]string    `json:"files,omitempty"`
+	QualityReport            *ExportQualityReport `json:"quality_report,omitempty"`
 }
 
 type ExportQualityFinding struct {
@@ -906,6 +924,20 @@ type GenContentStatusResponse struct {
 	Error          string             `json:"error,omitempty"`
 }
 
+type GenScriptModifyRequest struct {
+	NodeID     string `json:"node_id"`
+	Title      string `json:"title"`
+	Script     string `json:"script"`
+	Message    string `json:"message"`
+	CourseName string `json:"course_name"`
+}
+
+type GenScriptModifyResponse struct {
+	NodeID       string `json:"node_id"`
+	Script       string `json:"script"`
+	UsedFallback bool   `json:"used_fallback"`
+}
+
 type ModifyIntentRequest struct {
 	ProjectID       string             `json:"project_id"`
 	Instruction     string             `json:"instruction"`
@@ -928,6 +960,14 @@ type ModifyIntentResponse struct {
 func (c *aiEngineClient) GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error) {
 	var result GenContentStatusResponse
 	if err := c.postJSON(ctx, "/gen/content", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) ModifyContentScript(ctx context.Context, req GenScriptModifyRequest) (*GenScriptModifyResponse, error) {
+	var result GenScriptModifyResponse
+	if err := c.postJSONWithTimeout(ctx, "/gen/content/modify-script", req, &result, 120*time.Second); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -1269,7 +1309,7 @@ func (c *aiEngineClient) ParseModify(ctx context.Context, req ParseModifyRequest
 		ModifyIntent
 	}
 	// Python 返回扁平 intent 对象，直接反序列化
-	if err := c.postJSON(ctx, "/api/v1/ai/parse_modify", req, &result); err != nil {
+	if err := c.postJSONWithTimeout(ctx, "/api/v1/ai/parse_modify", req, &result, modifyIntentRequestTimeout); err != nil {
 		return nil, err
 	}
 	return &result.ModifyIntent, nil

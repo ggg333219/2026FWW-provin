@@ -1,6 +1,6 @@
 # TCP 网络基础 - 知识库种子资料
 
-> 本资料为项目原创内容，用于模块三的知识库灌入、检索和证据引用验收。PDF 成品位于 `output/pdf/TCP网络基础-知识库种子资料.pdf`。可用 `python scripts/seed_tcp_knowledge_base.py` 一键灌入并验证。
+> 本资料为项目原创内容，用于模块三的知识库灌入、检索和证据引用验收。PDF 可用 `python scripts/build_tcp_kb_seed_pdf.py` 按需生成到 `output/pdf/`，不随代码包提交。可用 `python scripts/seed_tcp_knowledge_base.py` 将本文本灌入并验证。
 
 ## TCP 三次握手
 

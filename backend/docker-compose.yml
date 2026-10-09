@@ -3,12 +3,18 @@ services:
   backend-app:
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: Dockerfile.teacher
     container_name: teaching-backend
     ports:
       - "18080:18080"
     environment:
       - GIN_MODE=release
+      - DB_USER=${POSTGRES_USER:-postgres}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:-123456}
+      - DB_NAME=${POSTGRES_DB:-teaching}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - AI_ENGINE_BASE_URL=${AI_ENGINE_BASE_URL:-http://host.docker.internal:8000}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

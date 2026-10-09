@@ -9,36 +9,36 @@ import (
 )
 
 const (
-	difySceneAskWithContext    = "ask_with_context"
-	difySceneGenerateScript    = "generate_script"
-	difySceneParseDocument     = "parse_document"
-	difySceneReconstruct       = "reconstruct_document"
-	difySceneGenerateNode      = "generate_node_script"
-	difySceneGenerateMarkdown  = "generate_from_markdown"
-	difySceneGenerateAudio     = "generate_audio"
-	difySceneParseKnowledge    = "parse_knowledge"
-	difySceneIntentExtract     = "intent_extract"
-	difySceneIntentConfirm     = "intent_confirm"
-	difySceneParseProcess      = "parse_process"
-	difySceneParseStatus       = "parse_status"
-	difySceneParseVideo        = "parse_video"
-	difySceneRAGSearch         = "rag_search"
-	difySceneRAGEvidence       = "rag_evidence"
-	difySceneKnowledgeUpload   = "knowledge_upload"
-	difySceneGenerationCreate  = "generation_create"
-	difySceneGenerationStatus  = "generation_status"
-	difySceneGenerateOutline   = "generate_outline"
-	difySceneReviseOutline     = "revise_outline"
-	difySceneParseModify       = "parse_modify"
-	difySceneGenerationPreview = "generation_preview"
-	difySceneGenerationModify  = "generation_modify"
+	difySceneAskWithContext     = "ask_with_context"
+	difySceneGenerateScript     = "generate_script"
+	difySceneParseDocument      = "parse_document"
+	difySceneReconstruct        = "reconstruct_document"
+	difySceneGenerateNode       = "generate_node_script"
+	difySceneGenerateMarkdown   = "generate_from_markdown"
+	difySceneGenerateAudio      = "generate_audio"
+	difySceneParseKnowledge     = "parse_knowledge"
+	difySceneIntentExtract      = "intent_extract"
+	difySceneIntentConfirm      = "intent_confirm"
+	difySceneParseProcess       = "parse_process"
+	difySceneParseStatus        = "parse_status"
+	difySceneParseVideo         = "parse_video"
+	difySceneRAGSearch          = "rag_search"
+	difySceneRAGEvidence        = "rag_evidence"
+	difySceneKnowledgeUpload    = "knowledge_upload"
+	difySceneGenerationCreate   = "generation_create"
+	difySceneGenerationStatus   = "generation_status"
+	difySceneGenerateOutline    = "generate_outline"
+	difySceneReviseOutline      = "revise_outline"
+	difySceneParseModify        = "parse_modify"
+	difySceneGenerationPreview  = "generation_preview"
+	difySceneGenerationModify   = "generation_modify"
 	difySceneGenerationFinalize = "generation_finalize"
-	difySceneVersionHistory    = "version_history"
-	difySceneVersionLoad       = "version_load"
-	difySceneVersionRollback   = "version_rollback"
-	difySceneVersionLock       = "version_lock"
-	difySceneExportCreate      = "export_create"
-	difySceneExportStatus      = "export_status"
+	difySceneVersionHistory     = "version_history"
+	difySceneVersionLoad        = "version_load"
+	difySceneVersionRollback    = "version_rollback"
+	difySceneVersionLock        = "version_lock"
+	difySceneExportCreate       = "export_create"
+	difySceneExportStatus       = "export_status"
 )
 
 func detectReteachIntent(question string) bool {
@@ -597,6 +597,14 @@ func (c *DifyClient) ContentStatus(ctx context.Context, contentID string) (*GenC
 		return nil, errors.New("DifyClient 不支持内容状态查询，需要 AI Engine fallback")
 	}
 	return engine.ContentStatus(ctx, contentID)
+}
+
+func (c *DifyClient) ModifyContentScript(ctx context.Context, req GenScriptModifyRequest) (*GenScriptModifyResponse, error) {
+	engine, hasFallback := c.fallbackEngine()
+	if !hasFallback {
+		return nil, errors.New("DifyClient 不支持讲稿修改，需要 AI Engine fallback")
+	}
+	return engine.ModifyContentScript(ctx, req)
 }
 
 var _ AIEngine = (*DifyClient)(nil)

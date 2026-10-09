@@ -20,7 +20,7 @@ import logging
 from typing import Any
 
 from ai_engine.core.config import settings
-from ai_engine.core.llm import LLMClient
+from ai_engine.core.llm import LLMClient, resolve_llm_timeout
 from ai_engine.gen.elements import resolve_element_candidates, build_element_snapshot
 
 logger = logging.getLogger(__name__)
@@ -167,6 +167,12 @@ class ModifyIntentParser:
             self._llm = LLMClient(
                 model=getattr(settings, "MODEL", None),
                 temperature=getattr(settings, "TEMPERATURE", 0.1),
+                # 意图解析是修改链路的前置门槛。一次结构化请求失败后，
+                # 由前端重试更可控，避免“单次 120 秒 + SDK/客户端重试”
+                # 超过 Go 网关等待窗口。
+                timeout=resolve_llm_timeout(),
+                max_attempts=1,
+                disable_sdk_retries=True,
             )
         return self._llm
 

@@ -1,194 +1,46 @@
-# 泛雅 AI 智课系统
+# 多模态 AI 互动式教学智能体（A12）
 
-一个集成 Go 后端、Python AI 引擎与多套前端的教学平台样例工程。
+本代码包交付教师端流程：S1 意图理解 → S2 资料解析与知识库检索 → S3 课件生成 → S4 预览、修改、版本与导出。独立学生端不属于本次交付。教师端的学情统计和知识图谱仍保留共享数据模型。
 
-## 概览
+## 目录与环境
 
-- `backend/`：Go 后端服务（Gin + GORM + Redis + MinIO）
-- `ai_engine/`：Python AI 服务（PDF/PPTX 解析、讲稿生成、问答）
-- `frontend/`：包含学生、教师等前端应用（Vue）
-- `docs/`：项目设计与 API 文档（已生成）
-- `uploads/`：上传的临时文件存放目录
+- `frontend/teacher/`：Vue 3 + Vite 教师端。
+- `backend/cmd/teacher/`：Go 教师端 API；`backend/internal/` 包含服务、路由和数据模型。
+- `ai_engine/`：FastAPI、LLM、RAG 与 PPTX/DOCX/HTML5 生成。
+- `backend/docker-compose.yml`：PostgreSQL/pgvector、Redis、MinIO；可选启动教师端容器。
+- `scripts/start-all.ps1`、`scripts/stop-all.ps1`：Windows 本地启停。
 
-> 本仓库为教学/演示用途，目录与运行方式可根据部署环境调整。
+建议 Go 1.25.1、Node.js 20.19+、Python 3.10+，并安装 Docker Desktop。首次运行安装 `ai_engine/requirements.txt` 和 `frontend/teacher/package-lock.json` 中的依赖。
 
-## 开箱即用（队友必读）
+## Windows 本地启动
 
-> **不需要在本机安装 PostgreSQL / Redis / MinIO**，全部由 Docker 提供，端口已避让 WSL 默认端口，不会与你的 WSL 环境冲突。
+1. 将根目录 `.env.example` 复制为 `.env`，填写自己的模型 API Key，并按实际环境设置数据库、Redis 与 MinIO 参数。**不要把 `.env` 提交或打包。**
+2. 在仓库根目录运行：
 
-### 端口约定（重要）
+   ```powershell
+   powershell.exe -NoProfile -File scripts/start-all.ps1
+   ```
 
-本项目所有基础设施端口都使用 **1xxxx 段**，以避让你 WSL 里默认占用的 5432 / 6379 / 9000：
+   脚本读取根目录 `.env`，启动 Docker 基础服务、AI Engine、Go 教师端和 Vite。可用 `-SkipDocker` 跳过容器启动（需要基础服务已经就绪）。
+3. 打开 `http://localhost:5173`。AI Engine 健康检查为 `http://localhost:8000/health`；Go 教师端默认从 `http://localhost:8082/health` 检查，若端口被占用，以启动日志和 `backend/.runtime/teacher.json` 公告为准。
+4. 停止时运行 `powershell.exe -NoProfile -File scripts/stop-all.ps1`；如果希望保留数据库容器，使用 `-SkipDocker`。
 
-| 服务 | 项目端口 | 容器内端口 | 说明 |
-|---|---|---|---|
-| PostgreSQL | **15432** | 5432 | 避让 WSL 默认 5432 |
-| Redis | **16379** | 6379 | 避让 WSL 默认 6379 |
-| MinIO API | **19000** | 9000 | 避让 WSL 默认 9000 |
-| MinIO 控制台 | **19001** | 9001 | — |
-| Go 后端 | **18080** | — | 宿主机运行 |
-| AI 引擎 | **8000** | — | 宿主机运行 |
-
-### 三步启动
-
-```bash
-# 1) 准备环境变量并拉起基础设施（Postgres / Redis / MinIO）
-cp .env.example .env
-docker compose --env-file .env -f backend/docker-compose.yml up -d
-
-# 2) 准备后端配置（宿主机运行 Go 时用 127.0.0.1 + 上方端口）
-cp backend/config/config.local.yaml.example backend/config/config.local.yaml
-cd backend && go run ./cmd/teacher/main.go     # 教师端后端，默认 :8082
-
-# 3) 启动前端教师端
-cd frontend/teacher && npm install && npm run dev   # :5173
-```
-
-### 常见问题
-
-- **后端日志出现「S1 轻量服务运行中」**：说明 Postgres 或 MinIO 没连上，会自动降级为内存模式。先确认 `docker ps` 里 `teaching-postgres` / `teaching-minio` 是 healthy。
-- **端口被占用 / 容器名冲突**：若本机存在同名残留容器，先 `docker compose -f backend/docker-compose.yml down` 清理，再重新 `up -d`。
-- **AI 调用报 `api.example.com` 解析失败**：`config.yaml.example` 里的 `ai.base_url` 是占位符，需填入真实 LLM 地址（或改用 AI 引擎本地模式：把 `ai.base_url` 指向 `http://127.0.0.1:8000`）。
-- **想改端口**：只需修改根目录 `.env`（`POSTGRES_PORT` / `REDIS_PORT` / `MINIO_API_PORT`），并同步 `backend/config/config.local.yaml`。
-
----
-
-## 快速开始（本地开发）
-
-先决条件：已安装 Docker、Go、Node.js、npm/yarn、以及 Python（推荐通过 conda 管理虚拟环境）。
-
-后端配置优先级如下：操作系统环境变量 > 本地 `.env` 文件 > backend/config/config.local.yaml > backend/config/config.yaml > backend/config/config.yaml.example。
-
-后端启动时会自动读取这些本地环境文件（若存在）：项目根目录 `.env`、项目根目录 `.env.local`。
-
-当前仓库默认 LLM 配置已切为千问兼容模式：
-
-```bash
-AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-AI_MODEL=qwen-plus
-AI_GEN_MODE=llm
-```
-
-1. 启动基础服务（Postgres/Redis/MinIO）
-
-```bash
-cp .env.example .env
-docker compose --env-file .env -f backend/docker-compose.yml up -d
-```
-
-1. 启动 AI 引擎（Python）
-
-```bash
-cd ai_engine
-conda activate fuww_ai   # 或使用你自己的虚拟环境
-pip install -r requirements.txt
-python main.py
-```
-
-1. 运行后端（Go）
-
-```bash
-cp backend/config/config.yaml.example backend/config/config.yaml
-cp .env.example .env.local
-cd backend
-go run ./api/main.go
-```
-
-如果你的数据库、Redis、MinIO、AI 引擎地址与默认值不同，优先把本机差异写进项目根目录 `.env.local`，例如：
-
-```bash
-# 在根目录 .env.local 中配置
-APP_OSS_ENDPOINT=192.168.1.8:9000
-MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=minioadmin
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-DB_HOST=127.0.0.1
-REDIS_HOST=127.0.0.1
-AI_BASE_URL=http://127.0.0.1:8000
-```
-
-如果你更习惯 YAML，也可以只改 backend/config/config.local.yaml。
-
-1. 启动教师端前端
-
-```bash
-cd frontend/teacher
-npm install
-npm run dev
-```
-
-## 测试环境
-
-如果你要在本地快速拉起一套隔离的测试环境，可以使用仓库根目录的测试 compose：
+生产容器方案见 `deploy/docker-compose.server.yml`。只启动本地基础服务可运行：
 
 ```powershell
-Copy-Item .env.test.example .env.test
-.\scripts\test-env.ps1 -Action up
+docker compose --env-file .env -f backend/docker-compose.yml up -d postgres redis minio
 ```
 
-这套环境会启动 Postgres、Redis、MinIO、AI 引擎容器和后端容器。默认测试模式下 AI 引擎使用 `mock`，不依赖外部大模型网络。
-
-常用地址：
-
-- 后端健康检查：<http://localhost:28080/health>
-- AI 引擎健康检查：<http://localhost:28000/health>
-- MinIO 控制台：<http://localhost:29001>
-
-停止环境：
+## 验证
 
 ```powershell
-.\scripts\test-env.ps1 -Action down
+cd backend; go test ./...
+cd ../ai_engine; python -m pytest
+cd ../frontend/teacher; npm.cmd ci; npm.cmd run build; npm.cmd exec -- vitest run --configLoader runner
 ```
 
-## 文档
+生成、检索与导出依赖外部模型及基础服务；离线单元测试通过不等于真实模型链路已验收。知识库文档和索引不会随代码包自动提供，需要在目标环境按需导入。
 
-详细接口与设计文档保存在 `docs/` 目录，请参考该目录下的 Markdown 文件以获取 API 说明、联调清单与系统架构等内容。
+## 提交代码包前
 
-## 开发建议与调试
-
-- 开发 AI 模块时，优先在 `ai_engine/` 下使用提供的测试数据（`ai_engine/tests/mocks/`）进行快速迭代。
-- 后端配置文件位于 `backend/config/`，上线前请检查数据库与 MinIO 的连接配置。
-- 不要把你本机专用的 `.env`、`.env.local`、backend/config/config.yaml、backend/config/config.local.yaml 提交到仓库。
-- 单元测试集中放在 backend/tests/ 下面，按模块分成 config、oss 等子目录；这样目录统一，但仍然符合 Go 的包规则。
-
-## 常见命令汇总
-
-- 启动全部依赖：
-
-```bash
-docker compose --env-file .env -f backend/docker-compose.yml up -d
-```
-
-- 启动 AI 服务：
-
-```bash
-cd ai_engine
-python main.py
-```
-
-- 运行后端：
-
-```bash
-cd backend
-go run ./api/main.go
-```
-
-## 贡献与联系
-
-如果你希望贡献代码或有问题，请在仓库中创建 issue 或联系维护者。文档已放在 `docs/` 中，优先阅读后提交改动。
-
----
-更新于：项目结构与文档已同步到 `docs/`，README 已适配最新目录。
-
-## 本地服务地址（默认）
-
-开发时常用的服务地址（如果你使用了 `scripts/start-all.ps1 -SkipDocker` 或按 README 的步骤启动）：
-
-- **后端 API**: <http://localhost:18080>
-- **AI 引擎**: <http://localhost:8000>
-- **学生端 (Vue CLI)**: <http://localhost:8080>
-- **教师端 (Vite)**: <http://localhost:5173>
-
-如果你在本机上使用不同端口或把服务放到容器中，请以实际运行日志为准（日志目录：`logs/`）。
-
+不要直接压缩整个工作目录：它可能包含 `.env`、本地配置、用户上传资料、日志、数据库快照和历史 Git 对象。应从干净的 Git 提交导出代码，再在独立目录配置密钥。详见 `.gitignore`；任何曾经提交过的真实密钥都应先吊销并更换。

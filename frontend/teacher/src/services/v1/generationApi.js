@@ -256,6 +256,23 @@ export const teacherGenerationApi = {
         intent: intent || undefined,
       }),
     }),
+  /**
+   * POST /api/v1/gen/content/modify-script — 讲稿 AI 编辑（只改当前节点讲稿文本，同步返回）。
+   * 与 modifyContent（内容层整节点重生成）互补：教师只想润色讲稿时用这个。
+   */
+  modifyScript: ({ node_id, title, script, message, course_name } = {}) =>
+    requestJson("/api/v1/gen/content/modify-script", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      timeoutMs: 120000,
+      body: JSON.stringify({
+        node_id,
+        title: title || "",
+        script: script || "",
+        message: message || "",
+        course_name: course_name || "课件",
+      }),
+    }),
 
   // ================================================================
   // 兼容旧接口（保留，Phase 4 清理）

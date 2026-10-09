@@ -70,3 +70,14 @@ func TestGenerationModifyResponseDecodesEvidenceRefs(t *testing.T) {
 		t.Fatalf("evidence_used 未解析: %+v", resp)
 	}
 }
+
+func TestTeachingNodeItemAcceptsStructuredInteractiveQuestions(t *testing.T) {
+	raw := `{"nodes":[{"node_id":"node_001","interactive_questions":[{"question":"快速排序的平均复杂度是什么？","options":["O(n)","O(n log n)"]}]}]}`
+	var resp GenContentStatusResponse
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		t.Fatalf("结构化 interactive_questions 不应阻断内容状态响应: %v", err)
+	}
+	if len(resp.Nodes) != 1 || len(resp.Nodes[0].InteractiveQuestions) != 1 {
+		t.Fatalf("interactive_questions 未保留: %+v", resp.Nodes)
+	}
+}

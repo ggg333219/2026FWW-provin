@@ -35,3 +35,15 @@ func TestIntentExtractUsesExtendedTimeout(t *testing.T) {
 		t.Fatal("普通 AI 请求不应继承意图提取专用等待时间")
 	}
 }
+
+func TestOutlineUsesExtendedTimeout(t *testing.T) {
+	if outlineRequestTimeout != 180*time.Second {
+		t.Fatalf("outline timeout = %s, want 180s", outlineRequestTimeout)
+	}
+}
+
+func TestModifyIntentUsesExtendedTimeout(t *testing.T) {
+	if modifyIntentRequestTimeout != 180*time.Second {
+		t.Fatalf("modify intent timeout = %s, want 180s", modifyIntentRequestTimeout)
+	}
+}

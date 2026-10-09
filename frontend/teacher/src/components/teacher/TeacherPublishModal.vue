@@ -12,7 +12,7 @@
           <p>发布时间：{{ publishSuccessInfo.publishedAt }}</p>
           <p>发布课程：{{ publishSuccessInfo.courseName || '-' }}</p>
           <p>发布班级：{{ publishSuccessInfo.className || '-' }}</p>
-          <p class="publish-tip">学生端已可见本次发布内容，可继续发布到更多班级。</p>
+          <p class="publish-tip">课件已发布到所选班级，可继续发布到更多班级。</p>
         </div>
         <div class="form-item">
           <label>当前课件：</label>

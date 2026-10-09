@@ -91,7 +91,7 @@ def format_evidence_for_prompt(evidence: dict[str, Any] | None) -> str:
 @dataclass
 class GenerationConfig:
     mode: str = "llm"  # 默认使用真实模型
-    model: str = os.getenv("AI_MODEL", "qwen-turbo")
+    model: str = os.getenv("AI_MODEL", "deepseek-v4-flash-0731")
     temperature: float = 0.2
     max_content_chars: int = 3500
 
@@ -102,7 +102,7 @@ class LessonGenerator:
     def __init__(self, config: GenerationConfig | None = None):
         self.config = config or GenerationConfig(
             mode=os.getenv("AI_GEN_MODE", "llm"),
-            model=os.getenv("AI_MODEL", "qwen-turbo"),
+            model=os.getenv("AI_MODEL", "deepseek-v4-flash-0731"),
             temperature=float(os.getenv("AI_TEMPERATURE", "0.2")),
             max_content_chars=int(os.getenv("AI_MAX_CONTENT_CHARS", "3500")),
         )

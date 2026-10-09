@@ -114,7 +114,7 @@ func TestExportCreateUsesOwnedProjectGenerationForSnapshot(t *testing.T) {
 	router := gin.New()
 	router.Use(func(c *gin.Context) { c.Set("userID", "teacher-1") })
 	router.POST("/api/v1/exp/:gen_id", handler.Create)
-	body := `{"project_id":"project-1","format":"pptx","version":2,"nodes":[{"node_id":"node_001","title":"积分概念"}]}`
+	body := `{"project_id":"project-1","format":"pptx","version":2,"nodes":[{"node_id":"node_001","title":"积分概念"}],"presentation":{"font_family":"serif","layout":"visual"}}`
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/exp/course_stale", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -125,6 +125,9 @@ func TestExportCreateUsesOwnedProjectGenerationForSnapshot(t *testing.T) {
 	}
 	if ai.createGenID != "course_current" || ai.createReq.Version != 2 || len(ai.createReq.Nodes) != 1 {
 		t.Fatalf("export did not use the owned project snapshot: gen=%q version=%d nodes=%d", ai.createGenID, ai.createReq.Version, len(ai.createReq.Nodes))
+	}
+	if ai.createReq.Presentation["font_family"] != "serif" || ai.createReq.Presentation["layout"] != "visual" {
+		t.Fatalf("export lost the selected version presentation: %#v", ai.createReq.Presentation)
 	}
 }
 
@@ -170,11 +173,21 @@ func TestExportDownloadRequiresOwnedGeneration(t *testing.T) {
 func TestOwnedExportStatusRewritesEachAvailableFileURL(t *testing.T) {
 	ai := &exportTestAI{status: &service.ExportStatusResponse{
 		JobID: "exp_owned", GenerationID: "gen_owned", Status: "failed",
-		Files: map[string]string{"docx": "/download/exp_owned.docx"},
+		LessonPlanSource:         "fallback",
+		LessonPlanFallbackReason: "AI 教案生成超时",
+		LessonPlanFilledSections: []string{"教学目标"},
+		Files:                    map[string]string{"docx": "/download/exp_owned.docx"},
 	}}
 	handler := NewExportHandler(ai, exportTestProjects{})
 	response := exportRequest(handler, "/api/v1/export/status/exp_owned")
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "/api/v1/export/download/exp_owned/docx") {
 		t.Fatalf("owned format URL was not proxied: %d %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"lesson_plan_source":"fallback"`) {
+		t.Fatalf("lesson plan source was not forwarded: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"lesson_plan_fallback_reason":"AI 教案生成超时"`) ||
+		!strings.Contains(response.Body.String(), `"lesson_plan_filled_sections":["教学目标"]`) {
+		t.Fatalf("lesson plan diagnostics were not forwarded: %s", response.Body.String())
 	}
 }

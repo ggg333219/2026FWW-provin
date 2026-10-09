@@ -438,14 +438,14 @@ class TestOutlineBuilderDurationEndToEnd(unittest.TestCase):
         ]
         result = self.builder.revise(
             original,
-            "请在冒泡排序之后增加一个互动环节，用投票检验学生是否理解时间复杂度",
+            "请在冒泡排序之后增加一个课堂测验互动环节，检验学生是否理解时间复杂度",
         )
         revised = result["nodes"]
         self.assertEqual(len(revised), 3)
         self.assertEqual([n["node_id"] for n in revised], ["node_001", "node_002", "node_003"])
         self.assertEqual([n["node_type"] for n in revised[:2]], ["content", "content"])
         self.assertEqual(revised[2]["node_type"], "interactive")
-        self.assertEqual(revised[2]["interactive_plan"]["kind"], "poll")
+        self.assertEqual(revised[2]["interactive_plan"]["kind"], "quiz")
         self.assertTrue(revised[2]["interactive_plan"]["enabled"])
         self.assertEqual(revised[2]["interactive_plan"]["delivery"], "html5_link")
 

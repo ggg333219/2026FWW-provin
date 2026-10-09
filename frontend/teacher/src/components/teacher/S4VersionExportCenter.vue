@@ -12,22 +12,20 @@
           <span class="fmt-label">PPTX 演示文稿</span>
         </label>
         <label>
-          <input v-model="selectedFormat" type="radio" value="docx" :disabled="exportIsActive" />
-          <span class="fmt-label">DOCX 教案文档</span>
+          <input v-model="selectedFormat" type="radio" value="lesson_plan" :disabled="exportIsActive" />
+          <span class="fmt-label">📄 Word 标准教案</span>
         </label>
         <label>
           <input v-model="selectedFormat" type="radio" value="both" :disabled="exportIsActive" />
           <span class="fmt-label">同时导出</span>
         </label>
         <label>
-          <input v-model="selectedFormat" type="radio" value="lesson_plan" :disabled="exportIsActive" />
-          <span class="fmt-label">📄 Word 标准教案</span>
-        </label>
-        <label>
           <input v-model="selectedFormat" type="radio" value="interactive" :disabled="exportIsActive" />
-          <span class="fmt-label">🎮 HTML5 互动课件</span>
+          <span class="fmt-label">🃏 知识翻卡（HTML5）</span>
         </label>
       </div>
+
+      <p class="export-context">知识翻卡 HTML5 独立运行；PPTX 中呈现可编辑的静态卡片页，不会在幻灯片内运行网页。</p>
 
       <!-- 操作按钮 -->
       <button
@@ -40,6 +38,15 @@
 
       <!-- HTML 课件预览 -->
       <!-- 状态与进度 -->
+      <button
+        class="btn btn-secondary"
+        :disabled="!genId || interactivePreviewLoading"
+        @click="handleInteractivePreview"
+      >
+        {{ interactivePreviewLoading ? '正在打开预览…' : '预览知识翻卡' }}
+      </button>
+      <p v-if="interactivePreviewError" class="error-msg">{{ interactivePreviewError }}</p>
+
       <div v-if="exportStatus !== 'idle'" class="export-status">
         <div class="status-row">
           <span class="status-label">状态:</span>
@@ -69,6 +76,15 @@
           </button>
           <button class="btn btn-sm" @click="$emit('reset-export')">重新导出</button>
         </div>
+        <p v-if="exportLessonPlanSource === 'fallback'" class="fallback-notice">
+          ⚠️ 本次 Word 教案由本地兜底生成：{{ exportLessonPlanFallbackReason || 'AI 未返回可用内容' }}。请检查 AI 服务后重新导出。
+        </p>
+        <p v-else-if="exportLessonPlanFilledSections.length" class="fallback-notice">
+          ⚠️ AI 教案已生成，但{{ exportLessonPlanFilledSections.join('、') }}由本地补齐；其余有效章节保留 AI 内容。
+        </p>
+        <p v-else-if="exportLessonPlanSource === 'mock'" class="fallback-notice">
+          ⚠️ 当前为模拟模式，Word 教案不是由真实 AI 生成。
+        </p>
         <p v-if="downloadError" class="error-msg">{{ downloadError }}</p>
 
         <div v-if="exportQualityReport" class="quality-report" :class="exportQualityReport.status">
@@ -102,6 +118,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { API_BASE } from '../../config/api'
+import { redirectToLoginAfterUnauthorized } from '../../services/v1/request'
 
 const props = defineProps({
   genId: { type: String, default: '' },
@@ -111,15 +128,52 @@ const props = defineProps({
   exportFiles: { type: Object, default: () => ({}) },
   exportError: { type: String, default: '' },
   exportQualityReport: { type: Object, default: null },
+  exportLessonPlanSource: { type: String, default: '' },
+  exportLessonPlanFallbackReason: { type: String, default: '' },
+  exportLessonPlanFilledSections: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
+  nodes: { type: Array, default: () => [] },
   courseTitle: { type: String, default: '未命名课件' }
   ,versionLabel: { type: String, default: 'v1' }
 })
 
 defineEmits(['start-export', 'reset-export'])
 
-const selectedFormat = ref(props.exportFormat || 'pptx')
+const selectedFormat = ref(props.exportFormat === 'docx' ? 'lesson_plan' : (props.exportFormat || 'pptx'))
 const downloadError = ref('')
+const interactivePreviewLoading = ref(false)
+const interactivePreviewError = ref('')
+
+async function handleInteractivePreview() {
+  if (!props.genId) return
+  interactivePreviewError.value = ''
+  const previewWindow = window.open('about:blank', '_blank')
+  if (!previewWindow) {
+    interactivePreviewError.value = '浏览器阻止了新窗口，请允许弹窗后重试'
+    return
+  }
+  interactivePreviewLoading.value = true
+  try {
+    const { teacherGenerationApi: api } = await import('../../services/v1/generationApi')
+    const data = await api.interactivePreview({
+      course_name: props.courseTitle,
+      nodes: props.nodes,
+    })
+    const objectUrl = URL.createObjectURL(new Blob([data.html], { type: 'text/html;charset=utf-8' }))
+    previewWindow.location.href = objectUrl
+    const releaseWhenClosed = window.setInterval(() => {
+      if (previewWindow.closed) {
+        window.clearInterval(releaseWhenClosed)
+        URL.revokeObjectURL(objectUrl)
+      }
+    }, 1000)
+  } catch (err) {
+    previewWindow.close()
+    interactivePreviewError.value = err?.message || '互动预览失败'
+  } finally {
+    interactivePreviewLoading.value = false
+  }
+}
 
 const exportIsActive = computed(() => ['pending', 'exporting'].includes(props.exportStatus))
 const exportFileName = computed(() => {
@@ -179,7 +233,11 @@ async function handleDownload(url, format = 'pptx') {
       if (token && !token.startsWith('local_')) headers.set('Authorization', `Bearer ${token}`)
     }
     const response = await fetch(target.href, { headers })
-    if (!response.ok) throw new Error(`下载失败（${response.status}）`)
+    if (response.status === 401 && target.origin === new URL(API_BASE).origin) {
+        redirectToLoginAfterUnauthorized()
+        throw new Error('登录已过期，请重新登录后下载')
+      }
+      if (!response.ok) throw new Error(`下载失败（${response.status}）`)
     const objectUrl = URL.createObjectURL(await response.blob())
     const link = document.createElement('a')
     link.href = objectUrl
@@ -225,6 +283,7 @@ async function handleDownload(url, format = 'pptx') {
 .btn-sm:hover { background: #d6ece3; }
 
 .export-status { margin-top: 4px; }
+.fallback-notice { margin: 10px 0 0; color: #9c5700; font-size: 13px; line-height: 1.5; }
 .status-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 .status-label { font-size: 13px; color: #607a71; }
 .status-value { font-size: 13px; font-weight: 600; }
