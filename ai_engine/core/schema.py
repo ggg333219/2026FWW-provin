@@ -810,3 +810,5 @@ class ExportStatusResponse(BaseModel):
     # Word 标准教案的实际内容来源：llm / fallback / mock。
     # 不再把兜底内容静默伪装成 AI 已生成的教案。
     lesson_plan_source: Optional[str] = None
+    lesson_plan_fallback_reason: Optional[str] = None
+    lesson_plan_filled_sections: list[str] = Field(default_factory=list)

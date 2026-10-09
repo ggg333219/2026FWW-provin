@@ -803,6 +803,40 @@ class GenContentStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class GenScriptModifyRequest(BaseModel):
+    node_id: str
+    title: str = ""
+    script: str
+    message: str
+    course_name: str = "课件"
+
+
+@app.post("/gen/content/modify-script")
+async def modify_content_script(req: GenScriptModifyRequest):
+    """只改当前节点讲稿；不重新生成大纲、页面或其他节点。"""
+    if not req.node_id.strip() or not req.script.strip() or not req.message.strip():
+        raise HTTPException(status_code=400, detail="node_id、script 和 message 不能为空")
+
+    from ai_engine.core.llm import LLMClient
+
+    system = (
+        "你是教师讲稿编辑助手。严格按教师的修改指令改写当前节点讲稿，"
+        "保持原有事实、知识范围和教学口吻；不要添加未经证实的知识。"
+        "只输出修改后的讲稿正文，不输出说明、标题、Markdown 代码块或 JSON。"
+    )
+    user = (
+        f"课程：{req.course_name}\n节点：{req.title}\n"
+        f"原讲稿：\n{req.script}\n\n教师指令：\n{req.message}"
+    )
+    try:
+        result = await asyncio.to_thread(LLMClient(max_attempts=1).chat, system, user)
+    except Exception as exc:
+        raise _llm_endpoint_error(exc, "讲稿修改失败") from exc
+    if result.used_fallback or not result.content.strip():
+        raise HTTPException(status_code=503, detail="AI 未返回有效讲稿，原稿未修改")
+    return {"node_id": req.node_id, "script": result.content.strip(), "used_fallback": False}
+
+
 # — P1: S3 大纲 → 内容生成（独立阶段，区别于全流程 gen/create）—
 
 import asyncio
@@ -2399,6 +2433,16 @@ async def _run_export(
                 if isinstance(plan, dict)
                 else getattr(plan, "data_source", "unknown")
             )
+            job.metadata["lesson_plan_fallback_reason"] = (
+                plan.get("fallback_reason", "")
+                if isinstance(plan, dict)
+                else getattr(plan, "fallback_reason", "")
+            )
+            job.metadata["lesson_plan_filled_sections"] = (
+                plan.get("filled_sections", [])
+                if isinstance(plan, dict)
+                else getattr(plan, "filled_sections", [])
+            )
             job.file_size = doc_path.stat().st_size
 
         if fmt in (ExportFormat.BOTH, ExportFormat.PPTX):
@@ -2545,6 +2589,8 @@ async def export_status(job_id: str):
         files=files,
         quality_report=job.quality_report,
         lesson_plan_source=meta.get("lesson_plan_source"),
+        lesson_plan_fallback_reason=meta.get("lesson_plan_fallback_reason"),
+        lesson_plan_filled_sections=meta.get("lesson_plan_filled_sections") or [],
     )
 
 

@@ -86,6 +86,8 @@ export const useVersionStore = defineStore("version", {
     exportQualityReport: null,
     /** Word 标准教案实际内容来源：llm | fallback | mock */
     exportLessonPlanSource: "",
+    exportLessonPlanFallbackReason: "",
+    exportLessonPlanFilledSections: [],
 
     loading: false,
     error: "",
@@ -394,6 +396,8 @@ export const useVersionStore = defineStore("version", {
       this.exportError = "";
       this.exportQualityReport = null;
       this.exportLessonPlanSource = "";
+      this.exportLessonPlanFallbackReason = "";
+      this.exportLessonPlanFilledSections = [];
       this.exportFiles = {};
       try {
         // 统一兼容 {code,message,data} 信封（Mock）与裸响应（FastAPI 网关）
@@ -406,6 +410,8 @@ export const useVersionStore = defineStore("version", {
           Object.entries(job.files || {}).map(([format, url]) => [format, normalizeDownloadUrl(url)]),
         );
         this.exportLessonPlanSource = job.lesson_plan_source || "";
+        this.exportLessonPlanFallbackReason = job.lesson_plan_fallback_reason || "";
+        this.exportLessonPlanFilledSections = job.lesson_plan_filled_sections || [];
         // 如果不是立即完成，启动轮询
         if (this.exportStatus !== "done" && this.exportJobId) {
           this._pollExport();
@@ -443,6 +449,8 @@ export const useVersionStore = defineStore("version", {
           this.exportError = job.error || "";
           this.exportQualityReport = job.quality_report || null;
           this.exportLessonPlanSource = job.lesson_plan_source || "";
+          this.exportLessonPlanFallbackReason = job.lesson_plan_fallback_reason || "";
+          this.exportLessonPlanFilledSections = job.lesson_plan_filled_sections || [];
           if (this.exportStatus === "done" || this.exportStatus === "failed") {
             return;
           }
@@ -469,6 +477,8 @@ export const useVersionStore = defineStore("version", {
       this.exportError = "";
       this.exportQualityReport = null;
       this.exportLessonPlanSource = "";
+      this.exportLessonPlanFallbackReason = "";
+      this.exportLessonPlanFilledSections = [];
     },
 
     // ================================================================

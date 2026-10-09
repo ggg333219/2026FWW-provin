@@ -28,6 +28,8 @@ export const useContentStore = defineStore('content', {
 
     /** 节点讲稿内容 key=node_id, value={script, key_points, ...} */
     nodesContent: {},
+    /** 已由教师确认的节点，异步轮询不能再用旧生成结果覆盖。 */
+    editedNodeIds: [],
 
     /** 轮询定时器 ID */
     pollTimer: null,
@@ -100,6 +102,9 @@ export const useContentStore = defineStore('content', {
           throw new Error('未返回 content_id')
         }
 
+        // 新任务创建成功后才替换旧内容；启动失败时仍可保留之前手工编辑的讲稿。
+        this.nodesContent = {}
+        this.editedNodeIds = []
         this.content_id = contentId
         this.status = 'generating'
         this._persist()
@@ -137,7 +142,7 @@ export const useContentStore = defineStore('content', {
         // 合并节点内容
         if (Array.isArray(data.nodes)) {
           for (const node of data.nodes) {
-            if (node.node_id) {
+            if (node.node_id && !this.editedNodeIds.includes(node.node_id)) {
               this.nodesContent[node.node_id] = node
             }
           }
@@ -157,31 +162,34 @@ export const useContentStore = defineStore('content', {
       }
     },
 
-    /**
-     * AI 修改节点内容（自然语言指令）
-     * 对应后端 POST /api/v1/gen/content/modify
-     */
-    async modifyNode({ content_id, node_id, message }) {
+    /** 手工或 AI 修改后保存当前节点讲稿，不改动其他节点。 */
+    saveNodeScript(nodeId, script) {
+      const current = this.nodesContent[nodeId]
+      if (!current) throw new Error('当前节点尚无讲稿')
+      this.nodesContent[nodeId] = { ...current, script, lecture_script: script, segments: [] }
+      if (!this.editedNodeIds.includes(nodeId)) this.editedNodeIds.push(nodeId)
+      this._persist()
+      return this.nodesContent[nodeId]
+    },
+
+    /** AI 根据自然语言指令返回建议讲稿；调用方确认保存到项目草稿后再更新本地状态。 */
+    async modifyNode({ node_id, title, message, course_name }) {
       this.modifying = true
       this.modifyError = ''
       try {
+        const current = this.nodesContent[node_id]
+        if (!current) throw new Error('当前节点尚无讲稿')
         const resp = await teacherV1Api.generation.modifyContent({
-          content_id: content_id || this.content_id,
           node_id,
-          message
+          title: title || current.title || '',
+          script: current.script ?? current.lecture_script ?? '',
+          message,
+          course_name,
         })
         const data = resp?.data || resp || {}
-
-        // 更新节点内容（如果返回了新内容）
-        if (data.nodes && Array.isArray(data.nodes)) {
-          for (const node of data.nodes) {
-            if (node.node_id) {
-              this.nodesContent[node.node_id] = node
-            }
-          }
-          this._persist()
+        if (data.node_id !== node_id || !data.script?.trim() || data.used_fallback) {
+          throw new Error('AI 未返回有效的当前节点讲稿，原稿未修改')
         }
-
         return data
       } catch (err) {
         this.modifyError = err?.message || '修改内容失败'
@@ -248,6 +256,7 @@ export const useContentStore = defineStore('content', {
             total_nodes: this.total_nodes,
             completed_nodes: this.completed_nodes,
             nodesContent: this.nodesContent,
+            editedNodeIds: this.editedNodeIds,
             error: this.error
           })
         )
@@ -271,6 +280,7 @@ export const useContentStore = defineStore('content', {
         this.total_nodes = cache.total_nodes || 0
         this.completed_nodes = cache.completed_nodes || 0
         this.nodesContent = cache.nodesContent || {}
+        this.editedNodeIds = Array.isArray(cache.editedNodeIds) ? cache.editedNodeIds : []
         this.error = cache.error || ''
 
         // 如果之前未完成，恢复轮询
@@ -299,6 +309,7 @@ export const useContentStore = defineStore('content', {
       this.total_nodes = 0
       this.completed_nodes = 0
       this.nodesContent = {}
+      this.editedNodeIds = []
       this.error = ''
       this.modifying = false
       this.modifyError = ''

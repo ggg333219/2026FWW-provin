@@ -77,7 +77,10 @@
           <button class="btn btn-sm" @click="$emit('reset-export')">重新导出</button>
         </div>
         <p v-if="exportLessonPlanSource === 'fallback'" class="fallback-notice">
-          ⚠️ 本次 Word 教案由本地兜底生成，未获得完整 AI 教案内容；请检查 AI 服务后重新导出。
+          ⚠️ 本次 Word 教案由本地兜底生成：{{ exportLessonPlanFallbackReason || 'AI 未返回可用内容' }}。请检查 AI 服务后重新导出。
+        </p>
+        <p v-else-if="exportLessonPlanFilledSections.length" class="fallback-notice">
+          ⚠️ AI 教案已生成，但{{ exportLessonPlanFilledSections.join('、') }}由本地补齐；其余有效章节保留 AI 内容。
         </p>
         <p v-else-if="exportLessonPlanSource === 'mock'" class="fallback-notice">
           ⚠️ 当前为模拟模式，Word 教案不是由真实 AI 生成。
@@ -126,6 +129,8 @@ const props = defineProps({
   exportError: { type: String, default: '' },
   exportQualityReport: { type: Object, default: null },
   exportLessonPlanSource: { type: String, default: '' },
+  exportLessonPlanFallbackReason: { type: String, default: '' },
+  exportLessonPlanFilledSections: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
   nodes: { type: Array, default: () => [] },
   courseTitle: { type: String, default: '未命名课件' }

@@ -52,6 +52,10 @@ PHASE_PRACTICE = "练习"
 PHASE_SUMMARY = "小结"
 
 
+class _EmptyLessonPlanResponse(ValueError):
+    """模型响应没有可复用的教学目标或教学过程。"""
+
+
 # =============================================================================
 # 数据模型
 # =============================================================================
@@ -112,7 +116,11 @@ class LessonPlan:
     """板书设计（可选）"""
 
     data_source: str = "fallback"
-    """生成来源："llm" | "fallback" | "mock"，用于诊断"""
+    """生成来源：llm / fallback / mock。"""
+    fallback_reason: str = ""
+    """整份兜底时可对外展示的安全诊断信息。"""
+    filled_sections: list[str] = field(default_factory=list)
+    """模型内容有效但由本地补齐的核心章节。"""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -132,6 +140,8 @@ class LessonPlan:
             "homework": list(self.homework),
             "board_design": self.board_design,
             "data_source": self.data_source,
+            "fallback_reason": self.fallback_reason,
+            "filled_sections": list(self.filled_sections),
         }
 
 
@@ -199,6 +209,37 @@ def _clean_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(v).strip() for v in value if str(v).strip()]
+
+
+def _model_text(value: Any) -> str:
+    """把兼容模型返回的字符串、数组或嵌套对象归一为可用正文。"""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "；".join(filter(None, (_model_text(item) for item in value)))
+    if isinstance(value, dict):
+        for key in ("content", "text", "description", "objective", "activity"):
+            if key in value:
+                return _model_text(value[key])
+    return ""
+
+
+def _standard_phase(value: Any, index: int, total: int) -> str:
+    name = _clean_str(value)
+    if name in (PHASE_INTRO, PHASE_NEW, PHASE_PRACTICE, PHASE_SUMMARY):
+        return name
+    lowered = name.lower()
+    if "导入" in name or "引入" in name or "intro" in lowered:
+        return PHASE_INTRO
+    if "小结" in name or "总结" in name or "回顾" in name or "summary" in lowered:
+        return PHASE_SUMMARY
+    if "练习" in name or "巩固" in name or "实践" in name or "practice" in lowered:
+        return PHASE_PRACTICE
+    if "新授" in name or "讲授" in name or "知识讲解" in name or "探究" in name:
+        return PHASE_NEW
+    if total == 4:
+        return (PHASE_INTRO, PHASE_NEW, PHASE_PRACTICE, PHASE_SUMMARY)[index]
+    return name or PHASE_NEW
 
 
 # =============================================================================
@@ -272,6 +313,19 @@ LESSON_PLAN_SCHEMA = {
     },
 }
 
+LESSON_PLAN_CORE_SCHEMA = {
+    "name": "lesson_plan_core",
+    "strict": False,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "teaching_objectives": LESSON_PLAN_SCHEMA["schema"]["properties"]["teaching_objectives"],
+            "teaching_process": LESSON_PLAN_SCHEMA["schema"]["properties"]["teaching_process"],
+        },
+        "required": ["teaching_objectives", "teaching_process"],
+    },
+}
+
 
 class LessonPlanGenerator:
     """节点 + 意图 → 标准教案（LLM 优先，确定性 fallback 兜底）。"""
@@ -332,12 +386,37 @@ class LessonPlanGenerator:
                 user=self._build_user_prompt(norm_nodes, intent_dict, markdown, instruction_set),
                 schema=LESSON_PLAN_SCHEMA,
             )
-            plan = self._plan_from_llm(data, norm_nodes, intent_dict)
+            try:
+                plan = self._plan_from_llm(data, norm_nodes, intent_dict)
+            except _EmptyLessonPlanResponse:
+                # 兼容网关偶尔返回无核心章节的 JSON。只重试一次较小的核心结构，
+                # 不重复请求整份教案，也不丢掉首轮返回的其他有效字段。
+                core = client.chat_with_schema(
+                    system=(
+                        "你是教研员。只返回一个 JSON 对象，必须包含 teaching_objectives "
+                        "和 teaching_process。前者是三维目标数组，后者是导入、新授、练习、小结数组；"
+                        "每个过程阶段必须有 teacher_activity、student_activity、design_intent。"
+                    ),
+                    user=self._build_user_prompt(norm_nodes, intent_dict, None, {}),
+                    schema=LESSON_PLAN_CORE_SCHEMA,
+                )
+                if isinstance(core, dict):
+                    data = {**data, **core}
+                plan = self._plan_from_llm(data, norm_nodes, intent_dict)
             plan.data_source = "llm"
             return plan
         except Exception as exc:
             logger.warning("[LessonPlanGenerator] LLM 生成教案失败，走确定性 fallback: %s", exc)
-            return self._build_fallback_plan(norm_nodes, intent_dict, markdown=markdown)
+            plan = self._build_fallback_plan(norm_nodes, intent_dict, markdown=markdown)
+            if isinstance(exc, TimeoutError) or "timeout" in str(exc).lower() or "超时" in str(exc):
+                plan.fallback_reason = "AI 教案生成超时"
+            elif isinstance(exc, ConnectionError):
+                plan.fallback_reason = "AI 服务连接失败"
+            elif isinstance(exc, _EmptyLessonPlanResponse):
+                plan.fallback_reason = "AI 未返回可用的教学目标或教学过程"
+            else:
+                plan.fallback_reason = "AI 教案生成异常，请查看 AI Engine 日志"
+            return plan
 
     # ---- LLM 路径 ----
 
@@ -404,20 +483,38 @@ class LessonPlanGenerator:
 
         objectives_raw = data.get("teaching_objectives") or []
         objectives: list[dict[str, str]] = []
+        if isinstance(objectives_raw, dict):
+            dimension_names = {
+                "knowledge": DIMENSION_KNOWLEDGE,
+                "ability": DIMENSION_ABILITY,
+                "literacy": DIMENSION_LITERACY,
+                "knowledge_objectives": DIMENSION_KNOWLEDGE,
+                "ability_objectives": DIMENSION_ABILITY,
+                "literacy_objectives": DIMENSION_LITERACY,
+                "知识与技能": DIMENSION_KNOWLEDGE,
+                "过程与方法": DIMENSION_ABILITY,
+                "情感态度价值观": DIMENSION_LITERACY,
+            }
+            objectives_raw = [
+                {"dimension": dimension_names.get(str(key), str(key)),
+                 "content": _model_text(value)}
+                for key, value in objectives_raw.items()
+            ]
         if isinstance(objectives_raw, list):
             for item in objectives_raw:
                 if isinstance(item, dict):
-                    dim = _clean_str(item.get("dimension"))
-                    content = _clean_str(item.get("content"))
+                    dim = _clean_str(item.get("dimension") or item.get("type"))
+                    content = _model_text(item.get("content") or item.get("description"))
                     if dim and content:
                         objectives.append({"dimension": dim, "content": content})
                 elif isinstance(item, str) and item.strip():
                     # 宽容处理：纯字符串目标归入知识目标维度之外的原样保留
                     objectives.append({"dimension": "", "content": item.strip()})
-        if not objectives:
-            raise ValueError("LLM 教案缺少 teaching_objectives")
-
+        has_llm_objectives = bool(objectives)
         fallback = self._build_fallback_plan(nodes, intent)
+        filled_sections: list[str] = []
+        if not objectives:
+            filled_sections.append("教学目标")
         canonical_dimensions = (
             DIMENSION_KNOWLEDGE, DIMENSION_ABILITY, DIMENSION_LITERACY,
         )
@@ -427,26 +524,50 @@ class LessonPlanGenerator:
             if dimension in canonical_dimensions and dimension not in objective_dimensions:
                 objectives.append(dict(fallback_objective))
                 objective_dimensions.add(dimension)
+                if "教学目标" not in filled_sections:
+                    filled_sections.append("教学目标")
 
         process_raw = data.get("teaching_process") or []
+        if isinstance(process_raw, dict):
+            process_raw = process_raw.get("phases") or process_raw.get("steps") or [
+                {"phase": key, **value} if isinstance(value, dict)
+                else {"phase": key, "teacher_activity": value}
+                for key, value in process_raw.items()
+            ]
         phases: list[ProcessPhase] = []
         if isinstance(process_raw, list):
-            for item in process_raw:
+            for index, item in enumerate(process_raw):
                 if not isinstance(item, dict):
                     continue
                 try:
                     minutes = int(item.get("duration_minutes") or 0)
                 except (TypeError, ValueError):
                     minutes = 0
-                phases.append(ProcessPhase(
-                    phase=_clean_str(item.get("phase"), PHASE_NEW),
+                sub_phases = item.get("sub_phases") or []
+                if not isinstance(sub_phases, list):
+                    sub_phases = []
+                def nested_activity(*keys: str) -> str:
+                    return "；".join(filter(None, (
+                        _model_text(next((sub.get(key) for key in keys if sub.get(key)), ""))
+                        for sub in sub_phases if isinstance(sub, dict)
+                    )))
+
+                phase = ProcessPhase(
+                    phase=_standard_phase(item.get("phase"), index, len(process_raw)),
                     duration_minutes=minutes,
-                    teacher_activity=_clean_str(item.get("teacher_activity")),
-                    student_activity=_clean_str(item.get("student_activity")),
-                    design_intent=_clean_str(item.get("design_intent")),
-                ))
+                    teacher_activity=_model_text(item.get("teacher_activity") or item.get("teacher_actions"))
+                    or nested_activity("teacher_activity", "teacher_actions", "content", "description"),
+                    student_activity=_model_text(item.get("student_activity") or item.get("student_actions"))
+                    or nested_activity("student_activity", "student_actions"),
+                    design_intent=_model_text(item.get("design_intent") or item.get("purpose"))
+                    or nested_activity("design_intent", "purpose"),
+                )
+                if phase.teacher_activity or phase.student_activity or phase.design_intent:
+                    phases.append(phase)
+        if not has_llm_objectives and not phases:
+            raise _EmptyLessonPlanResponse("LLM 教案缺少有效的 teaching_objectives 和 teaching_process")
         if not phases:
-            raise ValueError("LLM 教案缺少 teaching_process")
+            filled_sections.append("教学过程")
 
         # 标准四阶段必须齐全；模型阶段内容缺字段时逐项补齐，而不是整份降级。
         fallback_phases = {phase.phase: phase for phase in fallback.teaching_process}
@@ -461,9 +582,15 @@ class LessonPlanGenerator:
             base = fallback_phases[phase_name]
             if matched_index is None:
                 normalized_phases.append(base)
+                if "教学过程" not in filled_sections:
+                    filled_sections.append("教学过程")
                 continue
             consumed.add(matched_index)
             current = phases[matched_index]
+            if (current.duration_minutes <= 0 or not current.teacher_activity
+                    or not current.student_activity or not current.design_intent):
+                if "教学过程" not in filled_sections:
+                    filled_sections.append("教学过程")
             normalized_phases.append(ProcessPhase(
                 phase=phase_name,
                 duration_minutes=current.duration_minutes if current.duration_minutes > 0
@@ -478,8 +605,8 @@ class LessonPlanGenerator:
         key_difficulties = {}
         if isinstance(kd_raw, dict):
             key_difficulties = {
-                "key_points": _clean_list(kd_raw.get("key_points")),
-                "difficult_points": _clean_list(kd_raw.get("difficult_points")),
+                "key_points": _clean_list(kd_raw.get("key_points") or data.get("teaching_key_points")),
+                "difficult_points": _clean_list(kd_raw.get("difficult_points") or data.get("teaching_difficult_points")),
             }
         elif isinstance(kd_raw, list):
             key_difficulties = {"key_points": _clean_list(kd_raw), "difficult_points": []}
@@ -525,11 +652,11 @@ class LessonPlanGenerator:
         teaching_methods = _clean_list(data.get("teaching_methods"))
         classroom_activities = activities or [dict(item) for item in fallback.classroom_activities]
         homework = _clean_list(data.get("homework")) or list(fallback.homework)
-        board_design = _clean_str(data.get("board_design")) or fallback.board_design
+        board_design = _model_text(data.get("board_design") or data.get("blackboard_design")) or fallback.board_design
 
         return LessonPlan(
             course_name=_clean_str(intent.get("topic"))
-                        or _clean_str(data.get("course_name")) or "课程",
+                        or _clean_str(data.get("course_name") or data.get("teaching_theme")) or "课程",
             subject=_clean_str(data.get("subject"), "综合"),
             grade_level=_clean_str(data.get("grade_level")
                                    or intent.get("target_student"), "全体学生"),
@@ -542,6 +669,7 @@ class LessonPlanGenerator:
             classroom_activities=classroom_activities,
             homework=homework,
             board_design=board_design,
+            filled_sections=filled_sections,
         )
 
     # ---- Fallback 路径（确定性，永不失败） ----

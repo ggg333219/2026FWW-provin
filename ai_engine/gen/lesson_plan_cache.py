@@ -21,7 +21,7 @@ from ai_engine.gen.lesson_plan import LessonPlanGenerator
 
 logger = logging.getLogger(__name__)
 
-_CACHE_FORMAT_VERSION = "lesson-plan-qokik-v2-scripts"
+_CACHE_FORMAT_VERSION = "lesson-plan-qokik-v4-provider-shape"
 _MAX_MEMORY_ITEMS = 16
 _cache_lock = threading.RLock()
 _memory_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()

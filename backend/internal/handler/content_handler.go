@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -12,7 +13,7 @@ import (
 // 路由注册（backend/internal/router/teacher.go:181-185）：
 //   POST /api/v1/gen/content           — 创建内容生成任务（给定大纲节点）
 //   GET  /api/v1/gen/content/status/:content_id — 查询内容生成状态
-//   POST /api/v1/gen/content/modify    — 基于修改后的节点重新生成内容
+//   POST /api/v1/gen/content/modify    — 按教师指令修改单节点讲稿
 type ContentHandler struct {
 	aiClient service.AIEngine
 }
@@ -64,26 +65,29 @@ func (h *ContentHandler) Status(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})
 }
 
-// Modify  POST /api/v1/gen/content/modify — 对已有内容应用修改后重新生成。
-// 语义：请求体携带修改后的 nodes（及可选 context_markdown / outline 定位），
-// 后端把修改作为新的内容生成任务提交给 Python /gen/content。
+// Modify POST /api/v1/gen/content/modify — 对单个节点的现有讲稿应用教师指令。
+// 不重跑大纲和整批节点；调用者负责把返回的讲稿保存到项目草稿/版本。
 func (h *ContentHandler) Modify(c *gin.Context) {
-	var req service.GenContentRequest
+	var req service.GenScriptModifyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "参数错误: " + err.Error()})
 		return
 	}
-	if len(req.Nodes) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "nodes 不能为空"})
+	if strings.TrimSpace(req.NodeID) == "" || strings.TrimSpace(req.Script) == "" || strings.TrimSpace(req.Message) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "node_id、script 和 message 不能为空"})
 		return
 	}
-	resp, err := h.aiClient.GenerateContent(c.Request.Context(), req)
+	resp, err := h.aiClient.ModifyContentScript(c.Request.Context(), req)
 	if err != nil {
 		if httpErr, isHTTP := err.(*service.AIEngineHTTPError); isHTTP {
 			c.JSON(httpErr.StatusCode, gin.H{"code": httpErr.StatusCode, "message": httpErr.Detail})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "修改内容生成失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "修改讲稿失败: " + err.Error()})
+		return
+	}
+	if resp.UsedFallback || strings.TrimSpace(resp.Script) == "" || resp.NodeID != req.NodeID {
+		c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "AI 未返回有效的当前节点讲稿，原稿未修改"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": resp})

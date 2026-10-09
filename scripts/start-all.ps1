@@ -120,6 +120,10 @@ if ([string]::IsNullOrWhiteSpace($env:RAG_STORE_BACKEND)) { $env:RAG_STORE_BACKE
 if ([string]::IsNullOrWhiteSpace($env:AI_EMBEDDING_DIM)) { $env:AI_EMBEDDING_DIM = '512' }
 if ([string]::IsNullOrWhiteSpace($env:DB_HOST)) { $env:DB_HOST = '127.0.0.1' }
 if ([string]::IsNullOrWhiteSpace($env:DB_PORT)) { $env:DB_PORT = '15432' }
+# Keep Go's build cache inside the workspace when the profile cache is unavailable.
+if ([string]::IsNullOrWhiteSpace($env:GOCACHE)) {
+    $env:GOCACHE = Join-Path $tmpDir 'go-build'
+}
 
 Write-Host "Root: $root"
 Write-Host "AI provider: $($env:AI_BASE_URL) | model: $($env:AI_MODEL)"
@@ -408,7 +412,7 @@ for ($attempt = 1; $attempt -le 60; $attempt++) {
 }
 $env:VITE_API_BASE = "http://localhost:$backendPort"
 Ensure-NodeDependencies -ProjectName "teacher_frontend" -WorkingDirectory (Join-Path $root "frontend\teacher")
-Start-Background -Name "teacher_frontend" -FilePath "npm" -ArgumentList @('run','dev','--','--host','0.0.0.0','--port','5173','--strictPort') -WorkingDirectory (Join-Path $root "frontend\teacher") -StdOut "$logsDir\teacher_frontend.log" -StdErr "$logsDir\teacher_frontend.err.log"
+Start-Background -Name "teacher_frontend" -FilePath "npm" -ArgumentList @('run','dev','--','--host','0.0.0.0','--port','5173','--strictPort','--configLoader','native') -WorkingDirectory (Join-Path $root "frontend\teacher") -StdOut "$logsDir\teacher_frontend.log" -StdErr "$logsDir\teacher_frontend.err.log"
 
 $pidFile = Join-Path $scriptsDir "pids.json"
 $pids | ConvertTo-Json | Out-File -Encoding utf8 $pidFile

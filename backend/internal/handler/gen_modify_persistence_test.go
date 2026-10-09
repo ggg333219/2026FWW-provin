@@ -121,6 +121,9 @@ func (m *modifyPersistFakeAI) GenerateContent(context.Context, service.GenConten
 func (m *modifyPersistFakeAI) ContentStatus(context.Context, string) (*service.GenContentStatusResponse, error) {
 	return nil, nil
 }
+func (m *modifyPersistFakeAI) ModifyContentScript(context.Context, service.GenScriptModifyRequest) (*service.GenScriptModifyResponse, error) {
+	return nil, nil
+}
 func (m *modifyPersistFakeAI) VersionHistory(context.Context, string) (*service.VersionHistoryResponse, error) {
 	return nil, nil
 }

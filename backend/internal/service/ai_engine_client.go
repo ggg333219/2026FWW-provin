@@ -62,6 +62,7 @@ type AIEngine interface {
 	// ---- P1: S3 大纲 → 内容生成（独立阶段）----
 	GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error)
 	ContentStatus(ctx context.Context, contentID string) (*GenContentStatusResponse, error)
+	ModifyContentScript(ctx context.Context, req GenScriptModifyRequest) (*GenScriptModifyResponse, error)
 
 	// ---- S4: 个性化 & 版本 & 导出 ----
 	GenerationModify(ctx context.Context, req GenerationModifyRequest) (*GenerationModifyResponse, error)
@@ -824,15 +825,17 @@ type ExportStatusResponse struct {
 	DownloadURL  string `json:"download_url,omitempty"`
 	Error        string `json:"error,omitempty"`
 	// 引擎侧导出产物上传状态等扩展字段（字段只增不删），透传给前端。
-	UploadStatus     string               `json:"upload_status,omitempty"`
-	MinioPath        string               `json:"minio_path,omitempty"`
-	FileSize         int64                `json:"file_size,omitempty"`
-	CoursewareTitle  string               `json:"courseware_title,omitempty"`
-	Version          int                  `json:"version,omitempty"`
-	VersionNo        int                  `json:"version_no,omitempty"`
-	LessonPlanSource string               `json:"lesson_plan_source,omitempty"`
-	Files            map[string]string    `json:"files,omitempty"`
-	QualityReport    *ExportQualityReport `json:"quality_report,omitempty"`
+	UploadStatus             string               `json:"upload_status,omitempty"`
+	MinioPath                string               `json:"minio_path,omitempty"`
+	FileSize                 int64                `json:"file_size,omitempty"`
+	CoursewareTitle          string               `json:"courseware_title,omitempty"`
+	Version                  int                  `json:"version,omitempty"`
+	VersionNo                int                  `json:"version_no,omitempty"`
+	LessonPlanSource         string               `json:"lesson_plan_source,omitempty"`
+	LessonPlanFallbackReason string               `json:"lesson_plan_fallback_reason,omitempty"`
+	LessonPlanFilledSections []string             `json:"lesson_plan_filled_sections,omitempty"`
+	Files                    map[string]string    `json:"files,omitempty"`
+	QualityReport            *ExportQualityReport `json:"quality_report,omitempty"`
 }
 
 type ExportQualityFinding struct {
@@ -917,6 +920,20 @@ type GenContentStatusResponse struct {
 	Error          string             `json:"error,omitempty"`
 }
 
+type GenScriptModifyRequest struct {
+	NodeID     string `json:"node_id"`
+	Title      string `json:"title"`
+	Script     string `json:"script"`
+	Message    string `json:"message"`
+	CourseName string `json:"course_name"`
+}
+
+type GenScriptModifyResponse struct {
+	NodeID       string `json:"node_id"`
+	Script       string `json:"script"`
+	UsedFallback bool   `json:"used_fallback"`
+}
+
 type ModifyIntentRequest struct {
 	ProjectID       string             `json:"project_id"`
 	Instruction     string             `json:"instruction"`
@@ -939,6 +956,14 @@ type ModifyIntentResponse struct {
 func (c *aiEngineClient) GenerateContent(ctx context.Context, req GenContentRequest) (*GenContentStatusResponse, error) {
 	var result GenContentStatusResponse
 	if err := c.postJSON(ctx, "/gen/content", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (c *aiEngineClient) ModifyContentScript(ctx context.Context, req GenScriptModifyRequest) (*GenScriptModifyResponse, error) {
+	var result GenScriptModifyResponse
+	if err := c.postJSONWithTimeout(ctx, "/gen/content/modify-script", req, &result, 120*time.Second); err != nil {
 		return nil, err
 	}
 	return &result, nil

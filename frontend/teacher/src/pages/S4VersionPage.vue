@@ -168,6 +168,8 @@
               :export-error="versionStore.exportError"
               :export-quality-report="versionStore.exportQualityReport"
               :export-lesson-plan-source="versionStore.exportLessonPlanSource"
+              :export-lesson-plan-fallback-reason="versionStore.exportLessonPlanFallbackReason"
+              :export-lesson-plan-filled-sections="versionStore.exportLessonPlanFilledSections"
               :loading="versionStore.loading"
               :nodes="exportVersionNodes"
               :course-title="courseTitle"

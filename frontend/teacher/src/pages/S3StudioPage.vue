@@ -79,9 +79,9 @@
         </button>
         <button
           class="phase-tab"
-          :class="{ active: currentPhase === 'generating' }"
-          role="tab" :aria-selected="currentPhase === 'generating'"
-          @click="currentPhase = 'generating'"
+          :class="{ active: currentPhase === 'content' }"
+          role="tab" :aria-selected="currentPhase === 'content'"
+          @click="currentPhase = 'content'"
           :disabled="!outlineStore.isConfirmed"
         >
           📝 内容生成
@@ -263,9 +263,12 @@
                   </span>
                 </div>
                 <div class="node-actions">
+                  <button class="btn btn-sm" :disabled="contentStore.modifying || scriptSaving" @click="handleEditNodeScript(node.node_id)">
+                    手工编辑
+                  </button>
                   <button
                     class="btn btn-sm"
-                    :disabled="contentStore.modifying"
+                    :disabled="contentStore.modifying || scriptSaving"
                     @click="handleModifyNode(node.node_id)"
                   >
                     ✏️ AI 修改
@@ -283,6 +286,16 @@
           </div>
         </div>
 
+        <div v-if="editScriptNodeId" class="content-script-editor" role="dialog" aria-label="手工编辑讲稿">
+          <label for="content-script-text">编辑「{{ editScriptNodeTitle }}」讲稿</label>
+          <textarea id="content-script-text" v-model="editScriptDraft" rows="10" class="content-script-textarea" />
+          <div class="node-actions">
+            <button class="btn btn-primary" :disabled="!editScriptDraft.trim() || scriptSaving" @click="saveEditedNodeScript">{{ scriptSaving ? '保存中…' : '保存讲稿' }}</button>
+            <button class="btn btn-outline" :disabled="scriptSaving" @click="cancelEditNodeScript">取消</button>
+          </div>
+          <div v-if="scriptSaveError" class="content-modify-error" role="alert">{{ scriptSaveError }}</div>
+        </div>
+
         <div v-if="modifyNodeId" class="content-modify-bar" role="dialog" aria-label="AI 修改节点">
           <div class="content-modify-title">修改第 {{ modifyNodeOrder }} 节内容</div>
           <input
@@ -294,12 +307,12 @@
           />
           <button
             class="btn btn-primary"
-            :disabled="!modifyMessage.trim() || contentStore.modifying"
+            :disabled="!modifyMessage.trim() || contentStore.modifying || scriptSaving"
             @click="submitModifyNode"
           >
-            {{ contentStore.modifying ? "AI 修改中..." : "发送修改" }}
+            {{ contentStore.modifying ? "AI 修改中..." : scriptSaving ? "保存中…" : "发送修改" }}
           </button>
-          <button class="btn btn-outline" :disabled="contentStore.modifying" @click="cancelModifyNode">
+          <button class="btn btn-outline" :disabled="contentStore.modifying || scriptSaving" @click="cancelModifyNode">
             取消
           </button>
           <div v-if="contentStore.modifyError" class="content-modify-error" role="alert">
@@ -621,6 +634,14 @@ const generationStore = useGenerationStore();
 const outlineStore = useOutlineStore();
 const interactiveStore = useInteractiveStore();
 const contentStore = useContentStore();
+const modifyNodeId = ref("");
+const modifyMessage = ref("");
+const modifyNodeOrder = computed(() => outlineStore.nodes.findIndex((node) => node.node_id === modifyNodeId.value) + 1);
+const editScriptNodeId = ref("");
+const editScriptDraft = ref("");
+const editScriptNodeTitle = computed(() => outlineStore.nodes.find((node) => node.node_id === editScriptNodeId.value)?.title || "当前节点");
+const scriptSaving = ref(false);
+const scriptSaveError = ref("");
 const intentStore = useIntentStore();
 const materialStore = useMaterialStore();
 const modifyStore = useModifyStore();
@@ -709,7 +730,43 @@ const selectedEvidencePacket = computed(() => {
 });
 
 function draftSnapshot() {
-  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, forked_from_version: outlineStore.forked_from_version, editable_after_rollback: outlineStore.forked_from_version > 0, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, deleted_outline_node_ids: deletedOutlineNodeIds.value, needs_version_save: needsVersionSave.value, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value }, generation_instruction_set: buildGenerationInstructionSet(selectedEvidencePacket.value, generationScope.value) };
+  return {
+    intent: intentStore.intentSummary || null,
+    outline: {
+      outline_id: outlineStore.outline_id,
+      outline_version: outlineStore.outline_version,
+      status: outlineStore.status,
+      title: outlineStore.title,
+      forked_from_version: outlineStore.forked_from_version,
+      editable_after_rollback: outlineStore.forked_from_version > 0,
+      nodes: outlineStore.nodes,
+    },
+    content: {
+      content_id: contentStore.content_id,
+      status: contentStore.status,
+      nodes: contentStore.nodesContent,
+      edited_node_ids: contentStore.editedNodeIds,
+    },
+    generation: {
+      generation_id: generationStore.lastGenId,
+      task_id: generationStore.lastTaskId,
+      nodes: generationStore.currentScriptNodes,
+    },
+    deleted_outline_node_ids: deletedOutlineNodeIds.value,
+    needs_version_save: needsVersionSave.value,
+    evidence_packet: selectedEvidencePacket.value,
+    evidence_selection: selectedEvidenceIds.value,
+    evidence_scope: evidenceScope.value,
+    page_bindings: versionPageBindings(),
+    presentation: {
+      template_id: templateId.value,
+      palette: palette.value,
+      layout: layoutMode.value,
+      font_family: fontFamily.value,
+      density: density.value,
+    },
+    generation_instruction_set: buildGenerationInstructionSet(selectedEvidencePacket.value, generationScope.value),
+  };
 }
 
 function versionPageBindings() {
@@ -768,6 +825,8 @@ onMounted(async () => {
     contentStore.reset();
   }
   if (projectStore.projectId) {
+    // 内容缓存原先是全局 key；以项目草稿为准，避免切换课件时串入上一项目讲稿。
+    contentStore.reset();
     // 契约 v1.0 §3.2：按 project_id 拉 /latest-generation-context 作为权威读源，
     // 一次性拿到项目 + 最新版本 + 当前所有页绑定，避免"切 PPT 不重置 AI 对话"
     // 和"左侧资料绑定打开 PPT 不显示"。loadLatestContext 内部会先 bindProject
@@ -812,6 +871,27 @@ onMounted(async () => {
         }
         outlineStore._persist();
         restoredProjectOutline = true;
+      }
+      if (savedDraft?.content?.nodes && typeof savedDraft.content.nodes === "object") {
+        contentStore.content_id = savedDraft.content.content_id || "";
+        contentStore.nodesContent = savedDraft.content.nodes;
+        contentStore.editedNodeIds = Array.isArray(savedDraft.content.edited_node_ids) ? savedDraft.content.edited_node_ids : [];
+        contentStore.status = savedDraft.content.status === "done" ? "done" : "idle";
+        contentStore._persist();
+      } else {
+        // 保存版本后的 canonical 草稿把 content 存为节点数组，仍允许回到内容层编辑讲稿。
+        const scriptNodes = Array.isArray(savedDraft?.content)
+          ? savedDraft.content
+          : (Array.isArray(savedDraft?.generation?.nodes) ? savedDraft.generation.nodes : []);
+        const restoredScripts = Object.fromEntries(
+          scriptNodes.filter((node) => node?.node_id && typeof node.script === "string" && node.script.trim())
+            .map((node) => [node.node_id, node]),
+        );
+        if (Object.keys(restoredScripts).length) {
+          contentStore.nodesContent = restoredScripts;
+          contentStore.status = "done";
+          contentStore._persist();
+        }
       }
       if (savedDraft?.generation) {
         if (savedDraft.generation.generation_id) generationStore.setLastGenId(savedDraft.generation.generation_id);
@@ -868,7 +948,7 @@ onMounted(async () => {
     }
   }
   if (!restoredGenerationNodes && restoredProjectOutline && outlineStore.isConfirmed) {
-    currentPhase.value = "generating";
+    currentPhase.value = contentStore.hasContent ? "content" : "generating";
   }
   // 恢复最近生成记录
   if (projectStore.projectId) generationStore.restoreLastGenId();
@@ -939,6 +1019,9 @@ function buildGenerationInstructionSet(evidence, mode) {
 }
 
 watch(() => [outlineStore.nodes, generationStore.currentScriptNodes, templateId.value, palette.value, layoutMode.value, fontFamily.value, density.value], () => projectStore.scheduleSave(draftSnapshot()), { deep: true });
+watch(() => contentStore.nodesContent, () => {
+  if (!initializing.value) projectStore.scheduleSave(draftSnapshot());
+}, { deep: true });
 watch(() => generationStore.currentScriptNodes, (nodes) => {
   if (!Array.isArray(nodes) || !nodes.length) return;
   generationPages.value = nodes.map((node, index) => {
@@ -1120,18 +1203,91 @@ async function handleStartContentGeneration() {
   }
 }
 
-// AI 修改单个节点内容
-async function handleModifyNode(nodeId) {
-  if (!contentStore.content_id) {
-    handleError("内容生成任务尚未就绪，请先完成节点内容生成");
-    return;
+function syncScriptToGeneratedNodes(nodeId, script) {
+  if (!generationStore.currentScriptNodes.length) return;
+  generationStore.setNodes(generationStore.currentScriptNodes.map((node) =>
+    node.node_id === nodeId ? { ...node, script, segments: [] } : node,
+  ));
+  generationStore.setScript(generationStore.currentScriptNodes.map((node) => node.script || "").filter(Boolean).join("\n\n"));
+  needsVersionSave.value = true;
+  saveVersionState.value = "idle";
+}
+
+function withEditedScripts(nodes) {
+  return (nodes || []).map((node) => {
+    const content = contentStore.nodesContent[node.node_id];
+    const script = content?.script ?? content?.lecture_script;
+    return typeof script === "string" && script.trim()
+      ? { ...node, script, segments: [] }
+      : node;
+  });
+}
+
+function handleEditNodeScript(nodeId) {
+  const current = contentStore.nodesContent[nodeId];
+  if (!current) return;
+  cancelModifyNode();
+  editScriptNodeId.value = nodeId;
+  editScriptDraft.value = current.script ?? current.lecture_script ?? "";
+  scriptSaveError.value = "";
+}
+
+function cancelEditNodeScript() {
+  if (scriptSaving.value) return;
+  editScriptNodeId.value = "";
+  editScriptDraft.value = "";
+  scriptSaveError.value = "";
+}
+
+async function persistScriptRevision(nodeId, script) {
+  const previous = contentStore.nodesContent[nodeId];
+  if (!previous) throw new Error("当前节点尚无讲稿");
+  const revisedContent = { ...previous, script, lecture_script: script, segments: [] };
+  const revisedNodes = generationStore.currentScriptNodes.map((node) =>
+    node.node_id === nodeId ? { ...node, script, segments: [] } : node,
+  );
+  const snapshot = draftSnapshot();
+  snapshot.content = { ...snapshot.content, nodes: { ...snapshot.content.nodes, [nodeId]: revisedContent } };
+  snapshot.content.edited_node_ids = [...new Set([...(snapshot.content.edited_node_ids || []), nodeId])];
+  snapshot.generation = { ...snapshot.generation, nodes: revisedNodes };
+  snapshot.needs_version_save = needsVersionSave.value || revisedNodes.length > 0;
+  await projectStore.saveNow(snapshot);
+  contentStore.saveNodeScript(nodeId, script);
+  syncScriptToGeneratedNodes(nodeId, script);
+  if (generationStore.currentScriptNodes.length) {
+    await generationStore.renderCoursewarePreview(
+      outlineStore.title || intentStore.intentSummary?.topic || "课件预览", { genId: "" },
+    ).catch((error) => console.warn("[S3StudioPage] 讲稿已保存，但预览刷新失败", error));
   }
+}
+
+async function saveEditedNodeScript() {
+  const nodeId = editScriptNodeId.value;
+  const script = editScriptDraft.value.trim();
+  if (!nodeId || !script || scriptSaving.value) return;
+  scriptSaving.value = true;
+  scriptSaveError.value = "";
+  try {
+    await persistScriptRevision(nodeId, script);
+    editScriptNodeId.value = "";
+    editScriptDraft.value = "";
+  } catch (error) {
+    scriptSaveError.value = `保存讲稿失败：${error?.message || error}`;
+  } finally {
+    scriptSaving.value = false;
+  }
+}
+
+// AI 修改单个节点讲稿
+function handleModifyNode(nodeId) {
+  if (!contentStore.nodesContent[nodeId] || scriptSaving.value) return;
+  cancelEditNodeScript();
   modifyNodeId.value = nodeId;
   modifyMessage.value = "";
 }
 
 function cancelModifyNode() {
-  if (contentStore.modifying) return;
+  if (contentStore.modifying || scriptSaving.value) return;
   modifyNodeId.value = "";
   modifyMessage.value = "";
 }
@@ -1140,14 +1296,21 @@ async function submitModifyNode() {
   const message = modifyMessage.value.trim();
   if (!modifyNodeId.value || !message) return;
   try {
-    await contentStore.modifyNode({
-      content_id: contentStore.content_id,
+    const node = outlineStore.nodes.find((item) => item.node_id === modifyNodeId.value);
+    const result = await contentStore.modifyNode({
       node_id: modifyNodeId.value,
+      title: node?.title || "",
       message,
+      course_name: outlineStore.title || "课件",
     });
-    cancelModifyNode();
+    scriptSaving.value = true;
+    await persistScriptRevision(modifyNodeId.value, result.script);
+    modifyNodeId.value = "";
+    modifyMessage.value = "";
   } catch (err) {
     handleError("修改内容失败: " + (err?.message || ""));
+  } finally {
+    scriptSaving.value = false;
   }
 }
 
@@ -1246,7 +1409,7 @@ async function handleStartGeneration() {
     generationStore.setGenerateProgress(92, "正在加载预览");
     await generationStore.renderCoursewarePreview(
       outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
-      { genId },
+      { genId: "" },
     );
 
     generationStore.setGenerateProgress(100, "生成完成");
@@ -1265,7 +1428,7 @@ async function loadGenerationStatus() {
   try {
     const resp = await teacherV1Api.generation.getGenerationStatus(taskId);
     const data = resp?.data || resp || {};
-    const nodes = filterDeletedOutlineNodes(data.nodes, deletedOutlineNodeIds.value);
+    const nodes = withEditedScripts(filterDeletedOutlineNodes(data.nodes, deletedOutlineNodeIds.value));
 
     // 状态轮询既用于展示页面列表，也用于刷新/恢复 S3 编辑状态。
     // 之前这里只更新 generationPages，导致后端已 done 但
@@ -1285,9 +1448,7 @@ async function loadGenerationStatus() {
       currentPhase.value = 'pages';
       await generationStore.renderCoursewarePreview(
         outlineStore.title || intentStore.intentSummary?.topic || '课件预览',
-        deletedOutlineNodeIds.value.length
-          ? { genId: '' }
-          : { genId: data.generation_id || generationStore.lastGenId, backfillNodes: true },
+        { genId: '' },
       ).catch((previewError) => {
         console.warn('[S3StudioPage] 已完成任务预览恢复失败', previewError);
       });
@@ -2154,6 +2315,29 @@ function handleError(msg) {
   background: #f8fbf9;
   border-radius: 8px;
 }
+.content-script-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 14px;
+  background: #f8fbf9;
+  border: 1px solid #c6ded6;
+  border-radius: 10px;
+}
+.content-script-editor label { color: #2f605a; font-size: 13px; font-weight: 600; }
+.content-script-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 180px;
+  padding: 10px 12px;
+  border: 1px solid #c6ded6;
+  border-radius: 8px;
+  font: inherit;
+  line-height: 1.6;
+  resize: vertical;
+}
+.content-script-textarea:focus { border-color: #5ca68f; outline: none; }
 .node-key-points {
   display: flex;
   flex-wrap: wrap;

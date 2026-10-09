@@ -231,16 +231,18 @@ export const teacherGenerationApi = {
     requestJson(`/api/v1/gen/content/status/${encodeURIComponent(contentId)}`),
 
   /** POST /api/v1/gen/content/modify — AI 修改节点内容（自然语言指令） */
-  modifyContent: ({ content_id, node_id, message } = {}) =>
+  modifyContent: ({ node_id, title, script, message, course_name } = {}) =>
     requestJson("/api/v1/gen/content/modify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // 节点重生成会调用真实大模型，允许较长响应时间。
       timeoutMs: 120000,
       body: JSON.stringify({
-        content_id,
         node_id,
+        title: title || "",
+        script: script || "",
         message: message || "",
+        course_name: course_name || "课件",
       }),
     }),
 

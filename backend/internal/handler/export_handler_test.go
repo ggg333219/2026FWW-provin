@@ -173,8 +173,10 @@ func TestExportDownloadRequiresOwnedGeneration(t *testing.T) {
 func TestOwnedExportStatusRewritesEachAvailableFileURL(t *testing.T) {
 	ai := &exportTestAI{status: &service.ExportStatusResponse{
 		JobID: "exp_owned", GenerationID: "gen_owned", Status: "failed",
-		LessonPlanSource: "fallback",
-		Files:            map[string]string{"docx": "/download/exp_owned.docx"},
+		LessonPlanSource:         "fallback",
+		LessonPlanFallbackReason: "AI 教案生成超时",
+		LessonPlanFilledSections: []string{"教学目标"},
+		Files:                    map[string]string{"docx": "/download/exp_owned.docx"},
 	}}
 	handler := NewExportHandler(ai, exportTestProjects{})
 	response := exportRequest(handler, "/api/v1/export/status/exp_owned")
@@ -183,5 +185,9 @@ func TestOwnedExportStatusRewritesEachAvailableFileURL(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"lesson_plan_source":"fallback"`) {
 		t.Fatalf("lesson plan source was not forwarded: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"lesson_plan_fallback_reason":"AI 教案生成超时"`) ||
+		!strings.Contains(response.Body.String(), `"lesson_plan_filled_sections":["教学目标"]`) {
+		t.Fatalf("lesson plan diagnostics were not forwarded: %s", response.Body.String())
 	}
 }

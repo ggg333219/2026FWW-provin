@@ -5,8 +5,44 @@ from io import BytesIO
 
 from docx import Document
 from fastapi.testclient import TestClient
+import pytest
 
+import ai_engine.main as main_module
+from ai_engine.gen.lesson_plan import LessonPlanGenerator
 from ai_engine.main import app
+
+
+@pytest.mark.parametrize("source,reason,filled", [
+    ("fallback", "AI 教案生成超时", []),
+    ("llm", "", ["教学目标"]),
+])
+def test_docx_export_status_includes_lesson_plan_diagnostics(
+    tmp_path, monkeypatch, source, reason, filled,
+):
+    monkeypatch.chdir(tmp_path)
+    plan = LessonPlanGenerator()._build_fallback_plan(
+        [{"node_id": "n1", "title": "排序算法", "content": "比较与交换"}],
+        {"topic": "排序算法"},
+    ).to_dict()
+    plan.update(data_source=source, fallback_reason=reason, filled_sections=filled)
+    monkeypatch.setattr(main_module, "generate_lesson_plan_cached", lambda *_args: plan)
+
+    with TestClient(app) as client:
+        created = client.post("/api/v1/export/lesson-plan-diagnostics", json={
+            "format": "docx", "version": 1, "courseware_title": "排序算法",
+            "nodes": [{"node_id": "n1", "title": "排序算法", "content": "比较与交换"}],
+        })
+        assert created.status_code == 200, created.text
+        for _ in range(80):
+            result = client.get(f"/api/v1/export/status/{created.json()['job_id']}").json()
+            if result["status"] in {"done", "failed"}:
+                break
+            time.sleep(0.025)
+
+    assert result["status"] == "done", result
+    assert result["lesson_plan_source"] == source
+    assert result["lesson_plan_fallback_reason"] == reason
+    assert result["lesson_plan_filled_sections"] == filled
 
 
 def test_docx_export_contains_generated_sections_and_emphasized_headings(
