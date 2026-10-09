@@ -1284,9 +1284,13 @@ async def export_ppt_bytes(req: ExportPPTRequest):
     exporter = PPTExporter()
     try:
         buf = exporter.export_to_bytes(req.nodes, req.course_name, req.template_id)
+        import urllib.parse as _up
+        _raw = req.course_name or "课件"
+        _safe = "".join(c if (c.isascii() and (c.isalnum() or c in " _-")) else "_" for c in _raw).strip("_ ") or "kejian"
+        _disp = "attachment; filename=\"%s.pptx\"; filename*=UTF-8''%s" % (_safe, _up.quote(_raw + ".pptx"))
         from fastapi.responses import StreamingResponse
         return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                 headers={"Content-Disposition": f"attachment; filename={req.course_name}.pptx"})
+                                 headers={"Content-Disposition": _disp})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PPTX 导出失败: {str(e)}")
 
@@ -1304,7 +1308,6 @@ async def export_doc(req: ExportPPTRequest):
             generate_lesson_plan_cached,
             req.nodes,
             intent,
-            None,
             req.generation_instruction_set,
         )
         result = await asyncio.to_thread(LessonPlanDOCExporter().export, plan)
@@ -1326,13 +1329,16 @@ async def export_doc_bytes(req: ExportPPTRequest):
             generate_lesson_plan_cached,
             req.nodes,
             intent,
-            None,
             req.generation_instruction_set,
         )
         buf = await asyncio.to_thread(LessonPlanDOCExporter().export_to_bytes, plan)
+        import urllib.parse as _up
+        _raw_d = req.course_name or "课件"
+        _safe_d = "".join(c if (c.isascii() and (c.isalnum() or c in " _-")) else "_" for c in _raw_d).strip("_ ") or "kejian"
+        _disp_d = "attachment; filename=\"%s.docx\"; filename*=UTF-8''%s" % (_safe_d, _up.quote(_raw_d + ".docx"))
         from fastapi.responses import StreamingResponse
         return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                 headers={"Content-Disposition": f"attachment; filename={req.course_name}.docx"})
+                                 headers={"Content-Disposition": _disp_d})
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DOCX 导出失败: {str(e)}")
 
@@ -2622,10 +2628,15 @@ async def export_download(job_id: str, extension: str):
     title = str(meta.get("courseware_title") or "课件")
     safe_title = "".join("_" if ch in '\\/:*?\"<>|' else ch for ch in title).strip(" .") or "课件"
     version = int(meta.get("version") or job.version or 1)
+    ext = extension.lower()
+    import urllib.parse as _up
+    ascii_title = "".join(c if ord(c) < 128 else "_" for c in title).strip(" ._") or "kejian"
+    cd = "attachment; filename=\"%s_v%s.%s\"; filename*=UTF-8''%s" % (ascii_title, version, ext, _up.quote("%s_v%s.%s" % (title, version, ext)))
     return FileResponse(
         path,
-        media_type=media_types[extension.lower()],
-        filename=f"{safe_title}_v{version}.{extension.lower()}",
+        media_type=media_types[ext],
+        filename=f"{ascii_title}_v{version}.{ext}",
+        headers={"Content-Disposition": cd},
     )
 
 
