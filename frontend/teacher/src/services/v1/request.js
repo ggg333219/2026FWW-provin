@@ -14,6 +14,18 @@ const AUTH_TOKEN_KEY = 'fuww_teacher_auth_token'
 
 let lastProbeFailedAt = 0
 
+export function redirectToLoginAfterUnauthorized() {
+  if (typeof window === 'undefined') return
+  const storage = window.localStorage
+  for (const key of ['fuww_teacher_logged_in', 'fuww_teacher_username', 'fuww_teacher_role', AUTH_TOKEN_KEY]) {
+    storage?.removeItem(key)
+  }
+  const location = window.location
+  if (!location || location.pathname === '/login' || typeof location.replace !== 'function') return
+  const returnPath = `${location.pathname || '/'}${location.search || ''}${location.hash || ''}`
+  location.replace(`/login?redirect=${encodeURIComponent(returnPath)}&reason=session_expired`)
+}
+
 function isMockMode() {
   if (typeof window === 'undefined') return false
   return window.localStorage.getItem(MOCK_FLAG_KEY) === 'true'
@@ -115,6 +127,13 @@ export async function requestJson(path, options = {}) {
     const response = await fetch(`${API_BASE}${path}`, { ...fetchOptions, signal: controller.signal })
     if (requestTimer) { clearTimeout(requestTimer); requestTimer = 0 }
     const payload = await response.json().catch(() => ({}))
+    if (response.status === 401) {
+      // 后端令牌只在有效期内可用；不要让旧 localStorage 登录态把用户困在 S4。
+      redirectToLoginAfterUnauthorized()
+      const err = new Error('登录已过期，请重新登录后重试')
+      err.httpStatus = 401
+      throw err
+    }
     if (!response.ok || (typeof payload.code !== 'undefined' && payload.code !== 200)) {
       // 标记 HTTP 级错误（后端可达但路由缺失/业务错误），区别于网络不可达
       const err = new Error(payload.message || `请求失败: ${response.status}`)

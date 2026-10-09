@@ -125,18 +125,23 @@ def extract_front_back(content: Any) -> tuple[str, str] | None:
     return (front, back) if front or back else None
 
 
-def _node_to_items(node: dict[str, Any]) -> list[dict[str, Any]]:
+def _node_to_items(node: dict[str, Any], *, flashcards_only: bool = False) -> list[dict[str, Any]]:
     """从单个节点抽取互动物料（quiz dict 题 + knowledge_card 闪卡 + 文本题转闪卡）。"""
     items: list[dict[str, Any]] = []
 
-    # 1) 直接内嵌的互动物料（build_all 产物或历史快照）
-    embedded = node.get("interactive_items") or (node.get("metadata") or {}).get("interactive")
-    if isinstance(embedded, list):
+    # S3 互动资源完成后写在 metadata.interactive_asset.items；版本导出应优先
+    # 使用这份实际生成的题/卡，而不是退回到节点摘要或空页面。
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    asset = metadata.get("interactive_asset") if isinstance(metadata.get("interactive_asset"), dict) else {}
+    embedded_sources = (asset.get("items"), node.get("interactive_items"), metadata.get("interactive"))
+    for embedded in embedded_sources:
+        if not isinstance(embedded, list):
+            continue
         for raw in embedded:
             if not isinstance(raw, dict):
                 continue
             t = str(raw.get("type") or "").lower()
-            if t == "quiz":
+            if t == "quiz" and not flashcards_only:
                 questions = [_normalize_question(q) for q in raw.get("questions") or []]
                 questions = [q for q in questions if q]
                 if questions:
@@ -146,10 +151,16 @@ def _node_to_items(node: dict[str, Any]) -> list[dict[str, Any]]:
                 items.append({"type": "flashcard", "front": str(raw["front"]).strip(),
                               "back": str(raw.get("back") or "").strip(),
                               "tags": [str(t) for t in (raw.get("tags") or [])]})
+        if items:
+            return items
 
     # 2) dict 形态题目（question/options/answer/explanation）→ quiz；纯文本题目 → 闪卡
     title = str(node.get("title") or "课堂测验")
-    raw_questions = node.get("questions") or node.get("interactive_questions") or []
+    raw_questions = [] if flashcards_only else (node.get("questions") or node.get("interactive_questions") or [])
+    if isinstance(raw_questions, (str, dict)):
+        raw_questions = [raw_questions]
+    elif not isinstance(raw_questions, (list, tuple)):
+        raw_questions = []
     questions = [_normalize_question(q) for q in raw_questions]
     questions = [q for q in questions if q]
     if questions:
@@ -185,10 +196,30 @@ def _node_to_items(node: dict[str, Any]) -> list[dict[str, Any]]:
         back = str(node.get("summary") or node.get("content") or node.get("script") or "").strip()[:200]
         flashcards.append({"type": "flashcard", "front": text, "back": back, "tags": ["question"]})
     items.extend(flashcards)
+    # 旧版本只有「知识翻卡」计划而没有预生成资源时，基于版本里现成的
+    # 核心要点构造可复习的正反面；不调用模型，也不编造知识答案。
+    plan = node.get("interactive_plan") if isinstance(node.get("interactive_plan"), dict) else {}
+    if not items and str(plan.get("kind") or "").lower() == "flashcard":
+        points = node.get("key_points") or node.get("core_points") or []
+        if isinstance(points, str):
+            points = [points]
+        elif not isinstance(points, (list, tuple)):
+            points = []
+        for index, point in enumerate(points[:8], start=1):
+            answer = str(point or "").strip()
+            if answer:
+                items.append({"type": "flashcard", "front": f"关于「{title}」，第{index}个核心要点是什么？",
+                              "back": answer, "tags": ["core"]})
+        if not items:
+            answer = str(node.get("summary") or node.get("script") or node.get("content") or "").strip()
+            if answer:
+                items.append({"type": "flashcard", "front": title, "back": answer[:500], "tags": ["core"]})
     return items
 
-
-def extract_interactive_items(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+# Aggregate node-level items after source selection.
+def extract_interactive_items(
+    nodes: list[dict[str, Any]], *, flashcards_only: bool = False,
+) -> list[dict[str, Any]]:
     """节点数组 → 互动素材列表（quiz / flashcard），纯规则抽取，不调用 LLM。
 
     输入形态兼容 dict 与 Pydantic TeachingNode（model_dump）。
@@ -200,7 +231,7 @@ def extract_interactive_items(nodes: list[dict[str, Any]]) -> list[dict[str, Any
         elif hasattr(node, "dict"):
             node = node.dict()
         if isinstance(node, dict):
-            extracted.extend(_node_to_items(node))
+            extracted.extend(_node_to_items(node, flashcards_only=flashcards_only))
     return extracted
 
 
@@ -616,24 +647,22 @@ def export_interactive_html(
     output_dir: str = "data/exports",
     file_name: str = "interactive.html",
 ) -> dict[str, Any]:
-    """节点数组 → HTML5 互动游戏文件（供导出任务调用）。
+    """节点数组 → 仅含知识翻卡的 HTML5 文件（供 S4 导出调用）。
 
     Returns:
-        {"path": 输出路径, "quiz_count": N, "flashcard_count": N, "file_size": N}
+        {"path": 输出路径, "quiz_count": 0, "flashcard_count": N, "file_size": N}
     """
-    items = extract_interactive_items(nodes)
-    has_quiz = any(i.get("type") == "quiz" for i in items)
-    has_flash = any(i.get("type") == "flashcard" for i in items)
-    title = "答题挑战 · 知识翻卡" if (has_quiz and has_flash) else (
-        "答题挑战" if has_quiz else "知识翻卡")
-    html = render_interactive_html(items, course_name=course_name, title=title)
+    items = extract_interactive_items(nodes, flashcards_only=True)
+    if not items:
+        raise ValueError("当前版本没有可导出的知识翻卡，请先在 S3 生成并保存翻卡内容")
+    html = render_interactive_html(items, course_name=course_name, title="知识翻卡")
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     path = out / file_name
     path.write_text(html, encoding="utf-8")
     return {
         "path": str(path),
-        "quiz_count": sum(1 for i in items if i.get("type") == "quiz"),
+        "quiz_count": 0,
         "flashcard_count": sum(1 for i in items if i.get("type") == "flashcard"),
         "file_size": path.stat().st_size,
     }

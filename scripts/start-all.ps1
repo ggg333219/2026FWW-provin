@@ -65,6 +65,53 @@ if ([string]::IsNullOrWhiteSpace($env:LLM_TIMEOUT_SECONDS)) {
     $env:LLM_TIMEOUT_SECONDS = '120'
 }
 
+# The local environment commonly uses Clash, but its system-proxy setting can
+# be disabled while the proxy process is still listening.  In that situation
+# the AI Engine tries to reach the LLM provider directly and fails with the
+# opaque OpenAI SDK message "Connection error".  Honour an explicit proxy
+# first; otherwise use the local Clash HTTP proxy only when it is actually up.
+function Test-LocalTcpPort {
+    param(
+        [Parameter(Mandatory)][int]$Port,
+        [int]$TimeoutMilliseconds = 500
+    )
+
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $connect = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+        if (-not $connect.AsyncWaitHandle.WaitOne($TimeoutMilliseconds, $false)) {
+            return $false
+        }
+        $client.EndConnect($connect)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
+    }
+}
+
+$configuredProxy = $env:HTTPS_PROXY
+if ([string]::IsNullOrWhiteSpace($configuredProxy)) {
+    $configuredProxy = $env:HTTP_PROXY
+}
+if ([string]::IsNullOrWhiteSpace($configuredProxy) -and -not [string]::IsNullOrWhiteSpace($env:AI_HTTP_PROXY)) {
+    $configuredProxy = $env:AI_HTTP_PROXY
+}
+if ([string]::IsNullOrWhiteSpace($configuredProxy) -and (Test-LocalTcpPort -Port 7890)) {
+    $configuredProxy = 'http://127.0.0.1:7890'
+}
+if (-not [string]::IsNullOrWhiteSpace($configuredProxy)) {
+    $env:HTTP_PROXY = $configuredProxy
+    $env:HTTPS_PROXY = $configuredProxy
+    if ([string]::IsNullOrWhiteSpace($env:NO_PROXY)) {
+        $env:NO_PROXY = '127.0.0.1,localhost,::1'
+    }
+    Write-Host 'LLM network: proxy enabled (explicit setting or local Clash)'
+} else {
+    Write-Warning 'LLM network: no proxy configured and local Clash :7890 is unavailable; external model calls may fail on restricted networks.'
+}
+
 # Docker Compose maps Redis to host port 16379; keep explicit overrides available.
 if ([string]::IsNullOrWhiteSpace($env:REDIS_HOST)) { $env:REDIS_HOST = '127.0.0.1' }
 if ([string]::IsNullOrWhiteSpace($env:REDIS_PORT)) { $env:REDIS_PORT = '16379' }

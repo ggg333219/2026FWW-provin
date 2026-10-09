@@ -36,6 +36,14 @@ export const teacherOutlineApi = {
       })
     }),
 
+  /** 从课件版本的已有节点创建独立草稿；不调用大纲生成模型。 */
+  createFromNodes: ({ session_id, intent_id, course_name, nodes } = {}) =>
+    requestJson('/api/v1/outlines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id, intent_id: intent_id || '', course_name: course_name || '', nodes: nodes || [] })
+    }),
+
   /**
    * GET /api/v1/outlines/{outline_id}?version=N
    * 获取指定版本大纲，version 可选，缺省返回最新版本

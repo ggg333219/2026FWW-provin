@@ -1,13 +1,14 @@
 <template>
-  <HomeLogin @login-success="handleLoginSuccess" />
+  <HomeLogin :session-expired="route.query.reason === 'session_expired'" @login-success="handleLoginSuccess" />
 </template>
 
 <script setup>
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/authStore'
 import HomeLogin from '../components/HomeLogin.vue'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 
 const handleLoginSuccess = (user) => {

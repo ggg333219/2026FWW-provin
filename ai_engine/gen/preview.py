@@ -52,6 +52,7 @@ from .presentation import (
     FALLBACK_PALETTE,
     FONT_STACKS,
     PALETTES,
+    density_profile,
     presentation_from_nodes,
     theme_from_palette,
 )
@@ -69,6 +70,7 @@ class PreviewConfig:
 _SLIDE_CLASSES = {
     "cover": "cover-slide",
     "section": "section-slide",
+    "agenda": "agenda-slide",
     "quiz": "quiz-slide",
     "interactive": "quiz-slide interactive-slide",
     "summary": "summary-slide",
@@ -106,6 +108,8 @@ class PreviewRenderer:
     def __init__(self) -> None:
         #: 当前批次的主题；未经过 render 直接调 _render_slide 时用默认调色板兜底
         self._theme = theme_from_palette(FALLBACK_PALETTE)
+        self._density = "comfortable"
+        self._layout_mode = "balanced"
 
     def render(self, nodes: list[dict[str, Any]], course_name: str = "课件预览") -> str:
         """生成完整 HTML 预览页面
@@ -120,6 +124,8 @@ class PreviewRenderer:
         polished_nodes = polish_nodes(nodes)
         presentation = self._presentation_from_nodes(polished_nodes)
         self._theme = self._theme_from_presentation(presentation)
+        self._density = presentation.get("density", "comfortable")
+        self._layout_mode = presentation.get("layout", "balanced")
         # M3 默认结构：封面 / 目录 / 总结 —— 与导出端共用同一扩展器（deck_structure），
         # 保证预览页面序列与导出 PPTX 同源。合成页不参与内容润色，故在润色后注入。
         expanded_nodes = expand_deck_pages(
@@ -159,7 +165,10 @@ class PreviewRenderer:
 
     def render_node(self, node: dict[str, Any], index: int = 1) -> str:
         """生成单个节点的预览 HTML"""
-        self._theme = self._theme_from_presentation(self._presentation_from_nodes([node]))
+        presentation = self._presentation_from_nodes([node])
+        self._theme = self._theme_from_presentation(presentation)
+        self._density = presentation.get("density", "comfortable")
+        self._layout_mode = presentation.get("layout", "balanced")
         return self._render_slide(node, index)
 
     # ── 幻灯片构建 ──
@@ -181,14 +190,11 @@ class PreviewRenderer:
 
     def _render_slide(self, node: dict[str, Any], index: int) -> str:
         node_type = self._resolve_type(node)
-        # 目录页（合成节点 node_type=agenda）在预览端借用 section 版式：
-        # 带编号的条目列表正是目录的视觉形态；导出端有原生 agenda 目录页。
-        if node_type == "agenda":
-            node_type = "section"
         slide_class = _SLIDE_CLASSES.get(node_type, _SLIDE_CLASSES["content"])
         # 页型同步传给 build_page_spec，避免在这里与 _resolve_type 各判一次
         spec = build_page_spec(node, index, node_type)
-        svg = render_page_spec_to_svg(spec, self._theme)
+        svg = render_page_spec_to_svg(
+            spec, self._theme, density=self._density, layout_mode=self._layout_mode)
         # data-node-id 是「改一页只换一页」的锚：前端拿到新 HTML 后按它找到旧页就地替换，
         # 不再整份重设 iframe。属性放在 class 之后，`class="slide xxx-slide"` 这类
         # 既有断言仍然成立。
@@ -211,6 +217,7 @@ class PreviewRenderer:
         palette_css = PALETTES.get(palette, PALETTES[FALLBACK_PALETTE])
         font_css = FONT_STACKS.get(font_family, FALLBACK_FONT_STACK)
         padding_css = DENSITY_PADDING.get(density, FALLBACK_DENSITY_PADDING)
+        density_style = density_profile(density)
         body_padding = "28px" if layout == "visual" else ("16px" if layout == "text" else "20px")
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -391,28 +398,49 @@ class PreviewRenderer:
   /* ── S3 样式层：由节点 metadata.presentation 驱动，保证修改后预览实时可见 ── */
   :root {{ --preview-accent: {palette_css[0]}; --preview-page-bg: {palette_css[1]};
            --preview-ink: {palette_css[2]}; --preview-accent-soft: {palette_css[3]};
-           --preview-deep: {palette_css[4]}; --preview-slide-padding: {padding_css}; }}
+           --preview-deep: {palette_css[4]}; --preview-inverse: #{self._theme.inverse};
+           --preview-slide-padding: {padding_css}; }}
   body {{ font-family: {font_css}; background: radial-gradient(circle at 8% 0%, #ffffff 0, var(--preview-page-bg) 42%, #e6ecea 100%); padding: {body_padding}; color: var(--preview-ink); }}
   .presentation {{ max-width: 1180px; }}
-  .slide {{ padding: var(--preview-slide-padding); border: 1px solid rgba(24,50,47,.10); border-radius: 22px;
-            box-shadow: 0 18px 42px rgba(24,50,47,.09); min-height: 380px; }}
+  /* SVG 自带完整 16:9 页面坐标；卡片内边距会把预览缩成「画布中的画布」。 */
+  .slide {{ padding: 0; border: 0; border-radius: 0; aspect-ratio: 16 / 9;
+            box-shadow: 0 18px 42px rgba(24,50,47,.09); min-height: 0; }}
   .slide h2 {{ color: var(--preview-ink); font-weight: 760; letter-spacing: -.025em; }}
-  .slide-num {{ color: var(--preview-accent); background: var(--preview-accent-soft); font-weight: 700; }}
-  .content-slide {{ border-top: 5px solid var(--preview-accent); background: rgba(255,255,255,.94); }}
+  /* 页码已由版式/标题槽位呈现；额外悬浮徽章不是导出页面的一部分。 */
+  .slide-num {{ display: none; }}
+  .content-slide {{ border-top: 0; background: var(--preview-page-bg); }}
   .content-slide .key-points li, .content-slide .body {{ color: var(--preview-ink); }}
   .content-slide .key-points li {{ background: linear-gradient(105deg, #fff, var(--preview-accent-soft)); border: 1px solid rgba(24,50,47,.07); }}
-  .cover-slide, .title-slide {{ background: linear-gradient(135deg, var(--preview-deep) 0%, var(--preview-accent) 100%); min-height: 460px; }}
-  .section-slide {{ background: linear-gradient(135deg, var(--preview-deep) 0%, var(--preview-accent) 100%); }}
-  .quiz-slide {{ border-left: 5px solid var(--preview-accent); border-top: 0; background: linear-gradient(145deg, #fff, var(--preview-accent-soft)); }}
+  .cover-slide, .title-slide {{ background: var(--preview-accent); color: var(--preview-inverse); min-height: 0; }}
+  .section-slide {{ background: var(--preview-accent); color: var(--preview-inverse); }}
+  .section-slide .section-list .kp-idx {{ color: var(--preview-deep); }}
+  .agenda-slide {{ background: var(--preview-page-bg); }}
+  .agenda-slide .section-list {{ gap: 0; margin: 0; }}
+  .agenda-slide .section-list li {{ min-height: 70px; border-bottom: 1px solid var(--preview-ink);
+                                      border-radius: 0; background: transparent; color: var(--preview-ink);
+                                      padding: 8px 0; font-size: 25px; }}
+  .agenda-slide .section-list .kp-idx {{ background: transparent; color: var(--preview-deep);
+                                          font-size: 25px; width: 54px; }}
+  .agenda-slide .section-list .kp-highlight {{ color: var(--preview-ink); font-weight: 400; }}
+  .quiz-slide {{ border-left: 0; border-top: 0; background: var(--preview-page-bg); }}
+  .summary-slide {{ border-left: 0;
+    background: color-mix(in srgb, var(--preview-page-bg) 93%, var(--preview-accent)); }}
   .quiz-slide .questions .q-item {{ border-color: rgba(24,50,47,.10); box-shadow: 0 6px 16px rgba(24,50,47,.06); }}
   .quiz-slide .questions .q-item::before {{ background: var(--preview-accent); }}
   .script-block {{ border-left-color: var(--preview-accent); background: rgba(255,255,255,.72); }}
   .script-block h4 {{ color: var(--preview-accent); }}
-  .presentation[data-layout="visual"] .slide {{ min-height: 430px; }}
+  .presentation[data-layout="visual"] .slide {{ min-height: 0; }}
   .presentation[data-layout="visual"] .content-slide .key-points {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
   .presentation[data-layout="text"] .slide {{ max-width: 920px; margin-left: auto; margin-right: auto; }}
   .presentation[data-density="minimal"] .slide h2 {{ font-size: 28px; }}
-  .presentation[data-density="compact"] .slide {{ border-radius: 16px; }}
+  .presentation[data-density="compact"] .slide {{ border-radius: 0; }}
+  /* SVG foreignObject carries the visible slide text; change it, not just the outer card. */
+  .presentation .svg-block .body {{ font-size: {density_style.preview_body_px}px; }}
+  .presentation .svg-block .point-details .kp-highlight {{ font-size: {density_style.preview_point_px}px; }}
+  .presentation .svg-block .key-points {{ gap: {density_style.card_gap_px}px; }}
+  .presentation .svg-block .key-points li {{ font-size: {density_style.preview_point_px}px;
+    padding-top: {density_style.card_padding_px}px; padding-bottom: {density_style.card_padding_px}px; }}
+  .presentation .svg-block .conclusion-text {{ font-size: {density_style.preview_conclusion_px}px; }}
 </style>
 </head>
 <body>

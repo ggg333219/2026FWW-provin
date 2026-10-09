@@ -84,6 +84,7 @@
           <p class="card-sub">
             {{ isRegisterMode ? '创建一个教师或学生账号' : '请登录您的账号继续使用' }}
           </p>
+          <p v-if="sessionExpired && !isRegisterMode" class="error-text" role="alert">登录已过期，请重新登录。成功后会返回之前的页面。</p>
 
           <!-- 登录表单 -->
           <form v-if="!isRegisterMode" @submit.prevent="handleLogin" class="form">
@@ -183,6 +184,7 @@ import { API_BASE } from '../config/api'
 import { authenticateLocalUser, registerLocalUser } from '../utils/authFallback'
 
 const emit = defineEmits(['login-success'])
+defineProps({ sessionExpired: { type: Boolean, default: false } })
 const username = ref('')
 const password = ref('')
 const remember = ref(false)

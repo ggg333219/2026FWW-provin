@@ -16,12 +16,28 @@ Word 标准教案生成模块 — A12 赛题 4b
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ai_engine.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _lesson_plan_timeout_seconds() -> int:
+    """读取教案专用的 LLM 超时，给较长的结构化教案留出合理预算。"""
+    raw = (os.getenv("LESSON_PLAN_LLM_TIMEOUT_SECONDS") or "").strip()
+    if raw:
+        try:
+            timeout = int(raw)
+            if 10 <= timeout <= 120:
+                return timeout
+        except ValueError:
+            pass
+    # QOKIK 原先固定 25 秒。实际标准教案 JSON 较长，兼容网关偶发在
+    # 25 秒后才返回；45 秒仍在前端四分钟异步轮询预算内。
+    return 45
 
 # ---- 三维目标维度常量 ----
 
@@ -83,6 +99,9 @@ class LessonPlan:
     teaching_process: list[ProcessPhase] = field(default_factory=list)
     """教学过程阶段列表"""
 
+    teacher_scripts: list[dict[str, str]] = field(default_factory=list)
+    """内容生成页已确认的逐节点教师讲稿，直接沿用原文。"""
+
     classroom_activities: list[dict[str, str]] = field(default_factory=list)
     """课堂活动：[{"name": "活动名", "description": "活动说明"}]"""
 
@@ -108,6 +127,7 @@ class LessonPlan:
             },
             "teaching_methods": list(self.teaching_methods),
             "teaching_process": [p.to_dict() for p in self.teaching_process],
+            "teacher_scripts": [dict(item) for item in self.teacher_scripts],
             "classroom_activities": list(self.classroom_activities),
             "homework": list(self.homework),
             "board_design": self.board_design,
@@ -136,6 +156,20 @@ def _node_text(node: dict[str, Any]) -> str:
     """取节点可读正文（content / script / summary）。"""
     text = node.get("content") or node.get("script") or node.get("summary") or ""
     return str(text).strip()
+
+
+def _teacher_scripts(nodes: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """从版本节点提取 S3 讲稿；不把幻灯片 HTML/content 冒充教师讲稿。"""
+    scripts = []
+    for index, node in enumerate(nodes, start=1):
+        script = str(node.get("script") or node.get("lecture_script") or "").strip()
+        if script:
+            scripts.append({
+                "node_id": str(node.get("node_id") or ""),
+                "title": str(node.get("title") or f"第{index}页").strip(),
+                "script": script,
+            })
+    return scripts
 
 
 def _node_key_points(node: dict[str, Any]) -> list[str]:
@@ -250,7 +284,7 @@ class LessonPlanGenerator:
             from ai_engine.core.llm import LLMClient
             self._llm_client = LLMClient(
                 max_attempts=1,
-                timeout=25,
+                timeout=_lesson_plan_timeout_seconds(),
                 stop_schema_fallback_on_error=True,
             )
         return self._llm_client
@@ -504,6 +538,7 @@ class LessonPlanGenerator:
             key_difficulties=key_difficulties,
             teaching_methods=teaching_methods or list(fallback.teaching_methods),
             teaching_process=phases,
+            teacher_scripts=_teacher_scripts(nodes),
             classroom_activities=classroom_activities,
             homework=homework,
             board_design=board_design,
@@ -717,6 +752,7 @@ class LessonPlanGenerator:
             key_difficulties={"key_points": key_points, "difficult_points": difficult_points},
             teaching_methods=methods,
             teaching_process=phases,
+            teacher_scripts=_teacher_scripts(nodes),
             classroom_activities=activities,
             homework=homework,
             board_design=board,

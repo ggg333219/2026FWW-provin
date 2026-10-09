@@ -573,6 +573,8 @@ type OutlineGenerateRequest struct {
 	GenerationInstructionSet map[string]any  `json:"generation_instruction_set,omitempty"`
 	Markdown                 string          `json:"markdown,omitempty"`
 	CourseName               string          `json:"course_name,omitempty"`
+	// 版本分支可直接用已保存的节点创建草稿；提供时不得重新调用 AI 生成。
+	Nodes []OutlineNode `json:"nodes,omitempty"`
 }
 
 // OutlineGenerateResponse —— POST /gen/outline 响应（Python 返回裸 {"nodes": [...], "used_fallback": ...}）。
@@ -617,6 +619,12 @@ type TeachingNodeItem struct {
 	NextNodeID           string         `json:"next_node_id,omitempty"`
 	PrevNodeID           string         `json:"prev_node_id,omitempty"`
 	Metadata             map[string]any `json:"metadata"`
+	// S3 翻卡计划和已生成的互动物料必须透传到 S4/AI Engine 导出；否则
+	// encoding/json 解码到本结构时会静默丢弃，HTML5 只剩空白模板。
+	InteractivePlan  map[string]any   `json:"interactive_plan,omitempty"`
+	InteractiveItems []map[string]any `json:"interactive_items,omitempty"`
+	Front            string           `json:"front,omitempty"`
+	Back             string           `json:"back,omitempty"`
 	// 透传字段：版本快照 / 预览返回节点带有的讲授分段与互动问答等元数据。
 	// Questions 引擎侧已归一为 list[str]（normalize_text_list 产出，见 schema.py 注释）；
 	// Go 侧用 interface 透传仅为兼容历史 dict 缓存，收到的一律是字符串列表。
@@ -794,6 +802,7 @@ type ExportCreateRequest struct {
 	Formats                  []string           `json:"formats,omitempty"`
 	CoursewareTitle          string             `json:"courseware_title,omitempty"`
 	Nodes                    []TeachingNodeItem `json:"nodes,omitempty"`
+	Presentation             map[string]any     `json:"presentation,omitempty"`
 	GenerationInstructionSet map[string]any     `json:"generation_instruction_set,omitempty"`
 }
 
@@ -815,14 +824,15 @@ type ExportStatusResponse struct {
 	DownloadURL  string `json:"download_url,omitempty"`
 	Error        string `json:"error,omitempty"`
 	// 引擎侧导出产物上传状态等扩展字段（字段只增不删），透传给前端。
-	UploadStatus    string               `json:"upload_status,omitempty"`
-	MinioPath       string               `json:"minio_path,omitempty"`
-	FileSize        int64                `json:"file_size,omitempty"`
-	CoursewareTitle string               `json:"courseware_title,omitempty"`
-	Version         int                  `json:"version,omitempty"`
-	VersionNo       int                  `json:"version_no,omitempty"`
-	Files           map[string]string    `json:"files,omitempty"`
-	QualityReport   *ExportQualityReport `json:"quality_report,omitempty"`
+	UploadStatus     string               `json:"upload_status,omitempty"`
+	MinioPath        string               `json:"minio_path,omitempty"`
+	FileSize         int64                `json:"file_size,omitempty"`
+	CoursewareTitle  string               `json:"courseware_title,omitempty"`
+	Version          int                  `json:"version,omitempty"`
+	VersionNo        int                  `json:"version_no,omitempty"`
+	LessonPlanSource string               `json:"lesson_plan_source,omitempty"`
+	Files            map[string]string    `json:"files,omitempty"`
+	QualityReport    *ExportQualityReport `json:"quality_report,omitempty"`
 }
 
 type ExportQualityFinding struct {

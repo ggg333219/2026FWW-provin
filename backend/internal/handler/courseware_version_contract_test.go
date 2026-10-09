@@ -73,3 +73,36 @@ func TestProjectVersionContractAndCloneRollback(t *testing.T) {
 		t.Fatalf("rollback must retain history and append branch: count=%d err=%v", len(versions), err)
 	}
 }
+
+func TestProjectVersionKeepsGeneratedFlashcardsForS4(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := service.NewCoursewareService(nil)
+	project, err := svc.CreateProject(context.Background(), "teacher_test", "Sorting")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewCoursewareHandler(svc)
+	r := gin.New()
+	r.POST("/api/v1/coursewares/:project_id/versions", h.CreateVersion)
+	r.GET("/api/v1/coursewares/:project_id/versions/:version_id", h.VersionDetail)
+	body := `{"change_note":"flashcards","snapshot":{"outline":{"nodes":[{"node_id":"card_1","interactive_plan":{"kind":"flashcard"}}]},"content":[{"node_id":"card_1","title":"Quick sort","type":"interactive","interactive_plan":{"kind":"flashcard"},"interactive_items":[{"type":"flashcard","front":"Quick sort","back":"Divide and conquer"}],"metadata":{"interactive_asset":{"status":"done","items":[{"type":"flashcard","front":"Quick sort","back":"Divide and conquer"}]}}}],"style":{},"page_bindings":[]}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/coursewares/"+project.ProjectID+"/versions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	created := httptest.NewRecorder()
+	r.ServeHTTP(created, req)
+	if created.Code != http.StatusOK {
+		t.Fatalf("create failed: %s", created.Body.String())
+	}
+	var envelope struct { Data struct { VersionID string `json:"version_id"` } `json:"data"` }
+	if err := json.Unmarshal(created.Body.Bytes(), &envelope); err != nil { t.Fatal(err) }
+	detail := httptest.NewRecorder()
+	r.ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/api/v1/coursewares/"+project.ProjectID+"/versions/"+envelope.Data.VersionID, nil))
+	if detail.Code != http.StatusOK {
+		t.Fatalf("load failed: %s", detail.Body.String())
+	}
+	for _, expected := range []string{`"type":"flashcard"`, `"front":"Quick sort"`, `"back":"Divide and conquer"`, `"interactive_asset"`} {
+		if !strings.Contains(detail.Body.String(), expected) {
+			t.Fatalf("saved card field %s missing: %s", expected, detail.Body.String())
+		}
+	}
+}

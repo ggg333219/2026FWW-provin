@@ -70,7 +70,10 @@ TYPE_ALIASES = {
     # 目录 / 章节
     "section": "section",
     "divider": "section",
-    "toc": "section",
+    "agenda": "agenda",
+    "toc": "agenda",
+    "directory": "agenda",
+    "目录": "agenda",
     "chapter": "section",
     # 问答 / 互动（布局不同，分开渲染）
     "quiz": "quiz",
@@ -699,7 +702,7 @@ def build_page_spec(node: dict[str, Any], index: int, kind: str | None = None) -
         if points:
             spec.blocks.append(Block(kind="bullets", cls="cover-points", items=points))
 
-    elif kind == "section":
+    elif kind in ("section", "agenda"):
         spec.subtitle = str(node.get("content") or node.get("summary") or "").strip()
         # 目录项优先取 children（子节点标题），其次取要点
         children = as_list(node.get("children"))

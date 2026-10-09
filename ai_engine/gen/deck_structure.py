@@ -82,7 +82,7 @@ def _summary_points(nodes: list[dict[str, Any]]) -> list[str]:
     points: list[str] = []
     for node in nodes:
         kind = resolve_kind(node)
-        if kind in ("cover", "summary", "agenda"):
+        if kind in ("cover", "summary", "agenda", "quiz", "interactive"):
             continue
         values = _collect_key_points(node)
         if not values:
@@ -157,13 +157,15 @@ def expand_deck_pages(
         tail_kind = resolve_kind(expanded[-1])
         if tail_kind != "summary":
             points = _summary_points(normalized)
-            expanded.append({
-                "node_id": AUTO_SUMMARY_ID,
-                "title": "本节小结",
-                "content": "回顾本次课程的核心要点",
-                "summary": "回顾本次课程的核心要点",
-                "node_type": "summary",
-                "key_points": points or ["本节要点"],
-            })
+            # 无真实节点要点时不伪造“本节要点”占位页；有要点时只引用已保存内容。
+            if points:
+                expanded.append({
+                    "node_id": AUTO_SUMMARY_ID,
+                    "title": "本节小结",
+                    "content": "\n".join(points),
+                    "summary": "\n".join(points),
+                    "node_type": "summary",
+                    "key_points": points,
+                })
 
     return expanded

@@ -1262,12 +1262,12 @@ async def export_doc(req: ExportPPTRequest):
     """[S3] 导出 DOCX"""
     try:
         from ai_engine.gen.export_doc import LessonPlanDOCExporter
-        from ai_engine.gen.lesson_plan import LessonPlanGenerator
+        from ai_engine.gen.lesson_plan_cache import generate_lesson_plan_cached
 
         intent = dict(req.intent or {})
         intent.setdefault("topic", req.course_name)
         plan = await asyncio.to_thread(
-            LessonPlanGenerator().generate,
+            generate_lesson_plan_cached,
             req.nodes,
             intent,
             None,
@@ -1284,12 +1284,12 @@ async def export_doc_bytes(req: ExportPPTRequest):
     """[S3] 导出 DOCX 字节流（直接上传 MinIO）"""
     try:
         from ai_engine.gen.export_doc import LessonPlanDOCExporter
-        from ai_engine.gen.lesson_plan import LessonPlanGenerator
+        from ai_engine.gen.lesson_plan_cache import generate_lesson_plan_cached
 
         intent = dict(req.intent or {})
         intent.setdefault("topic", req.course_name)
         plan = await asyncio.to_thread(
-            LessonPlanGenerator().generate,
+            generate_lesson_plan_cached,
             req.nodes,
             intent,
             None,
@@ -1452,14 +1452,11 @@ async def render_interactive_preview(req: InteractivePreviewRequest):
     """Render the same playable HTML5 artifact used by interactive export."""
     from ai_engine.gen.export_html5 import extract_interactive_items, render_interactive_html
 
-    items = extract_interactive_items(req.nodes)
+    items = extract_interactive_items(req.nodes, flashcards_only=True)
     if not items:
-        raise HTTPException(status_code=422, detail="当前内容没有可预览的互动题或翻卡")
-    has_quiz = any(item.get("type") == "quiz" for item in items)
-    has_flash = any(item.get("type") == "flashcard" for item in items)
-    title = "互动测验与知识翻卡" if has_quiz and has_flash else ("互动测验" if has_quiz else "知识翻卡")
+        raise HTTPException(status_code=422, detail="当前内容没有可预览的知识翻卡")
     return {
-        "html": render_interactive_html(items, course_name=req.course_name, title=title),
+        "html": render_interactive_html(items, course_name=req.course_name, title="知识翻卡"),
         "interactive_count": len(items),
     }
 
@@ -2232,9 +2229,9 @@ async def get_preview(gen_id: str, version: Optional[int] = None):
 
 from ai_engine.gen.export_ppt import PPTExporter, ExportPPTConfig
 from ai_engine.gen.export_doc import DOCExporter, ExportDocConfig, LessonPlanDOCExporter
-from ai_engine.gen.export_html5 import export_interactive_html
+from ai_engine.gen.export_html5 import export_interactive_html, extract_interactive_items
 from ai_engine.gen.export_quality import validate_pptx
-from ai_engine.gen.lesson_plan import LessonPlanGenerator
+from ai_engine.gen.lesson_plan_cache import generate_lesson_plan_cached
 
 # 进程内导出任务存储
 _export_tasks: dict[str, ExportJob] = {}
@@ -2297,6 +2294,12 @@ async def export_create(gen_id: str, req: ExportRequest):
         nodes = selected.nodes_snapshot
         selected_version = selected.version_number
         snapshot = selected
+    # S4 项目版本把全局样式独立保存在 presentation 中；旧节点可能没有
+    # metadata.presentation。导出器读取首节点样式，因此在任务创建时补回，
+    # 只修改副本，绝不回写已保存版本或覆盖其他页的局部样式。
+    from ai_engine.gen.presentation import apply_export_presentation
+    presentation = req.presentation or (snapshot.presentation if snapshot is not None else {})
+    nodes = apply_export_presentation(nodes, presentation)
     courseware_title = (req.courseware_title or "课件").strip() or "课件"
 
     # 创建导出任务
@@ -2381,17 +2384,21 @@ async def _run_export(
         # Word 标准教案（A12 赛题 4b）：LLM 生成 + 确定性 fallback，导出永不空。
         # 产物存 doc_path（.docx），复用既有上传/下载链路，无需改动 upload 循环。
         if fmt in (ExportFormat.LESSON_PLAN, ExportFormat.DOCX, ExportFormat.BOTH):
-            generator = LessonPlanGenerator()
             plan = await asyncio.to_thread(
-                generator.generate, nodes, intent or {}, None, generation_instruction_set or {},
+                generate_lesson_plan_cached,
+                nodes, intent or {}, generation_instruction_set or {},
             )
             exporter = LessonPlanDOCExporter()
-            buf = exporter.export_to_bytes(plan)
+            buf = await asyncio.to_thread(exporter.export_to_bytes, plan)
             doc_path = export_dir / f"{job_id}.docx"
             doc_path.write_bytes(buf.getvalue())
             job.metadata = job.metadata or {}
             job.metadata["doc_path"] = str(doc_path)
-            job.metadata["lesson_plan_source"] = getattr(plan, "data_source", "unknown")
+            job.metadata["lesson_plan_source"] = (
+                plan.get("data_source", "unknown")
+                if isinstance(plan, dict)
+                else getattr(plan, "data_source", "unknown")
+            )
             job.file_size = doc_path.stat().st_size
 
         if fmt in (ExportFormat.BOTH, ExportFormat.PPTX):
@@ -2425,18 +2432,23 @@ async def _run_export(
                     await _persist_export_job(job)
                     return
 
-        # HTML5 互动小游戏（A12 赛题 4c/5c）：both/interactive 模式下随 pptx/docx 一起产出
+        # S4 HTML5 导出只交付知识翻卡；测验可用于课堂互动，但不混入翻卡文件。
         if fmt in (ExportFormat.BOTH, ExportFormat.INTERACTIVE):
-            html5 = export_interactive_html(
-                nodes, course_name,
-                output_dir=str(export_dir), file_name=f"{job_id}.html",
-            )
-            job.metadata = job.metadata or {}
-            job.metadata["html_path"] = html5["path"]
-            job.file_size = html5["file_size"]
-
+            if extract_interactive_items(nodes, flashcards_only=True):
+                html5 = export_interactive_html(
+                    nodes, course_name,
+                    output_dir=str(export_dir), file_name=f"{job_id}.html",
+                )
+                job.metadata = job.metadata or {}
+                job.metadata["html_path"] = html5["path"]
+                job.file_size = html5["file_size"]
+            elif fmt == ExportFormat.INTERACTIVE:
+                raise ValueError("当前版本没有可导出的知识翻卡，请先在 S3 生成并保存翻卡内容")
         if not (job.quality_report and job.quality_report.status == "failed"):
             job.status = ExportStatus.DONE
+            # 先持久化“文件已生成”，再做可选的 MinIO 上传。否则 Redis 中一直是
+            # exporting，前端轮询会把上传耗时误认为 Word 仍未生成。
+            await _persist_export_job(job)
 
         # 真实上传 MinIO（导出成功后尽力上传；失败降级为本地路径，任务仍为 done）。
         # 上传段独立捕获异常：任何上传问题都不能把已 DONE 的导出翻转为 FAILED。
@@ -2449,9 +2461,10 @@ async def _run_export(
                 local_path = meta.get(key)
                 if not local_path:
                     continue
-                result = upload_export_file(
+                result = await asyncio.to_thread(
+                    upload_export_file,
                     local_path, f"exports/{job_id}.{ext}",
-                    bucket=None,  # bucket 默认值统一由 export_upload 解析（MINIO_BUCKET，默认 teaching）
+                    None,
                 )
                 upload_results.append(result.to_meta())
                 if result.upload_status == "uploaded":
@@ -2531,6 +2544,7 @@ async def export_status(job_id: str):
         version_no=int(meta.get("version") or job.version or 1),
         files=files,
         quality_report=job.quality_report,
+        lesson_plan_source=meta.get("lesson_plan_source"),
     )
 
 

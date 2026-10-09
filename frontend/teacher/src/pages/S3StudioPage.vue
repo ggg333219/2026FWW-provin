@@ -26,15 +26,14 @@
               >S2 资料</router-link
             >
             <span class="pill active">S3 生成</span>
-            <router-link :to="{ name: 'S4Version', query: { project_id: projectStore.projectId, generation_id: generationStore.lastGenId } }" class="pill"
-              >S4 版本</router-link
-            >
+            <button type="button" class="pill" @click="goToS4">S4 版本</button>
             <router-link :to="{ name: 'Middle' }" class="pill back-pill"
               >返回中间页</router-link
             >
           </div>
         </div>
       </div>
+      <div v-if="genError && currentPhase !== 'generating'" class="error-bar" role="alert">{{ genError }}</div>
 
       <!-- 模式提示条 -->
       <div
@@ -137,9 +136,11 @@
           generation-mode="full_pipeline"
           :page-generation-mode="generateMode"
           :ready="outlineReady"
-          :auto-restore="true"
+          :auto-restore="!isVersionFork"
+          :allow-auto-generate="!isVersionFork"
           @confirm-complete="handleOutlineConfirmed"
           @outline-created="handleOutlineCreated"
+          @node-deleted="handleOutlineNodeDeleted"
           @error="handleError"
         />
         <div v-if="genError" class="error-bar" role="alert">
@@ -485,6 +486,12 @@
                 statusLabel(page.status)
               }}</span>
               <button
+                v-if="isGeneratedPageOutsideOutline(page, outlineStore.nodes)"
+                class="btn btn-sm"
+                title="此页已不在大纲中；移除后保存新版本，旧版本不受影响"
+                @click.stop="handleOutlineNodeDeleted(page.source_node_id || page.node_id)"
+              >移除旧页</button>
+              <button
                 v-if="page.status === 'failed'"
                 class="btn btn-sm"
                 :disabled="regeneratingPageId === page.page_id"
@@ -544,6 +551,9 @@
                   >
                     页面内预览
                   </button>
+                  <button class="btn btn-sm" :disabled="interactiveStore.loading" @click="handleGenerateInteractive(node)">
+                    重新生成互动
+                  </button>
                 </template>
                 <template
                   v-else-if="
@@ -559,7 +569,7 @@
                     :disabled="interactiveStore.loading || !generationStore.lastGenId"
                     @click="handleGenerateInteractive(node)"
                   >
-                    {{ interactiveStore.loading ? "生成中..." : "生成互动" }}
+                    {{ interactiveStore.loading ? "生成中..." : (node.interactive_plan?.kind === 'flashcard' ? '生成并保存翻卡' : '生成互动') }}
                   </button>
                 </template>
               </div>
@@ -603,6 +613,9 @@ import { resolveSavedProjectVersion } from "../utils/coursewareVersion";
 import { API_BASE, AI_API_BASE } from "../config/api";
 import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline } from "../utils/intentEvidence";
 import { patchPreview, PATCH_MODE } from "../utils/previewPatch";
+import { withGeneratedInteractiveAsset } from "../utils/interactiveExport";
+import { outlineFromVersion } from "../utils/versionOutline";
+import { filterDeletedOutlineNodes, isGeneratedPageOutsideOutline } from "../utils/outlineDeletion";
 
 const generationStore = useGenerationStore();
 const outlineStore = useOutlineStore();
@@ -614,6 +627,7 @@ const modifyStore = useModifyStore();
 const projectStore = useCoursewareProjectStore();
 const route = useRoute();
 const router = useRouter();
+const isVersionFork = computed(() => Boolean(route.query.from_rollback_version || route.query.editable_outline));
 
 // 阶段：outline | generating | pages
 const currentPhase = ref("outline");
@@ -622,6 +636,8 @@ const generateMode = ref("page_incremental");
 const generationScope = ref("content_only");
 const genError = ref("");
 const generationPages = ref([]);
+const deletedOutlineNodeIds = ref([]);
+const needsVersionSave = ref(false);
 const regeneratingPageId = ref("");
 const previewFrameEl = ref(null);
 /** iframe 当前承载的文档。补丁成功时不更新它 —— 更新了 Vue 就会重设 srcdoc，等于整份重载。 */
@@ -693,7 +709,7 @@ const selectedEvidencePacket = computed(() => {
 });
 
 function draftSnapshot() {
-  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, forked_from_version: outlineStore.forked_from_version, editable_after_rollback: outlineStore.forked_from_version > 0, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value }, generation_instruction_set: buildGenerationInstructionSet(selectedEvidencePacket.value, generationScope.value) };
+  return { intent: intentStore.intentSummary || null, outline: { outline_id: outlineStore.outline_id, outline_version: outlineStore.outline_version, status: outlineStore.status, title: outlineStore.title, forked_from_version: outlineStore.forked_from_version, editable_after_rollback: outlineStore.forked_from_version > 0, nodes: outlineStore.nodes }, generation: { generation_id: generationStore.lastGenId, task_id: generationStore.lastTaskId, nodes: generationStore.currentScriptNodes }, deleted_outline_node_ids: deletedOutlineNodeIds.value, needs_version_save: needsVersionSave.value, evidence_packet: selectedEvidencePacket.value, evidence_selection: selectedEvidenceIds.value, evidence_scope: evidenceScope.value, page_bindings: versionPageBindings(), presentation: { template_id: templateId.value, palette: palette.value, layout: layoutMode.value, font_family: fontFamily.value, density: density.value }, generation_instruction_set: buildGenerationInstructionSet(selectedEvidencePacket.value, generationScope.value) };
 }
 
 function versionPageBindings() {
@@ -746,7 +762,7 @@ onMounted(async () => {
   const previousProjectId = projectStore.projectId || projectStore.restoreActiveId() || "";
   projectStore.setActive(String(route.query.project_id || previousProjectId));
   const hasProject = Boolean(projectStore.projectId);
-  if (!hasProject || previousProjectId !== projectStore.projectId) {
+  if (isVersionFork.value || !hasProject || previousProjectId !== projectStore.projectId) {
     outlineStore.reset();
     generationStore.reset();
     contentStore.reset();
@@ -771,10 +787,18 @@ onMounted(async () => {
       }
       // 兼容旧版后端曾直接保存的节点数组，避免历史课件刷新后变成空白。
       if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
+      // 保存版本时后端把草稿写成 canonical snapshot（content 数组）。刷新 S3 时
+      // 仍须把这批节点恢复为生成结果，否则已保存的翻卡素材会从页面状态中消失。
+      if (savedDraft && !savedDraft.generation && Array.isArray(savedDraft.content)) {
+        savedDraft = { ...savedDraft, generation: { nodes: savedDraft.content } };
+      }
       if (!savedDraft || typeof savedDraft !== "object" || (!savedDraft.outline && !savedDraft.generation)) {
         savedDraft = readResumeDraft(projectStore.projectId) || null;
         if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
       }
+      deletedOutlineNodeIds.value = Array.isArray(savedDraft?.deleted_outline_node_ids)
+        ? savedDraft.deleted_outline_node_ids.map(String) : [];
+      needsVersionSave.value = Boolean(savedDraft?.needs_version_save);
       const editableFork = Boolean(
         savedDraft?.outline?.editable_after_rollback
         || route.query.from_rollback_version
@@ -793,7 +817,8 @@ onMounted(async () => {
         if (savedDraft.generation.generation_id) generationStore.setLastGenId(savedDraft.generation.generation_id);
         if (savedDraft.generation.task_id) generationStore.setLastTaskId(savedDraft.generation.task_id);
         if (Array.isArray(savedDraft.generation.nodes) && savedDraft.generation.nodes.length) {
-          const restoredNodes = savedDraft.generation.nodes;
+          const restoredNodes = filterDeletedOutlineNodes(
+            savedDraft.generation.nodes, deletedOutlineNodeIds.value);
           generationStore.setNodes(restoredNodes);
           generationPages.value = restoredNodes.map((node, index) => ({
             ...node,
@@ -801,8 +826,8 @@ onMounted(async () => {
             page_order: Number(node.page_order || node.order || index + 1),
             status: node.status || "completed",
           }));
-          restoredGenerationNodes = true;
-          currentPhase.value = "pages";
+          restoredGenerationNodes = restoredNodes.length > 0;
+          if (restoredGenerationNodes) currentPhase.value = "pages";
         }
       }
       if (savedDraft?.evidence_packet) evidencePacket.value = savedDraft.evidence_packet;
@@ -820,6 +845,27 @@ onMounted(async () => {
       }
       if (savedDraft?.presentation) { templateId.value = savedDraft.presentation.template_id || "default"; palette.value = savedDraft.presentation.palette || "classic"; layoutMode.value = savedDraft.presentation.layout || "balanced"; fontFamily.value = savedDraft.presentation.font_family || "system"; density.value = savedDraft.presentation.density || "comfortable"; }
     } catch {}
+  }
+  if (isVersionFork.value && !outlineStore.nodes.length && generationStore.currentScriptNodes.length) {
+    try {
+      // 修复修复前创建的旧分支：从该分支的内容快照建立草稿，不调用大纲模型。
+      const source = outlineFromVersion(null, generationStore.currentScriptNodes, projectStore.project?.title || "课件");
+      if (source.nodes.length) {
+        const response = await teacherV1Api.outline.createFromNodes({
+          session_id: intentStore.sessionId || projectStore.projectId,
+          intent_id: intentStore.intentId || "",
+          course_name: source.title,
+          nodes: source.nodes,
+        });
+        const recovered = response?.data || response || {};
+        if (!recovered.outline_id) throw new Error("版本大纲草稿创建失败");
+        outlineStore.restoreEditableSnapshot(recovered);
+        await projectStore.saveNow(draftSnapshot());
+        restoredProjectOutline = true;
+      }
+    } catch (error) {
+      genError.value = error?.message || "恢复版本大纲失败";
+    }
   }
   if (!restoredGenerationNodes && restoredProjectOutline && outlineStore.isConfirmed) {
     currentPhase.value = "generating";
@@ -853,8 +899,13 @@ onMounted(async () => {
     });
   }
   if (route.query.phase === "outline") currentPhase.value = "outline";
-  const evidenceReady = await ensureAutomaticEvidence();
-  outlineReady.value = evidenceReady || !requiresAutomaticEvidence.value;
+  if (isVersionFork.value) {
+    // 历史版本分支复用已有大纲与证据，不因进入 S3 重新检索或生成。
+    outlineReady.value = true;
+  } else {
+    const evidenceReady = await ensureAutomaticEvidence();
+    outlineReady.value = evidenceReady || !requiresAutomaticEvidence.value;
+  }
   } finally {
     initializing.value = false;
   }
@@ -993,6 +1044,7 @@ function statusLabel(status) {
 
 // 大纲创建完成
 function handleOutlineCreated({ outline_id, outline_version }) {
+  deletedOutlineNodeIds.value = [];
   // OutlineBuilder 已使用整份证据包生成结构；创建完成后再把引用 ID
   // 落到每个大纲节点，保证后续内容生成和版本快照都保留绑定关系。
   bindEvidenceToWholeDraft();
@@ -1002,6 +1054,33 @@ function handleOutlineCreated({ outline_id, outline_version }) {
     outline_id,
     "v" + outline_version,
   );
+}
+
+async function handleOutlineNodeDeleted(nodeId) {
+  const removedId = String(nodeId || '');
+  if (!removedId) return;
+  deletedOutlineNodeIds.value = [...new Set([...deletedOutlineNodeIds.value, removedId])];
+  generationPages.value = filterDeletedOutlineNodes(generationPages.value, [removedId]);
+  generationStore.setNodes(filterDeletedOutlineNodes(generationStore.currentScriptNodes, [removedId]));
+  delete contentStore.nodesContent[removedId];
+  contentStore._persist();
+  if (modifyNodeId.value === removedId) cancelModifyNode();
+  saveVersionState.value = 'idle';
+  lastSavedVersion.value = 0;
+  needsVersionSave.value = true;
+  // The old preview and version cache belong to the pre-deletion page tree.
+  generationStore.clearPreview();
+  try {
+    await projectStore.saveNow(draftSnapshot());
+    if (generationStore.currentScriptNodes.length) {
+      await generationStore.renderCoursewarePreview(
+        outlineStore.title || intentStore.intentSummary?.topic || '课件预览',
+        { genId: '' },
+      );
+    }
+  } catch (error) {
+    handleError('删除节点后保存或刷新预览失败: ' + (error?.message || '未知错误'));
+  }
 }
 
 // 大纲确认完成，进入生成阶段
@@ -1119,6 +1198,7 @@ async function handleStartGeneration() {
         generation_instruction_set: buildGenerationInstructionSet(evidence, "full_pipeline"),
       });
       await outlineStore.confirmOutline();
+      deletedOutlineNodeIds.value = [];
     }
 
     generationStore.setGenerateProgress(15, "创建生成任务");
@@ -1185,7 +1265,7 @@ async function loadGenerationStatus() {
   try {
     const resp = await teacherV1Api.generation.getGenerationStatus(taskId);
     const data = resp?.data || resp || {};
-    const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+    const nodes = filterDeletedOutlineNodes(data.nodes, deletedOutlineNodeIds.value);
 
     // 状态轮询既用于展示页面列表，也用于刷新/恢复 S3 编辑状态。
     // 之前这里只更新 generationPages，导致后端已 done 但
@@ -1205,7 +1285,9 @@ async function loadGenerationStatus() {
       currentPhase.value = 'pages';
       await generationStore.renderCoursewarePreview(
         outlineStore.title || intentStore.intentSummary?.topic || '课件预览',
-        { genId: data.generation_id || generationStore.lastGenId, backfillNodes: true },
+        deletedOutlineNodeIds.value.length
+          ? { genId: '' }
+          : { genId: data.generation_id || generationStore.lastGenId, backfillNodes: true },
       ).catch((previewError) => {
         console.warn('[S3StudioPage] 已完成任务预览恢复失败', previewError);
       });
@@ -1279,10 +1361,9 @@ async function handleGenerateInteractive(node) {
     });
     const asset = await interactiveStore.pollAssetStatus(node.node_id);
     if (asset?.status === "done") {
-      const nodes = (generationStore.currentScriptNodes || []).map((item) => item.node_id === node.node_id
-        ? { ...item, metadata: { ...(item.metadata || {}), interactive_asset: asset, interactive_entry_url: asset.entry_url || asset.file_url || "" } }
-        : item);
-      generationStore.setNodes(nodes);
+      if (node.interactive_plan?.kind === "flashcard" && !asset.items?.some((item) => item.type === "flashcard" && item.front)) {
+        throw new Error("生成结果没有知识翻卡，请检查互动类型后重试");
+      }
       const page = generationPages.value.find((item) => item.node_id === node.node_id);
       if (page?.page_id && asset.interactive_asset_id) {
         const link = await interactiveStore.linkToPage({
@@ -1293,7 +1374,15 @@ async function handleGenerateInteractive(node) {
         });
         asset.entry_url = link.entry_url || asset.entry_url;
       }
+      const nodes = withGeneratedInteractiveAsset(generationStore.currentScriptNodes, node, asset);
+      generationStore.setNodes(nodes);
+      needsVersionSave.value = true;
+      saveVersionState.value = 'idle';
       projectStore.scheduleSave(draftSnapshot(), 0);
+      await handleSaveNewVersion();
+      if (saveVersionState.value !== "saved") {
+        throw new Error("互动内容已生成，但保存新版本失败；请点击页面顶部“保存新版本”后再到 S4 导出");
+      }
     }
   } catch (err) {
     handleError("生成互动资源失败: " + (err?.message || ""));
@@ -1342,6 +1431,10 @@ async function applyPresentationStyle() {
     slide_background: palette.value === "klein-blue" ? "preset_blue" : "preset_green",
     metadata: { ...(node.metadata || {}), presentation },
   })));
+  if (generationStore.currentScriptNodes.length) {
+    needsVersionSave.value = true;
+    saveVersionState.value = 'idle';
+  }
   await generationStore.renderCoursewarePreview(
     outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
     { genId: "" },
@@ -1532,6 +1625,19 @@ async function handleSaveNewVersion() {
   try {
     await projectStore.saveNow(draftSnapshot());
     const summary = `教师保存：${new Date().toLocaleString()}`;
+    // 内容生成页的讲稿存放在 contentStore，不能只保存 PPT 节点的脚本。
+    // 仅在该节点确有讲稿时覆盖，避免空内容擦掉课件生成阶段的脚本。
+    const versionNodes = filterDeletedOutlineNodes(
+      generationStore.currentScriptNodes, deletedOutlineNodeIds.value).map((node) => {
+      const generatedContent = contentStore.nodesContent[node.node_id];
+      const teacherScript = generatedContent?.script || generatedContent?.lecture_script;
+      return typeof teacherScript === "string" && teacherScript.trim()
+        ? { ...node, script: teacherScript }
+        : node;
+    });
+    if (!versionNodes.length) {
+      throw new Error('删除后没有可保存的页面，请先重新生成页面');
+    }
     let savedVersion = 0;
     if (projectStore.projectId) {
       const snapshot = {
@@ -1541,13 +1647,13 @@ async function handleSaveNewVersion() {
           title: outlineStore.title,
           nodes: outlineStore.nodes,
         },
-        content: generationStore.currentScriptNodes,
+        content: versionNodes,
         page_bindings: versionPageBindings(),
         style: draftSnapshot().presentation,
         generation_instruction_set: draftSnapshot().generation_instruction_set,
       };
       const projectResponse = await projectModifyApi.createVersion(projectStore.projectId, {
-        nodes: generationStore.currentScriptNodes,
+        nodes: versionNodes,
         presentation: draftSnapshot().presentation,
         page_bindings: versionPageBindings(),
         generation_instruction_set: draftSnapshot().generation_instruction_set,
@@ -1566,7 +1672,7 @@ async function handleSaveNewVersion() {
     try {
       response = await teacherV1Api.generation.finalize({
       generation_id: generationStore.lastGenId,
-      nodes: generationStore.currentScriptNodes,
+      nodes: versionNodes,
       course_name: outlineStore.title || intentStore.intentSummary?.topic || "未命名课件",
       summary,
       outline_id: outlineStore.outline_id,
@@ -1586,6 +1692,7 @@ async function handleSaveNewVersion() {
     lastSavedVersion.value = savedVersion;
     if (savedVersion > 0) baseVersion.value = savedVersion;
     saveVersionState.value = "saved";
+    needsVersionSave.value = false;
     await modifyStore.loadVersionHistory().catch(() => {});
   } catch (error) {
     saveVersionState.value = "error";
@@ -1593,7 +1700,15 @@ async function handleSaveNewVersion() {
   }
 }
 
-function goToS4() {
+async function goToS4() {
+  if (needsVersionSave.value) {
+    if (!filterDeletedOutlineNodes(generationStore.currentScriptNodes, deletedOutlineNodeIds.value).length) {
+      handleError('删除后没有可保存的页面，请先重新生成页面再进入 S4');
+      return;
+    }
+    await handleSaveNewVersion();
+    if (saveVersionState.value !== 'saved') return;
+  }
   // 同步大纲信息到 localStorage，供 S4 使用
   try {
     window.localStorage.setItem(
@@ -2335,6 +2450,7 @@ function handleError(msg) {
   flex-wrap: wrap;
 }
 .pill {
+  cursor: pointer;
   font-size: 12px;
   font-weight: 600;
   color: #5f7467;

@@ -10,7 +10,7 @@ Go 侧（internal/service/courseware_service.go）负责落库与回填。
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from .templates import PPTTheme, get_theme
@@ -71,6 +71,73 @@ DENSITY_PADDING = {
 }
 FALLBACK_DENSITY_PADDING = DENSITY_PADDING["comfortable"]
 
+
+@dataclass(frozen=True)
+class DensityProfile:
+    """Shared content typography for HTML preview and editable PPTX export."""
+
+    body_text_pt: int
+    body_point_pt: int
+    conclusion_pt: int
+    key_point_max_pt: int
+    preview_body_px: int
+    preview_point_px: int
+    preview_conclusion_px: int
+    card_gap_px: int
+    card_padding_px: int
+
+
+DENSITY_PROFILES = {
+    "compact": DensityProfile(13, 12, 20, 15, 13, 13, 19, 6, 5),
+    "comfortable": DensityProfile(15, 14, 22, 17, 15, 15, 21, 10, 7),
+    "minimal": DensityProfile(17, 16, 24, 19, 17, 17, 23, 14, 9),
+}
+
+
+def density_profile(value: str | None) -> DensityProfile:
+    return DENSITY_PROFILES.get(str(value or "").strip().lower(), DENSITY_PROFILES["comfortable"])
+
+
+@dataclass(frozen=True)
+class ContentGeometry:
+    """Content-slide panel bounds in inches, shared by SVG and PPTX."""
+
+    left: tuple[float, float]
+    right: tuple[float, float]
+    top: float
+    height: float
+    figure_height: float
+    body: tuple[float, float]
+
+    @property
+    def wide_right(self) -> tuple[float, float]:
+        return (self.left[0], round(self.right[0] + self.right[1] - self.left[0], 2))
+
+
+CONTENT_GEOMETRIES = {
+    "compact": ContentGeometry((0.48, 3.20), (3.88, 8.96), 1.30, 5.58, 2.30, (3.76, 3.12)),
+    "comfortable": ContentGeometry((0.72, 3.60), (4.52, 8.08), 1.42, 5.35, 2.45, (4.01, 2.76)),
+    "minimal": ContentGeometry((1.10, 3.52), (5.02, 7.20), 1.58, 5.05, 2.20, (3.94, 2.69)),
+}
+
+
+def content_geometry(value: str | None, layout: str | None = "balanced") -> ContentGeometry:
+    base = CONTENT_GEOMETRIES.get(str(value or "").strip().lower(), CONTENT_GEOMETRIES["comfortable"])
+    mode = str(layout or "balanced").strip().lower()
+    if mode not in ("visual", "text"):
+        return base
+    # Both modes widen the main column; visual additionally gives the figure
+    # more vertical space, while text mode suppresses the figure at render time.
+    shift = 0.65 if mode == "visual" else 0.50
+    figure_extra = 0.50 if mode == "visual" else 0.0
+    return replace(
+        base,
+        left=(base.left[0], base.left[1] - shift),
+        right=(base.right[0] - shift, base.right[1] + shift),
+        figure_height=base.figure_height + figure_extra,
+        body=(base.body[0] + figure_extra, base.body[1] - figure_extra),
+    )
+
 # 选了模板但没显式给 palette 时，用该模板自带的默认配色兜底
 TEMPLATE_DEFAULT_PALETTE = {"deck-swiss-edu": "klein-blue"}
 
@@ -96,6 +163,21 @@ def presentation_from_nodes(nodes: Iterable[Any]) -> tuple[dict[str, str], set[s
                     explicit.add(key)
             break
     return values, explicit
+
+
+def apply_export_presentation(nodes: list[dict[str, Any]],
+                              presentation: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Attach a version's global style to the first export node without mutating its snapshot."""
+    if not nodes or not isinstance(presentation, dict) or not presentation:
+        return nodes
+    first = dict(nodes[0])
+    metadata = dict(first.get("metadata") or {})
+    current = metadata.get("presentation")
+    metadata["presentation"] = {
+        **(current if isinstance(current, dict) else {}), **presentation,
+    }
+    first["metadata"] = metadata
+    return [first, *nodes[1:]]
 
 
 def _luminance(value: str) -> float:

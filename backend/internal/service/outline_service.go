@@ -472,12 +472,18 @@ func (s *OutlineService) CreateOutline(ctx context.Context, req OutlineGenerateR
 	if req.SessionID == "" {
 		return nil, fmt.Errorf("session_id 不能为空")
 	}
-	resp, err := s.aiClient.GenerateOutline(ctx, req)
-	if err != nil {
-		return nil, err
+	var resp *OutlineGenerateResponse
+	if len(req.Nodes) > 0 {
+		resp = &OutlineGenerateResponse{Nodes: req.Nodes}
+	} else {
+		var err error
+		resp, err = s.aiClient.GenerateOutline(ctx, req)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// 若无 markdown 且 intent.topic 存在，回填标题
-	title := ""
+	title := strings.TrimSpace(req.CourseName)
 	if req.Markdown == "" && req.Intent != nil && req.Intent.Topic != nil {
 		title = *req.Intent.Topic
 	}
@@ -485,7 +491,7 @@ func (s *OutlineService) CreateOutline(ctx context.Context, req OutlineGenerateR
 	now := time.Now()
 	nodes := normalizeOutlineNodes(resp.Nodes)
 	if err := validateOutlineDraft(nodes); err != nil {
-		return nil, fmt.Errorf("%w: AI 生成大纲无效: %v", ErrInvalidOutline, err)
+		return nil, fmt.Errorf("%w: 大纲节点无效: %v", ErrInvalidOutline, err)
 	}
 	outline := &Outline{
 		OutlineID:      outlineID,

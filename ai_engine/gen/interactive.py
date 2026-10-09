@@ -72,7 +72,8 @@ class InteractiveBuilder:
                 if kc.get("term"):
                     cards.append({"type": "flashcard", "front": kc["term"],
                                   "back": kc.get("definition", ""), "tags": kc.get("tags", [])})
-            return cards
+            if cards:
+                return cards
         return self._fallback_flashcards(node.get("title", "知识点"),
                                          node.get("script") or node.get("summary") or "")
 

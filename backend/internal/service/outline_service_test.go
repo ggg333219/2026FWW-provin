@@ -316,6 +316,26 @@ func TestCreateOutlineSessionRequired(t *testing.T) {
 	}
 }
 
+func TestCreateOutlineFromVersionNodesDoesNotCallAI(t *testing.T) {
+	svc := &OutlineService{
+		aiClient: &fakeOutlineAI{generateErr: errors.New("AI must not be called for a version fork")},
+		store:    newMemOutlineStore(),
+	}
+	seed := sampleNodes()
+	created, err := svc.CreateOutline(context.Background(), OutlineGenerateRequest{
+		SessionID: "project_1", CourseName: "排序算法", Nodes: seed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.OutlineID == "" || created.OutlineVersion != 1 || created.Status != OutlineStatusDraft || created.Title != "排序算法" {
+		t.Fatalf("unexpected seeded outline: %+v", created)
+	}
+	if len(created.Nodes) != len(seed) || created.Nodes[0].NodeID != seed[0].NodeID || created.Nodes[1].Title != seed[1].Title {
+		t.Fatalf("version nodes were not reused: %+v", created.Nodes)
+	}
+}
+
 func TestOutlineEngineTimeoutBudget(t *testing.T) {
 	if outlineRequestTimeout != 120*time.Second {
 		t.Fatalf("outline engine timeout = %s, want 120s", outlineRequestTimeout)

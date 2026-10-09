@@ -35,7 +35,7 @@ from .page_spec import (
     resolve_export_key_points,
 )
 from .deck_structure import TOC_MIN_CONTENT_NODES, expand_deck_pages
-from .presentation import presentation_from_nodes, presentation_to_theme
+from .presentation import content_geometry, density_profile, presentation_from_nodes, presentation_to_theme
 from .templates import get_theme
 
 
@@ -43,8 +43,7 @@ SLIDE_WIDTH = Inches(13.333333)
 SLIDE_HEIGHT = Inches(7.5)
 
 # 东亚字体：python-pptx 的 font.name 只写入 a:latin（西文字形），
-# WPS / 中文 Office 渲染中文时读取 a:ea 字形，缺失会回退默认宋体。
-EA_FONT_NAME = "微软雅黑"
+# WPS / 中文 Office 渲染中文时读取 a:ea，必须与用户所选字体同步。
 
 _TYPE_ALIASES = {
     "cover": "cover", "title": "cover", "title_slide": "cover",
@@ -69,18 +68,8 @@ _SEGMENT_LABELS = {
 # 规划器决定一次，导出只负责把 page_spec 给出的 figure 画出来。
 
 # ── 内容页版式（英寸）──
-# 数字取自 gen/templates/layouts/content_left_right.json。预览与导出显示的是
-# "同一页"，摆版就不能各写各的：核心要点在左栏、图示与正文上下分居右栏。
-# 改版式 JSON 时这几个常量要一起改。
-_LAYOUT_PANEL_TOP = 1.42          # 右栏顶端，也是整页内容区的顶
-_LAYOUT_PANEL_FULL_H = 5.35       # 内容区总高（左栏与"无图示"的右栏）
-_LAYOUT_LEFT_PANEL = (0.72, 3.60)  # 左栏 (x, w)；高同 _LAYOUT_PANEL_FULL_H
-_LAYOUT_RIGHT_COLUMN = (4.52, 8.08)       # 右栏 (x, w)
-# 没有核心要点时左栏整栏抹掉，右栏左移并撑满：4.52-3.8=0.72，8.08+3.8=11.88。
-# 与 svg_renderer._widen_right_column 是同一笔账，改一处必须改两处。
-_LAYOUT_RIGHT_COLUMN_WIDE = (0.72, 11.88)
-_LAYOUT_FIGURE_PANEL_H = 2.45     # 右栏上半（图示面板）
-_LAYOUT_BODY_PANEL = (4.01, 2.76)  # 右栏下半 (y, h)；无图示时不存在
+# 面板位置、尺寸统一从 presentation.content_geometry 取得；舒展档保留原版式 JSON 坐标。
+_BASE_CONTENT_GEOMETRY = content_geometry("comfortable")
 # 图示作画区：figure_region 相对 figure_panel 内缩 (0.14, 0.10)，再减掉渲染器的
 # 区域留白 _REGION_PADDING（16px = 0.167in）—— 预览的图示实际就画在这个框里。
 _LAYOUT_FIGURE_OFFSET = (0.14 + 0.167, 0.10 + 0.167)
@@ -91,10 +80,8 @@ _LAYOUT_FIGURE_SHRINK = (0.28 + 0.333, 0.20 + 0.167)
 #: 3.6in 宽的左栏会圆到 0.6in，观感从"卡片"变成"枕头"，两边一眼就能看出不是同一个东西。
 _PANEL_RADIUS = 8.0 / 96.0
 
-#: 核心要点卡片的纵向内边距与卡片间距（英寸）。预览是 padding 7px、卡片间 gap 10px
-#: （preview.py 的 .svg-block-secondary .key-points li 与 .key-points 的 grid gap）。
-_POINT_CARD_PAD = 7.0 / 96.0
-_POINT_CARD_GAP = 10.0 / 96.0
+#: 核心要点卡片的纵向内边距与间距由 presentation.density_profile 决定，
+#: 与预览的 .svg-block .key-points 使用同一组像素值（PPTX 按 96px/in 换算）。
 
 #: 正文面板的填充比例。排版模型按 1.35 × 字号算行高，而 PowerPoint 用字体自身的
 #: 行距（中文 Office 上略高于此），真按 100% 撑满，最后一行会压到面板下沿。留 3%
@@ -121,6 +108,9 @@ def _enum_value(value: Any) -> str:
 def resolve_node_type(node: Any) -> str:
     """与预览侧一致：优先读取 type，回退 node_type。"""
     item = _as_mapping(node)
+    plan = item.get("interactive_plan") or {}
+    if isinstance(plan, dict) and str(plan.get("kind") or "").lower() == "flashcard":
+        return "interactive"
     raw = _enum_value(item.get("type")) or _enum_value(item.get("node_type"))
     return _TYPE_ALIASES.get(raw, "content")
 
@@ -160,6 +150,9 @@ class PPTExporter:
         # 构造期的兜底主题，_render 会按节点的样式层重算
         self._theme = get_theme(self.config.default_template)
         self._panel_shape = MSO_SHAPE.ROUNDED_RECTANGLE
+        self._density = density_profile("comfortable")
+        self._content_geometry = content_geometry("comfortable")
+        self._layout_mode = "balanced"
 
     def export(self, nodes: list[dict[str, Any]], course_name: str = "课件",
                template_id: str = "default") -> dict[str, Any]:
@@ -194,6 +187,9 @@ class PPTExporter:
         # 避免润色参与样式决策。取值顺序与预览一致：显式 palette → 模板自带 palette
         # → 默认调色板 classic（见 presentation.presentation_to_theme）。
         presentation, explicit_keys = presentation_from_nodes(normalized)
+        self._density = density_profile(presentation.get("density"))
+        self._layout_mode = presentation.get("layout", "balanced")
+        self._content_geometry = content_geometry(presentation.get("density"), self._layout_mode)
         self._theme, _ = presentation_to_theme(
             presentation, explicit_keys, template_id or self.config.default_template)
         # 面板永远是圆角：预览的版式面板写的都是 rounded_rect（rx=8），与用户选了
@@ -283,21 +279,14 @@ class PPTExporter:
     def _add_cover_slide(self, prs: Presentation, node: dict[str, Any], index: int = 1) -> None:
         slide = self._blank_slide(prs, footer=False)
         self._set_background(slide, self._theme.primary)
-        # 几何装饰：左侧强调条 + 底部色带 + 错落圆形（纯形状，WPS 兼容）
+        # 与 cover.json 同源：只画版式中定义的两条色带，不额外叠加预览没有的圆形。
         self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0, 0, 0.23, 7.5, self._theme.accent)
         self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0.23, 6.92, 13.11, 0.58, self._theme.secondary)
-        self._add_shape(slide, MSO_SHAPE.OVAL, 10.55, -1.35, 3.7, 3.7,
-                        self._blend(self._theme.primary, self._theme.inverse, 0.14))
-        self._add_shape(slide, MSO_SHAPE.OVAL, 11.95, 4.55, 2.6, 2.6,
-                        self._blend(self._theme.secondary, self._theme.inverse, 0.22))
-        self._add_shape(slide, MSO_SHAPE.OVAL, -0.95, 5.35, 2.3, 2.3,
-                        self._blend(self._theme.primary, self._theme.inverse, 0.10))
         title = str(node.get("title") or node.get("content") or "课件").strip()
         subtitle = str(node.get("content") or node.get("summary") or "").strip()
         if subtitle == title:
             subtitle = ""
-        # 标题上下居中：主标题 + 副标题整体居中排布，配短装饰条
-        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 5.92, 1.72, 1.5, 0.075, self._theme.accent)
+        # 标题槽位沿用 cover.json 的坐标，避免导出独有的短装饰条。
         self._add_textbox(slide, title, 1.05, 2.05, 11.23, 1.75,
                           font_size=self._fit_font(title, 34, 50, 18), color=self._theme.inverse,
                           bold=True, align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
@@ -305,27 +294,37 @@ class PPTExporter:
             self._add_textbox(slide, subtitle, 1.6, 4.0, 10.13, 0.95,
                               font_size=self._fit_font(subtitle, 20, 28, 32),
                               color=self._theme.inverse, align=PP_ALIGN.CENTER)
-            self._add_shape(slide, MSO_SHAPE.RECTANGLE, 5.92, 5.12, 1.5, 0.05,
-                            self._blend(self._theme.accent, self._theme.inverse, 0.25))
         self._add_textbox(slide, self._theme.display_name, 1.08, 6.19, 3.4, 0.3,
                           font_size=11, color=self._theme.inverse, bold=True)
 
     def _add_section_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
-        slide = self._blank_slide(prs, index)
-        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0, 0, 4.2, 7.5, self._theme.primary)
+        slide = self._blank_slide(prs, index, footer=False)
+        self._set_background(slide, self._theme.primary)
+        self._add_shape(slide, MSO_SHAPE.RECTANGLE, 0, 0, 4.2, 7.5, self._theme.secondary)
         self._add_shape(slide, MSO_SHAPE.RECTANGLE, 4.2, 0, 0.12, 7.5, self._theme.accent)
         self._add_textbox(slide, f"{index:02d}", 0.75, 1.35, 2.3, 1.0,
                           font_size=46, color=self._theme.inverse, bold=True)
         title = str(node.get("title") or "新章节")
         self._add_textbox(slide, title, 4.95, 2.25, 7.45, 1.7,
-                          font_size=self._fit_font(title, 30, 42, 14), color=self._theme.text,
+                          font_size=self._fit_font(title, 30, 42, 14), color=self._theme.inverse,
                           bold=True, valign=MSO_ANCHOR.MIDDLE)
         summary = str(node.get("summary") or node.get("content") or "").strip()
         if summary:
             self._add_textbox(slide, summary, 5.0, 4.15, 6.9, 1.0,
-                              font_size=self._fit_font(summary, 17, 23, 36), color=self._theme.muted)
-        self._add_textbox(slide, f"{index:02d}", 12.05, 6.98, 0.95, 0.32,
-                          font_size=10, color=self._theme.muted, align=PP_ALIGN.RIGHT)
+                              font_size=self._fit_font(summary, 17, 23, 36), color=self._theme.inverse)
+        # section.json 的列表区与预览一致，真实章节要点不能只在预览可见。
+        for offset, point in enumerate(resolve_key_points(node)[:5]):
+            y = 5.08 + offset * 0.39
+            self._add_shape(slide, self._panel_shape, 4.95, y, 7.45, 0.34,
+                            self._blend(self._theme.primary, self._theme.inverse, 0.14))
+            self._add_shape(slide, MSO_SHAPE.OVAL, 5.08, y + 0.04, 0.25, 0.25,
+                            self._theme.inverse)
+            self._add_textbox(slide, str(offset + 1), 5.08, y + 0.04, 0.25, 0.25,
+                              font_size=11, color=self._theme.secondary, bold=True,
+                              align=PP_ALIGN.CENTER)
+            self._add_textbox(slide, point, 5.46, y + 0.01, 6.71, 0.28,
+                              font_size=self._fit_font(point, 12, 16, 34),
+                              color=self._theme.inverse, fit_to_shape=True)
 
     def _add_auto_toc_slides(self, prs: Presentation, entries: list[str]) -> None:
         """自动目录页：两栏卡片式，每页 8 条（4 行 × 2 列），条目与节点一一对应。"""
@@ -390,10 +389,11 @@ class PPTExporter:
         side_points = self._side_points(spec)
         if not body_items:
             body_items = [("text", "暂无正文内容", False)]
-        figure = self._spec_figure(spec)
+        figure = self._spec_figure(spec) if self._layout_mode != "text" else None
 
-        col_x, col_w = _LAYOUT_RIGHT_COLUMN if side_points else _LAYOUT_RIGHT_COLUMN_WIDE
-        first_body = _LAYOUT_BODY_PANEL if figure else (_LAYOUT_PANEL_TOP, _LAYOUT_PANEL_FULL_H)
+        geometry = self._content_geometry
+        col_x, col_w = geometry.right if side_points else geometry.wide_right
+        first_body = geometry.body if figure else (geometry.top, geometry.height)
 
         # 分页容量按正文面板的**实际**高度算，并且与渲染共用 _body_item_box 一把
         # 尺子。以前这里是两套算法：分页按"字符数 ÷ 每行字数 + 1"估权重，渲染按
@@ -401,7 +401,10 @@ class PPTExporter:
         # 0.28in 计，实际只有 0.1in），又给结论块少算了（按 15pt/36 字估，实际是
         # 22pt/23 字）。于是面板里明明还剩一行的地方，那行就被推到了下一页。
         body_chunks = self._chunk_body_items(body_items, first_body[1] - 0.71, col_w - 0.58)
-        point_chunks = self._chunk_weighted(side_points, 13, 34)
+        point_units = max(9, round(13 * geometry.height / _BASE_CONTENT_GEOMETRY.height))
+        point_chars = max(20, round(34 * geometry.left[1] / _BASE_CONTENT_GEOMETRY.left[1]
+                                    * 17 / self._density.key_point_max_pt))
+        point_chunks = self._chunk_weighted(side_points, point_units, point_chars)
         page_count = max(len(body_chunks), len(point_chunks), 1)
 
         title = str(node.get("title") or f"第 {index} 页")
@@ -414,27 +417,27 @@ class PPTExporter:
                 # 续页重复核心要点：预览一页只画一次，而续页是本页正文的延续，
                 # 让学生一直看得见这页在讲哪几个要点。
                 chunk = point_chunks[min(page_index, len(point_chunks) - 1)]
-                left_x, left_w = _LAYOUT_LEFT_PANEL
-                self._add_panel(slide, "核心要点", chunk, left_x, _LAYOUT_PANEL_TOP,
-                                left_w, _LAYOUT_PANEL_FULL_H, cards=True)
+                left_x, left_w = geometry.left
+                self._add_panel(slide, "核心要点", chunk, left_x, geometry.top,
+                                left_w, geometry.height, cards=True)
 
             first = page_index == 0
             if figure and first:
                 # 图示只上第一页；续页腾出的整块右栏还给正文（同预览的
                 # _merge_right_column：缺一样就按缺了的样子重算，不留空面板）
-                self._add_shape(slide, self._panel_shape, col_x, _LAYOUT_PANEL_TOP,
-                                col_w, _LAYOUT_FIGURE_PANEL_H,
+                self._add_shape(slide, self._panel_shape, col_x, geometry.top,
+                                col_w, geometry.figure_height,
                                 self._theme.surface, line=self._theme.muted)
                 self._render_visualization(
                     slide, figure,
                     col_x + _LAYOUT_FIGURE_OFFSET[0],
-                    _LAYOUT_PANEL_TOP + _LAYOUT_FIGURE_OFFSET[1],
+                    geometry.top + _LAYOUT_FIGURE_OFFSET[1],
                     col_w - _LAYOUT_FIGURE_SHRINK[0],
-                    _LAYOUT_FIGURE_PANEL_H - _LAYOUT_FIGURE_SHRINK[1],
+                    geometry.figure_height - _LAYOUT_FIGURE_SHRINK[1],
                 )
                 panel_y, panel_h = first_body
             else:
-                panel_y, panel_h = _LAYOUT_PANEL_TOP, _LAYOUT_PANEL_FULL_H
+                panel_y, panel_h = geometry.top, geometry.height
             chunk = body_chunks[page_index] if page_index < len(body_chunks) else []
             self._add_body_panel(slide, chunk, col_x, panel_y, col_w, panel_h)
 
@@ -830,22 +833,30 @@ class PPTExporter:
 
     def _add_quiz_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
         items = self._quiz_question_items(node)
+        if not items:
+            raise ValueError(f"互动页《{node.get('title') or index}》没有已保存的真实题目，请在 S3 生成并保存互动内容后再导出")
         chunks = self._chunk_quiz_items(items)
         number = 0
         for chunk_index, chunk in enumerate(chunks):
             slide = self._blank_slide(prs, index)
             title = str(node.get("title") or "课堂互动") + ("（续）" if chunk_index else "")
             self._add_page_title(slide, title, index)
+            # quiz.json 的整页浅色圆角面板，预览已画；PPTX 原先漏掉了这一层。
+            self._add_shape(slide, self._panel_shape, 0.72, 1.42, 11.88, 5.35,
+                            self._theme.surface, line=self._theme.muted)
             y = 1.55
             for question, options, answer in chunk:
                 number += 1
+                card_h = 2.12 if options else 0.86
+                self._add_shape(slide, self._panel_shape, 0.85, y, 11.45, card_h,
+                                "FFFFFF", line=self._theme.muted)
                 # 序号圆点取 primary：预览的 .quiz-slide .questions .q-item::before
                 # 用的是 var(--preview-accent)，而预览的 accent 就是调色板强调色，
                 # 也就是 theme_from_palette 里的 primary。
-                self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE,
-                                0.85, y, 0.58, 0.58, self._theme.primary)
-                self._add_textbox(slide, str(number), 0.85, y + 0.02, 0.58, 0.42,
-                                  font_size=17, color=self._theme.inverse, bold=True,
+                self._add_shape(slide, MSO_SHAPE.OVAL,
+                                1.02, y + 0.18, 0.36, 0.36, self._theme.primary)
+                self._add_textbox(slide, str(number), 1.02, y + 0.21, 0.36, 0.3,
+                                  font_size=13, color=self._theme.inverse, bold=True,
                                   align=PP_ALIGN.CENTER)
                 self._add_textbox(slide, question, 1.68, y - 0.02, 10.55, 0.82,
                                   font_size=self._fit_font(question, 18, 24, 42),
@@ -865,51 +876,119 @@ class PPTExporter:
                     y += 1.02
 
     def _add_interactive_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
-        """Render flashcards as editable PPT slides; fall back to quiz rendering."""
+        """Use internal slide links to flip each saved knowledge card in PPT/WPS."""
         from .export_html5 import extract_interactive_items
 
-        flashcards = [
-            item for item in extract_interactive_items([node])
-            if item.get("type") == "flashcard"
-        ]
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        asset = metadata.get("interactive_asset") if isinstance(metadata.get("interactive_asset"), dict) else {}
+        has_saved_cards = any(
+            isinstance(source, list) and any(isinstance(item, dict) and item.get("type") == "flashcard"
+                                            for item in source)
+            for source in (asset.get("items"), node.get("interactive_items"))
+        ) or bool(node.get("front")) or any(
+            isinstance(seg, dict) and isinstance(seg.get("knowledge_card"), dict)
+            and (seg["knowledge_card"].get("term") or seg["knowledge_card"].get("front"))
+            for seg in (node.get("segments") or [])
+        )
+        if (node.get("interactive_plan") or {}).get("kind") == "flashcard" and not has_saved_cards:
+            raise ValueError(f"知识翻卡《{node.get('title') or index}》只有规划、没有已保存的卡片内容，请在 S3 生成并保存后再导出")
+        flashcards = extract_interactive_items([node], flashcards_only=True)
         if not flashcards:
+            if (node.get("interactive_plan") or {}).get("kind") == "flashcard":
+                raise ValueError("当前翻卡页没有可用的正面/背面内容")
             self._add_quiz_slide(prs, node, index)
             return
 
+        # Create all pairs before wiring links so each target has a slide part.
+        # PPTX has no portable CSS-style flip: adjacent slides are the two faces,
+        # and clicking either card jumps directly to its counterpart.
+        pairs = [(self._blank_slide(prs, index), self._blank_slide(prs, index))
+                 for _ in flashcards]
         for card_index, item in enumerate(flashcards):
-            slide = self._blank_slide(prs, index)
+            front_slide, back_slide = pairs[card_index]
             title = str(node.get("title") or "知识翻卡")
             if card_index:
                 title += f"（{card_index + 1}）"
-            self._add_page_title(slide, title, index)
-            x, width = 0.85, 11.65
-            self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, 1.65, width, 2.1,
-                            self._theme.background, self._theme.muted)
-            self._add_textbox(slide, "正面", x + 0.3, 1.9, 1.0, 0.35,
-                              font_size=14, color=self._theme.secondary, bold=True)
+            self._add_page_title(front_slide, title, index)
+            self._add_page_title(back_slide, title, index)
+            x, y, width, height = 1.1, 1.55, 11.13, 4.65
+            front_card = self._add_shape(
+                front_slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, y, width, height,
+                self._theme.primary)
+            front_card.click_action.target_slide = back_slide
+            front_label = self._add_textbox(
+                front_slide, f"知识翻卡 · 正面  {card_index + 1}/{len(flashcards)}",
+                x + 0.42, y + 0.34, width - 0.84, 0.4,
+                font_size=15, color=self._theme.inverse, bold=True)
+            front_label.click_action.target_slide = back_slide
             front = str(item.get("front") or "")
-            self._add_textbox(
-                slide, front, x + 0.3, 2.35, width - 0.6, 1.05,
-                font_size=self._fit_font(front, 24, 30, 34),
-                color=self._theme.text, bold=True, valign=MSO_ANCHOR.MIDDLE,
-                fit_to_shape=True,
-            )
-            self._add_shape(slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, 4.05, width, 1.85,
-                            self._theme.surface, self._theme.muted)
-            self._add_textbox(slide, "背面", x + 0.3, 4.3, 1.0, 0.35,
-                              font_size=14, color=self._theme.secondary, bold=True)
+            front_text = self._add_textbox(
+                front_slide, front, x + 0.48, y + 1.25, width - 0.96, 2.0,
+                font_size=self._fit_font(front, 22, 34, 30),
+                color=self._theme.inverse, bold=True, align=PP_ALIGN.CENTER,
+                valign=MSO_ANCHOR.MIDDLE, fit_to_shape=True)
+            front_text.click_action.target_slide = back_slide
+            front_hint = self._add_textbox(
+                front_slide, "点击卡片查看释义", x + 0.48, y + 3.86,
+                width - 0.96, 0.36, font_size=13, color=self._theme.inverse,
+                align=PP_ALIGN.CENTER)
+            front_hint.click_action.target_slide = back_slide
+
+            back_card = self._add_shape(
+                back_slide, MSO_SHAPE.ROUNDED_RECTANGLE, x, y, width, height,
+                self._theme.surface, self._theme.muted)
+            back_card.click_action.target_slide = front_slide
+            back_label = self._add_textbox(
+                back_slide, f"知识翻卡 · 背面  {card_index + 1}/{len(flashcards)}",
+                x + 0.42, y + 0.34, width - 0.84, 0.4,
+                font_size=15, color=self._theme.secondary, bold=True)
+            back_label.click_action.target_slide = front_slide
             back = str(item.get("back") or "")
-            self._add_textbox(
-                slide, back, x + 0.3, 4.72, width - 0.6, 0.92,
-                font_size=self._fit_font(back, 18, 23, 42),
-                color=self._theme.text, valign=MSO_ANCHOR.MIDDLE, fit_to_shape=True,
-            )
+            back_text = self._add_textbox(
+                back_slide, back, x + 0.48, y + 1.06, width - 0.96, 2.65,
+                font_size=self._fit_font(back, 17, 26, 38),
+                color=self._theme.text, align=PP_ALIGN.CENTER,
+                valign=MSO_ANCHOR.MIDDLE, fit_to_shape=True)
+            back_text.click_action.target_slide = front_slide
+            back_hint = self._add_textbox(
+                back_slide, "点击卡片返回正面", x + 0.48, y + 3.86,
+                width - 0.96, 0.36, font_size=13, color=self._theme.secondary,
+                align=PP_ALIGN.CENTER)
+            back_hint.click_action.target_slide = front_slide
+
+            # Navigation lives outside the card, so it cannot steal a flip click.
+            if card_index:
+                previous_front = pairs[card_index - 1][0]
+                for slide in (front_slide, back_slide):
+                    previous = self._add_textbox(
+                        slide, "← 上一张", x, 6.42, 2.0, 0.42,
+                        font_size=15, color=self._theme.secondary, bold=True)
+                    previous.click_action.target_slide = previous_front
+            if card_index + 1 < len(pairs):
+                next_front = pairs[card_index + 1][0]
+                for slide in (front_slide, back_slide):
+                    next_card = self._add_textbox(
+                        slide, "下一张 →", x + width - 2.0, 6.42, 2.0, 0.42,
+                        font_size=15, color=self._theme.secondary, bold=True,
+                        align=PP_ALIGN.RIGHT)
+                    next_card.click_action.target_slide = next_front
 
     _QUIZ_PLAIN_PER_PAGE = 5
 
     @classmethod
     def _quiz_question_items(cls, node: dict[str, Any]) -> list[tuple[str, list[str], str]]:
         """归一化 quiz 题目：兼容 dict（question/options/answer）与纯文本。"""
+        from .export_html5 import extract_interactive_items
+
+        saved = extract_interactive_items([node])
+        saved_questions = [question for item in saved if item.get("type") == "quiz"
+                           for question in (item.get("questions") or [])]
+        if saved_questions:
+            return [(
+                str(question.get("question") or "").strip(),
+                [str(opt).strip() for opt in question.get("options") or [] if str(opt).strip()],
+                str(question.get("answer") or "").strip(),
+            ) for question in saved_questions if str(question.get("question") or "").strip()]
         raw = node.get("questions") or node.get("interactive_questions") or []
         if isinstance(raw, str):
             raw = [line for line in raw.splitlines() if line.strip()]
@@ -933,7 +1012,7 @@ class PPTExporter:
         """带选项的题目占位大（每页 2 题），纯题目每页 5 题；
         一旦页面内含选项题，整页容量按 2 题计算，避免混排溢出。"""
         if not items:
-            items = [("请结合本节内容提出一个关键问题。", [], "")]
+            return []
         chunks: list[list[tuple[str, list[str], str]]] = []
         current: list[tuple[str, list[str], str]] = []
         for item in items:
@@ -950,37 +1029,44 @@ class PPTExporter:
     def _add_summary_slide(self, prs: Presentation, node: dict[str, Any], index: int) -> None:
         points = resolve_key_points(node)
         if not points:
-            raw = node.get("content") or node.get("summary") or "本节要点"
+            raw = node.get("content") or node.get("summary") or ""
             points = [line.strip(" -•\t") for line in str(raw).splitlines() if line.strip()]
-        points = points or ["本节要点"]
-        chunks = self._chunk_items(points, 5)
+        if not points:
+            return
+        density = self._content_geometry
+        max_items = 6 if self._density.body_text_pt <= 13 else (4 if self._density.body_text_pt >= 17 else 5)
+        chunks = self._chunk_items(points, max_items)
+        card_h = 0.68 if max_items == 6 else (0.88 if max_items == 4 else 0.78)
+        gap = 0.12 if max_items == 6 else (0.18 if max_items == 4 else 0.12)
+        start_y = 1.46 if max_items == 6 else (1.82 if max_items == 4 else 1.62)
+        card_x, card_w = density.wide_right
         tint = self._blend(self._theme.background, self._theme.primary, 0.07)
         for chunk_index, chunk in enumerate(chunks):
             slide = self._blank_slide(prs, index)
             self._set_background(slide, tint)  # 总结版式：浅色主题底，区隔内容页
             title = str(node.get("title") or "本节小结") + ("（续）" if chunk_index else "")
             self._add_page_title(slide, title, index)
-            y = 1.62
+            y = start_y
             for offset, text in enumerate(chunk):
-                number = chunk_index * 5 + offset + 1
-                self._add_shape(slide, self._panel_shape, 0.72, y, 11.88, 0.78,
+                number = chunk_index * max_items + offset + 1
+                self._add_shape(slide, self._panel_shape, card_x, y, card_w, card_h,
                                 self._theme.surface, line=self._theme.muted)
-                self._add_shape(slide, MSO_SHAPE.OVAL, 1.0, y + 0.19, 0.4, 0.4,
+                self._add_shape(slide, MSO_SHAPE.OVAL, card_x + 0.28, y + (card_h - 0.4) / 2, 0.4, 0.4,
                                 self._theme.secondary)
-                self._add_textbox(slide, str(number), 1.0, y + 0.24, 0.4, 0.32,
+                self._add_textbox(slide, str(number), card_x + 0.28, y + (card_h - 0.32) / 2, 0.4, 0.32,
                                   font_size=12, color=self._theme.inverse, bold=True,
                                   align=PP_ALIGN.CENTER)
-                self._add_textbox(slide, text, 1.66, y + 0.16, 10.7, 0.5,
-                                  font_size=self._fit_font(text, 15, 19, 34),
+                self._add_textbox(slide, text, card_x + 0.94, y + (card_h - 0.5) / 2, card_w - 1.2, 0.5,
+                                  font_size=self._fit_font(text, self._density.body_text_pt,
+                                                           self._density.body_text_pt + 4, 34),
                                   color=self._theme.text, valign=MSO_ANCHOR.MIDDLE)
-                y += 0.9
-            if chunk_index == len(chunks) - 1:
-                # 结尾收束条：致谢语固定在末页底部
-                self._add_shape(slide, self._panel_shape, 0.72, 6.2, 11.88, 0.6,
-                                self._theme.primary)
-                self._add_textbox(slide, "感谢聆听 · 本节内容到此结束", 0.72, 6.32, 11.88, 0.4,
-                                  font_size=14, color=self._theme.inverse, bold=True,
-                                  align=PP_ALIGN.CENTER)
+                y += card_h + gap
+            # summary.json 在每张小结页底部有结束提示；导出不能漏掉这个视觉锚点。
+            self._add_shape(slide, self._panel_shape, 0.72, 6.2, 11.88, 0.6,
+                            self._theme.primary)
+            self._add_textbox(slide, "本节内容结束", 0.72, 6.32, 11.88, 0.4,
+                              font_size=14, color=self._theme.inverse, bold=True,
+                              align=PP_ALIGN.CENTER)
 
     def _add_ending_slide(self, prs: Presentation) -> None:
         """结束页：深色底 + 居中致谢，仅 include_closing_slide 开启时追加。"""
@@ -1211,7 +1297,8 @@ class PPTExporter:
         """
         if not items or width <= 0 or height <= 0:
             return
-        gap, pad = _POINT_CARD_GAP, _POINT_CARD_PAD
+        gap = self._density.card_gap_px / 96.0
+        pad = self._density.card_padding_px / 96.0
         size = self._points_font_size(items, width, height, gap, pad)
         per_line = max(6, int((width - 0.24) * 72 / size))
 
@@ -1238,12 +1325,11 @@ class PPTExporter:
                               valign=MSO_ANCHOR.MIDDLE)
             cursor += card_h + gap
 
-    @staticmethod
-    def _points_font_size(items: list[tuple[str, str, bool]], width: float,
+    def _points_font_size(self, items: list[tuple[str, str, bool]], width: float,
                           height: float, gap: float, pad: float) -> int:
         """在「卡片数 × 每张行数」放得进面板高度的前提下取最大字号。"""
         usable = height - gap * (len(items) - 1) - pad * 2 * len(items)
-        for size in (17, 16, 15, 14, 13, 12, 11):
+        for size in range(self._density.key_point_max_pt, 10, -1):
             if usable <= 0:
                 break
             per_line = max(6, int((width - 0.24) * 72 / size))
@@ -1267,28 +1353,27 @@ class PPTExporter:
             # 高度跟着字号算：结论最长 60 字（page_spec.MAX_CONCLUSION_CHARS），
             # 写死一个框高会让长结论溢到面板外
             text_w = inner_w - 0.42
-            size = self._fig_label_size(text, text_w, 22)
+            size = self._fig_label_size(text, text_w, self._density.conclusion_pt)
             lines = max(1, math.ceil(len(text) / max(6, int(text_w * 72 / size))))
             box_h = lines * size * 1.35 / 72.0 + 0.12
             return box_h, box_h + 0.08, size, text
-        size = 15 if kind == "text" else 14
+        size = self._density.body_text_pt if kind == "text" else self._density.body_point_pt
         body = text if kind == "text" else f"• {text}"
         # 一行放得下多少字：汉字宽约等于字号，故 cw*72/size
         lines = max(1, math.ceil(len(body) / max(8, int(inner_w * 72 / size))))
         line_h = lines * size * 1.35 / 72.0
         return line_h + 0.08, line_h + 0.1, size, body
 
-    @staticmethod
-    def _body_split_metrics(kind: str, inner_w: float) -> tuple[int, int]:
+    def _body_split_metrics(self, kind: str, inner_w: float) -> tuple[int, int]:
         """切分超长条目时用的 (字号, 每行字数)。
 
         结论的字号随长度收缩（_fig_label_size），这里按最大字号 22pt 估 —— 低估字数
         只会把一条切得偏碎，不会让某一条永远放不下一页。
         """
         if kind == "conclusion":
-            size, text_w = 22, inner_w - 0.42
+            size, text_w = self._density.conclusion_pt, inner_w - 0.42
         else:
-            size = 15 if kind == "text" else 14
+            size = self._density.body_text_pt if kind == "text" else self._density.body_point_pt
             text_w = inner_w
         # "• " 前缀也占宽度，切分时一并扣掉
         prefix = 0 if kind in ("text", "conclusion") else 2
@@ -1450,7 +1535,7 @@ class PPTExporter:
                 latin.addnext(ea)
             else:
                 rPr.append(ea)
-        ea.set("typeface", EA_FONT_NAME)
+        ea.set("typeface", font.name or "Microsoft YaHei")
 
     @staticmethod
     def _set_background(slide, color: str) -> None:

@@ -424,6 +424,12 @@ class TeachingNode(BaseModel):
     next_node_id: Optional[str] = None
     prev_node_id: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # 大纲的翻卡规划与 S3 已生成的互动题/卡须随教学节点经过任务状态、
+    # 版本快照和 S4 导出。Pydantic 默认忽略未声明字段，遗漏会让 HTML5 变空。
+    interactive_plan: dict[str, Any] = Field(default_factory=dict)
+    interactive_items: list[dict[str, Any]] = Field(default_factory=list)
+    front: str = ""
+    back: str = ""
 
     # -------------------------------------------------------------------------
     # 业务扩展字段（对齐主流开源 AI-PPT 标准化规范）
@@ -781,6 +787,7 @@ class ExportRequest(BaseModel):
     # S4 项目版本导出时，Go 端的项目快照是权威数据源；允许直接传入
     # 当前版本节点，避免依赖 AI Engine 进程本地的旧版本目录。
     nodes: list[dict[str, Any]] = Field(default_factory=list)
+    presentation: dict[str, Any] = Field(default_factory=dict)
     generation_instruction_set: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -800,3 +807,6 @@ class ExportStatusResponse(BaseModel):
     courseware_title: Optional[str] = None
     version: Optional[int] = None
     version_no: Optional[int] = None
+    # Word 标准教案的实际内容来源：llm / fallback / mock。
+    # 不再把兜底内容静默伪装成 AI 已生成的教案。
+    lesson_plan_source: Optional[str] = None

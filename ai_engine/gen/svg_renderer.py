@@ -38,7 +38,7 @@ from .page_spec import (
     resolve_kind,
     xml_escape,
 )
-from .presentation import presentation_from_nodes, presentation_to_theme
+from .presentation import content_geometry, presentation_from_nodes, presentation_to_theme
 from .templates import PPTTheme, get_layout
 
 #: 1 英寸 = 96px，与 CSS 参考像素一致（版式 JSON 的坐标单位是英寸）
@@ -60,6 +60,7 @@ _REGION_PADDING = 16.0
 _LAYOUT_BY_KIND = {
     "cover": "cover",
     "section": "section",
+    "agenda": "agenda",
     "summary": "summary",
     "quiz": "quiz",
     "interactive": "interactive",
@@ -72,6 +73,7 @@ _LAYOUT_BY_KIND = {
 _REGIONS_BY_KIND = {
     "cover": ("cover_points_region", None, None),
     "section": ("section_list_region", None, None),
+    "agenda": ("section_list_region", None, None),
     "summary": ("summary_card_list", "notes_region", None),
     "quiz": ("main_content", None, None),
     "interactive": ("main_content", None, None),
@@ -421,12 +423,40 @@ def _widen_right_column(elements: dict[str, dict]) -> dict[str, dict]:
     }
 
 
+def _density_content_elements(elements: dict[str, dict], density: str,
+                              layout_mode: str = "balanced") -> dict[str, dict]:
+    """Move content panels using the same inch-based geometry as PPTX export."""
+    geometry = content_geometry(density, layout_mode)
+    if geometry == content_geometry("comfortable"):
+        return elements
+    lx, lw = geometry.left
+    rx, rw = geometry.right
+    top, full_h = geometry.top, geometry.height
+    body_y, body_h = geometry.body
+    overrides = {
+        "left_panel": {"x": lx, "y": top, "width": lw, "height": full_h},
+        "left_panel_title": {"x": lx + .28, "y": top + .18, "width": lw - .6},
+        "left_panel_content": {"x": lx + .28, "y": top + .68,
+                               "width": lw - .5, "height": full_h - .85},
+        "right_panel": {"x": rx, "y": body_y, "width": rw, "height": body_h},
+        "right_panel_title": {"x": rx + .28, "y": body_y + .15},
+        "right_panel_content": {"x": rx + .28, "y": body_y + .61,
+                                "width": rw - .58, "height": body_h - .71},
+        "figure_panel": {"x": rx, "y": top, "width": rw, "height": geometry.figure_height},
+        "figure_region": {"x": rx + .14, "y": top + .10,
+                          "width": rw - .28, "height": geometry.figure_height - .20},
+    }
+    return {name: {**elem, **overrides.get(name, {})} for name, elem in elements.items()}
+
+
 def render_page_spec_to_svg(
     spec: PageSpec,
     theme: PPTTheme,
     *,
     paint_background: bool = False,
     responsive: bool = True,
+    density: str = "comfortable",
+    layout_mode: str = "balanced",
 ) -> str:
     """把一个 PageSpec 渲染成完整 SVG 字符串。
 
@@ -439,6 +469,8 @@ def render_page_spec_to_svg(
     """
     layout = get_layout(_LAYOUT_BY_KIND.get(spec.kind, "content_left_right"))
     elements: dict[str, dict] = layout.get("elements", {})
+    if spec.kind == "content":
+        elements = _density_content_elements(elements, density, layout_mode)
     slide_w, slide_h = layout.get("slide_size", [13.333, 7.5])
     width, height = slide_w * _PX_PER_INCH, slide_h * _PX_PER_INCH
     slide_area = width * height
@@ -448,7 +480,7 @@ def render_page_spec_to_svg(
     )
     # 图示单独一路：它有专属区域，不与正文抢同一段空间。
     # ROLE_TEACHER 的区块（讲稿、分段）不上幻灯片 —— 这里按 role 取值，天然排除。
-    figure_blocks = [b for b in spec.blocks if b.kind == "figure"]
+    figure_blocks = [b for b in spec.blocks if b.kind == "figure" and layout_mode != "text"]
     primary_blocks = [b for b in spec.blocks if b.role == ROLE_PRIMARY and b.kind != "figure"]
     secondary_blocks = [b for b in spec.blocks if b.role == ROLE_SECONDARY]
 
@@ -537,4 +569,7 @@ def render_node_to_svg(node: dict, page_index: int = 1, theme_id: str = "default
     values, explicit = presentation_from_nodes([node])
     theme, _styled = presentation_to_theme(values, explicit, theme_id)
     spec = build_page_spec(node, page_index)
-    return render_page_spec_to_svg(spec, theme)
+    return render_page_spec_to_svg(
+        spec, theme, density=values.get("density", "comfortable"),
+        layout_mode=values.get("layout", "balanced"),
+    )

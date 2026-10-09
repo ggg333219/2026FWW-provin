@@ -357,6 +357,30 @@ class LessonPlanDOCExporter:
         self._add_section(doc, "四、教学过程")
         self._add_process_table(doc, p.get("teaching_process") or [])
 
+        # S3 已生成的教师讲稿作为教学过程的逐页补充，保留原文；长文本放在
+        # 表格外，避免五列表格把讲稿压成难以阅读的窄列。
+        scripts = p.get("teacher_scripts") or []
+        if scripts:
+            heading = doc.add_paragraph()
+            heading.paragraph_format.space_before = Pt(8)
+            heading.paragraph_format.space_after = Pt(4)
+            heading.paragraph_format.keep_with_next = True
+            _set_run(heading.add_run("教师讲稿（按课件节点）"), size=12, bold=True)
+            for index, item in enumerate(scripts, start=1):
+                if not isinstance(item, dict):
+                    continue
+                script = str(item.get("script") or "").strip()
+                if not script:
+                    continue
+                title = str(item.get("title") or f"第{index}页").strip()
+                label = doc.add_paragraph()
+                label.paragraph_format.space_before = Pt(5)
+                label.paragraph_format.keep_with_next = True
+                _set_run(label.add_run(f"{index}. {title}"), size=11, bold=True)
+                body = doc.add_paragraph()
+                body.paragraph_format.space_after = Pt(5)
+                _set_run(body.add_run(script), size=11)
+
         self._add_section(doc, "五、课堂活动设计")
         activities = p.get("classroom_activities") or []
         activity_lines = []

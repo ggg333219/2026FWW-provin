@@ -84,6 +84,8 @@ export const useVersionStore = defineStore("version", {
     exportError: "",
     /** PPTX 导出质量报告 */
     exportQualityReport: null,
+    /** Word 标准教案实际内容来源：llm | fallback | mock */
+    exportLessonPlanSource: "",
 
     loading: false,
     error: "",
@@ -385,16 +387,17 @@ export const useVersionStore = defineStore("version", {
     // ================================================================
     // 导出
     // ================================================================
-    async startExport(genId, format = "pptx", version = null, coursewareTitle = "", nodes = [], projectId = "", generationInstructionSet = {}) {
+    async startExport(genId, format = "pptx", version = null, coursewareTitle = "", nodes = [], projectId = "", generationInstructionSet = {}, presentation = {}) {
       if (!genId) return;
       this.exportStatus = "pending";
       this.exportFormat = format;
       this.exportError = "";
       this.exportQualityReport = null;
+      this.exportLessonPlanSource = "";
       this.exportFiles = {};
       try {
         // 统一兼容 {code,message,data} 信封（Mock）与裸响应（FastAPI 网关）
-        const response = await teacherV1Api.version.exportCreate(genId, format, version, coursewareTitle, nodes, projectId, generationInstructionSet);
+        const response = await teacherV1Api.version.exportCreate(genId, format, version, coursewareTitle, nodes, projectId, generationInstructionSet, presentation);
         const job = response?.data || response || {};
         this.exportJobId = job.job_id || "";
         this.exportStatus = job.status === "done" ? "done" : "pending";
@@ -402,6 +405,7 @@ export const useVersionStore = defineStore("version", {
         this.exportFiles = Object.fromEntries(
           Object.entries(job.files || {}).map(([format, url]) => [format, normalizeDownloadUrl(url)]),
         );
+        this.exportLessonPlanSource = job.lesson_plan_source || "";
         // 如果不是立即完成，启动轮询
         if (this.exportStatus !== "done" && this.exportJobId) {
           this._pollExport();
@@ -413,7 +417,9 @@ export const useVersionStore = defineStore("version", {
     },
 
     async _pollExport() {
-      const maxPolls = 30; // 最多轮询 30 次（约 60 秒）
+      // 标准教案导出会先调用一次 LLM，再生成 DOCX；保留异步任务设计，
+      // 给慢模型和 MinIO 上传留出时间，避免任务仍在执行时被前端误判超时。
+      const maxPolls = 120; // 最多轮询 120 次（约 4 分钟）
       let polls = 0;
       const poll = async () => {
         if (polls >= maxPolls || !this.exportJobId) {
@@ -436,6 +442,7 @@ export const useVersionStore = defineStore("version", {
           );
           this.exportError = job.error || "";
           this.exportQualityReport = job.quality_report || null;
+          this.exportLessonPlanSource = job.lesson_plan_source || "";
           if (this.exportStatus === "done" || this.exportStatus === "failed") {
             return;
           }
@@ -461,6 +468,7 @@ export const useVersionStore = defineStore("version", {
       this.exportFiles = {};
       this.exportError = "";
       this.exportQualityReport = null;
+      this.exportLessonPlanSource = "";
     },
 
     // ================================================================

@@ -167,8 +167,9 @@
               :export-files="versionStore.exportFiles"
               :export-error="versionStore.exportError"
               :export-quality-report="versionStore.exportQualityReport"
+              :export-lesson-plan-source="versionStore.exportLessonPlanSource"
               :loading="versionStore.loading"
-              :nodes="versionStore.currentVersionDetail?.nodes || []"
+              :nodes="exportVersionNodes"
               :course-title="courseTitle"
               :version-label="currentVersionLabel"
               @start-export="handleStartExport"
@@ -225,6 +226,9 @@ import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
 import AppShell from '../components/layout/AppShell.vue'
 import S4VersionExportCenter from '../components/teacher/S4VersionExportCenter.vue'
 import { writeResumeDraft } from '../utils/coursewareDraft'
+import { withOutlineInteractivePlans } from '../utils/interactiveExport'
+import { outlineFromVersion } from '../utils/versionOutline'
+import { teacherV1Api } from '../services/v1'
 
 const versionStore = useVersionStore()
 const generationStore = useGenerationStore()
@@ -261,6 +265,24 @@ onMounted(() => {
 })
 const courseTitle = computed(() => projectStore.project?.title || intentStore.intentSummary?.topic || '未命名课件')
 const exportGenId = computed(() => versionStore.genId || (projectStore.projectId && versionStore.currentVersionDetail ? projectStore.projectId : ''))
+const exportVersionNodes = computed(() => {
+  const nodes = withOutlineInteractivePlans(
+    versionStore.currentVersionDetail?.nodes || [],
+    versionStore.currentVersionDetail?.outline?.nodes || [],
+  )
+  const presentation = versionStore.currentVersionDetail?.presentation || {}
+  if (!nodes.length || !Object.keys(presentation).length) return nodes
+  // Keep old Go gateways compatible: they already forward node metadata even
+  // when they do not yet understand the separate presentation request field.
+  const first = nodes[0]
+  return [{
+    ...first,
+    metadata: {
+      ...(first.metadata || {}),
+      presentation: { ...(first.metadata?.presentation || {}), ...presentation },
+    },
+  }, ...nodes.slice(1)]
+})
 const currentVersionLabel = computed(() => `v${versionStore.currentVersionDetail?.version || versionStore.versions?.[0]?.version || 1}`)
 const rollbackTarget = ref(null)
 const changeType = ref('update_node')
@@ -330,12 +352,13 @@ async function handleRollback() {
       outline: targetDetail?.outline,
       pageBindings: data.page_bindings || targetDetail?.pageBindings || [],
       presentation: data.presentation || targetDetail?.presentation || {},
+      generationInstructionSet: targetDetail?.generationInstructionSet || {},
     })
     await projectStore.updateStep('s3_studio').catch(() => {})
     rollbackTarget.value = null
     await router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: targetVersion, phase: 'outline' } })
-  } catch {
-    // 错误已在 store 中设置
+  } catch (error) {
+    versionStore.error = error?.message || '基于所选版本创建分支失败'
   }
 }
 
@@ -372,58 +395,76 @@ function handleStartExport(format) {
     format,
     versionStore.currentVersionDetail?.version || null,
     courseTitle.value,
-    versionStore.currentVersionDetail?.nodes || [],
+    exportVersionNodes.value,
     projectStore.projectId,
     versionStore.currentVersionDetail?.generationInstructionSet || projectStore.draft?.generation_instruction_set || {},
+    versionStore.currentVersionDetail?.presentation || {},
   )
 }
 
 async function handleContinueFromLocked() {
   const version = versionStore.currentVersionDetail?.version
   if (!version || (!versionStore.genId && !projectStore.projectId)) return
-  // 在创建分支前先保存当前锁定版本的大纲快照。回滚接口刷新版本详情后，
-  // 新草稿的详情可能只返回内容节点，不能再依赖刷新后的 currentVersionDetail。
-  const sourceOutline = versionStore.currentVersionDetail?.outline || projectStore.draft?.outline
-  const nodes = versionStore.currentVersionDetail?.nodes || []
-  const result = projectStore.projectId
-    ? await versionStore.rollbackProject(projectStore.projectId, version)
-    : await versionStore.rollbackTo(versionStore.genId, version)
-  const data = result?.data || result || {}
-  const newVersion = Number(data.new_draft_version_no || data.current_version || data.new_version_no || version + 1)
-  generationStore.setLastGenId(versionStore.genId)
-  const restoredNodes = data.nodes || nodes
-  generationStore.setNodes(restoredNodes)
-  await persistRollbackDraft({
-    nodes: restoredNodes,
-    outline: sourceOutline,
-    pageBindings: data.page_bindings || versionStore.currentVersionDetail?.pageBindings || [],
-    presentation: data.presentation || versionStore.currentVersionDetail?.presentation || {},
-  })
-  await projectStore.updateStep('s3_studio').catch(() => {})
-  router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: version, editable_outline: '1', phase: 'outline' } })
+  try {
+    // rollbackProject 会刷新 currentVersionDetail；先固定教师选中的版本。
+    const selected = versionStore.currentVersionDetail
+    const result = projectStore.projectId
+      ? await versionStore.rollbackProject(projectStore.projectId, version)
+      : await versionStore.rollbackTo(versionStore.genId, version)
+    const data = result?.data || result || {}
+    const newVersion = Number(data.new_draft_version_no || data.current_version || data.new_version_no || version + 1)
+    generationStore.setLastGenId(versionStore.genId)
+    const restoredNodes = data.nodes || selected.nodes || []
+    generationStore.setNodes(restoredNodes)
+    await persistRollbackDraft({
+      nodes: restoredNodes,
+      outline: selected.outline,
+      pageBindings: data.page_bindings || selected.pageBindings || [],
+      presentation: data.presentation || selected.presentation || {},
+      generationInstructionSet: selected.generationInstructionSet || {},
+    })
+    await projectStore.updateStep('s3_studio').catch(() => {})
+    await router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId, generation_id: versionStore.genId, base_version: newVersion, from_rollback_version: version, editable_outline: '1', phase: 'outline' } })
+  } catch (error) {
+    versionStore.error = error?.message || '基于当前版本创建分支失败'
+  }
 }
 
-async function persistRollbackDraft({ nodes, outline, pageBindings, presentation }) {
+async function persistRollbackDraft({ nodes, outline, pageBindings, presentation, generationInstructionSet }) {
   if (!projectStore.projectId) return
+  const source = outlineFromVersion(outline, nodes, courseTitle.value)
+  if (!source.nodes.length) throw new Error('所选版本没有可复用的大纲或内容节点，无法创建编辑分支')
+  const response = await teacherV1Api.outline.createFromNodes({
+    session_id: source.session_id || intentStore.sessionId || projectStore.projectId,
+    intent_id: source.intent_id || intentStore.intentId || '',
+    course_name: source.title,
+    nodes: source.nodes,
+  })
+  const created = response?.data || response || {}
+  if (!created.outline_id) throw new Error('从版本快照建立大纲草稿失败')
   const current = projectStore.draft && typeof projectStore.draft === 'object' ? projectStore.draft : {}
   const restored = {
     ...current,
-    outline: outline && typeof outline === 'object' ? {
-      ...outline,
+    outline: {
+      ...source,
+      ...created,
       status: 'draft',
       confirmed_at: null,
-      forked_from_version: Number(outline.outline_version || 0),
       editable_after_rollback: true,
-    } : current.outline,
+    },
     generation: {
       ...(current.generation || {}),
-      generation_id: versionStore.genId,
+      generation_id: versionStore.genId || generationStore.lastGenId || '',
       nodes: nodes || [],
     },
+    // 删除记录只属于上一份正在编辑的草稿，不能带到新选中的历史版本。
+    deleted_outline_node_ids: [],
+    needs_version_save: false,
     page_bindings: pageBindings || [],
-    presentation: { ...(current.presentation || {}), ...(presentation || {}) },
+    presentation: presentation || current.presentation || {},
+    generation_instruction_set: generationInstructionSet || current.generation_instruction_set || {},
   }
-  await projectStore.saveNow(restored).catch(() => {})
+  await projectStore.saveNow(restored)
   writeResumeDraft(String(route.query.project_id || projectStore.projectId || ''), restored)
 }
 
