@@ -27,7 +27,7 @@ def main() -> None:
     cli.add_argument("question", help="学生问题")
     cli.add_argument("--page", type=int, default=1, help="当前页码")
     cli.add_argument("--mode", default="llm", choices=["mock", "llm"], help="响应模式")
-    cli.add_argument("--model", default=os.getenv("AI_MODEL", "qwen-turbo"), help="LLM 模型名（mode=llm 时生效）")
+    cli.add_argument("--model", default=os.getenv("AI_MODEL", "deepseek-v4-flash-0731"), help="LLM 模型名（mode=llm 时生效）")
     cli.add_argument("--out", default=None, help="可选：输出结果 JSON 文件")
     args = cli.parse_args()
 
