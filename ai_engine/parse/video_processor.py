@@ -595,7 +595,7 @@ class VideoProcessor:
             )
             response = self._llm_client.chat(
                 system="你是一个文本校对员，负责将语音识别出来的口语字幕进行纠错和润色。", user=prompt,
-                model=self._llm_model or "qwen-turbo",
+                model=self._llm_model or "deepseek-v4-flash-0731",
             )
 
             if not response.used_fallback:

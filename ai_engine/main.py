@@ -565,7 +565,7 @@ def _llm_parse_knowledge(text: str, mode: str) -> dict[str, Any]:
     if not api_key:
         raise RuntimeError("缺少环境变量 AI_API_KEY，无法调用大模型")
 
-    model = os.getenv("AI_MODEL", "qwen-turbo")
+    model = os.getenv("AI_MODEL", "deepseek-v4-flash-0731")
     base_url, _ = resolve_llm_base_url(model)
     client = OpenAI(api_key=api_key, base_url=base_url, timeout=resolve_llm_timeout())
 
@@ -605,7 +605,7 @@ async def parse_knowledge(req: ParseKnowledgeRequest):
 
 def _llm_health_payload() -> dict[str, Any]:
     api_key = (os.getenv("AI_API_KEY") or "").strip()
-    model = (os.getenv("AI_MODEL") or "qwen-turbo").strip()
+    model = (os.getenv("AI_MODEL") or "deepseek-v4-flash-0731").strip()
     base_url, normalize_reason = resolve_llm_base_url(model)
     return {
         "configured": bool(api_key),

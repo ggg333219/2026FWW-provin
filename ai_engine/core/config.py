@@ -7,7 +7,7 @@
 
 使用方式：
     from ai_engine.core import settings
-    settings.MODEL        # "qwen-turbo"
+    settings.MODEL        # "deepseek-v4-flash-0731"
     settings.TEMPERATURE  # 0.2
 """
 
@@ -38,7 +38,7 @@ _KEY_LLM_GEN_CHUNK_SIZE = "LLM_GEN_CHUNK_SIZE"
 _KEY_LLM_GEN_MAX_WORKERS = "LLM_GEN_MAX_WORKERS"
 
 # ---- 默认值 ----
-_DEFAULT_MODEL = "qwen-turbo"
+_DEFAULT_MODEL = "deepseek-v4-flash-0731"
 _DEFAULT_TEMPERATURE = 0.2
 _DEFAULT_MODE = "llm"
 _DEFAULT_MAX_CONTENT_CHARS = 3500

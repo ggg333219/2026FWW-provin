@@ -311,7 +311,7 @@ class ResourceRecommendAgent:
             return fallback_resources
 
         system_prompt, user_prompt = self._build_ai_recommendation_prompt(request, intent)
-        model = os.getenv("AI_MODEL", "gpt-4o-mini")
+        model = os.getenv("AI_MODEL", "deepseek-v4-flash-0731")
         client = OpenAI(api_key=api_key, base_url=os.getenv("AI_BASE_URL", "https://api.openai.com/v1"))
 
         response = client.chat.completions.create(
@@ -486,7 +486,7 @@ class ResourceRecommendAgent:
         from openai import OpenAI
 
         client = OpenAI(api_key=api_key, base_url=os.getenv("AI_BASE_URL", "https://api.openai.com/v1"))
-        model = os.getenv("AI_MODEL", "gpt-4o-mini")
+        model = os.getenv("AI_MODEL", "deepseek-v4-flash-0731")
 
         response = client.chat.completions.create(
             model=model,

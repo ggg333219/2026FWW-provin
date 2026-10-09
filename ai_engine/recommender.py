@@ -195,7 +195,7 @@ def get_recommendations(payload: dict[str, Any]) -> dict[str, Any]:
     """100% 大模型生成推荐，不查本地数据库；失败时强制返回 3 条兜底资源。"""
     keyword = str((payload or {}).get("keyword") or "").strip() or "选择排序"
     api_key = (os.getenv("AI_API_KEY") or "").strip()
-    model = (os.getenv("AI_MODEL") or "qwen-turbo").strip()
+    model = (os.getenv("AI_MODEL") or "deepseek-v4-flash-0731").strip()
     base_url, _ = resolve_llm_base_url(model)
 
     fallback_items: list[dict[str, Any]] | None = None
