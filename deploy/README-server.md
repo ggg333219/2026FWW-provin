@@ -23,10 +23,10 @@
 ```
 浏览器 MediaRecorder 录音（全浏览器通用，不依赖 Web Speech API）
   → POST /ai/api/v1/asr/transcribe（multipart，≤20MB）
-  → AI 引擎 ai_engine/asr.py provider 链：
+  → AI 引擎 ai_engine/asr.py provider 链（任一失败自动落到下一个）：
       ① dashscope（DASHSCOPE_API_KEY / AI_API_KEY 存在时，Paraformer 云端识别）
-      ② local_whisper（ASR_ALLOW_LOCAL_WHISPER=1，faster-whisper tiny int8，模型经 HF_ENDPOINT 镜像）
-      ③ 都没有 → 501 ASR_NOT_CONFIGURED（前端给出明确提示）
+      ② local_whisper（faster-whisper tiny int8；走 PyAV 解码，不需要系统装 FFmpeg）
+      ③ 全部失败 → 返回错误，并把每个 provider 的失败原因一并返回
   → {text} 回填输入框
 ```
 
@@ -34,6 +34,29 @@
   `curl -F "file=@voice-test-zh.wav;type=audio/wav" -F "language=zh" .../api/v1/asr/transcribe`
 - 实测：tiny 模型中文短句识别可用，首调 ~18s（加载模型），此后 ~1s
 - 引擎启动命令必须带：`ASR_ALLOW_LOCAL_WHISPER=1 HF_ENDPOINT=https://hf-mirror.com`
+- 不想把 AI_API_KEY 当云端 ASR key 用时，加 `ASR_DASHSCOPE_DISABLE_AI_KEY=1`
+- 排障：`grep "\[asr\]" /tmp/ai_a12.log` 能看到"哪个 provider 失败、落到哪一个"
+
+## 1.2 本地知识库自动灌入（资料入库）
+
+```
+① 启动自动：KB_AUTO_BOOTSTRAP=1（= docs/knowledge）
+            或 KB_AUTO_INGEST_DIR=目录1;目录2
+            → 引擎启动后台灌入，日志 [kb-bootstrap] / [kb-ingest]
+② 按需调用：POST /ai/api/v1/knowledge/ingest-dir
+            {"directory":"docs/knowledge","knowledge_base_id":"kb_x","dry_run":true}
+            → 返回计划 / 每个文件的入库块数 / 0 块文件 / 跳过原因 / 检索自检
+③ CLI：scripts/ingest_knowledge_dir.py（素材在服务之外时用，走上传端点）
+```
+
+- 统一实现在 `ai_engine/rag/ingest.py`，三种入口共用一套扫描与入库逻辑
+- 只会真的读取能解析的格式（txt/md/csv/json/html/pdf/pptx/docx）；
+  `.ppt/.doc/.xls(x)/图片/压缩包` 与 `~$` 临时文件会被跳过并写明原因——
+  否则二进制会被当纯文本读，乱码灌进库里极难清理
+- 0 块文件（扫描版 PDF、空文件）单独列在 `zero_chunk`，不伪装成功
+- 灌完自动做一次真实检索自检（`retrieval_probe`），区分"库里有内容"和"向量通道失效"
+- 出于安全，接口只接受项目目录内的路径；要灌项目外的资料，
+  用 `KB_INGEST_ALLOWED_ROOTS=/path/a;/path/b` 显式放行
 
 ## 2. 目录与关键文件
 
@@ -98,6 +121,10 @@ pkill -f teacher-server-linux; pkill -f "uvicorn main:app"
 | 引擎 | `curl http://114.55.31.135:8098/ai/health` | running（llm.degraded=true 表示无 key 降级，正常） |
 | 后端 API | `curl http://114.55.31.135:8098/api/health` | {"status":"UP"} |
 | 全链路 | 注册登录→建项目→大纲→生成→导出→下载 | 拿到合法 .pptx（`file` 识别 Microsoft PowerPoint 2007+） |
+| 语音输入 | `curl -F "file=@deploy/testdata/voice-test-zh.wav;type=audio/wav" -F "language=zh" http://.../ai/api/v1/asr/transcribe` | 200 且 `data.text` 为可读写法（provider 为 dashscope 或 local_whisper） |
+| 知识库自动灌入 | `grep "\[kb-bootstrap\]" /tmp/ai_a12.log` | 启动即出现 `ok ... 1 文件 / N 块` |
+| 知识库可检索 | `POST /ai/api/v1/rag/search {"query":"TCP 三次握手","knowledge_base_ids":["kb_auto"]}` | `results` 命中且包含"三次握手" |
+| 灌入接口 | `POST /ai/api/v1/knowledge/ingest-dir {"directory":"docs/knowledge","dry_run":true}` | `ok:true` 且 `planned_count>0` |
 
 验收账号：`acceptance / a12demo123`（已注册）。
 

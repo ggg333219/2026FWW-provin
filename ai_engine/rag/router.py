@@ -483,6 +483,64 @@ def _read_file_content(path, suffix: str) -> str:
 
     # 未知类型：尝试纯文本
     return _Path(path).read_text(encoding="utf-8", errors="ignore")
+# =============================================================================
+# 端点 4: 本地目录批量灌入（"自动灌资料"）
+# =============================================================================
+
+class KnowledgeIngestDirRequest(BaseModel):
+    """本地目录批量灌入请求。目录需在允许范围内（见 ingest.allowed_roots）。"""
+
+    directory: str = ""
+    knowledge_base_id: str = ""
+    recursive: bool = True
+    limit: int = 0
+    dry_run: bool = False
+    max_file_bytes: int = 0
+
+
+class KnowledgeIngestDirResponse(BaseModel):
+    ok: bool = True
+    dry_run: bool = False
+    directory: str = ""
+    scanned: int = 0
+    planned_count: int = 0
+    truncated: bool = False
+    planned: list[dict[str, Any]] = Field(default_factory=list)
+    ingested: list[dict[str, Any]] = Field(default_factory=list)
+    zero_chunk: list[dict[str, Any]] = Field(default_factory=list)
+    failed: list[dict[str, Any]] = Field(default_factory=list)
+    skipped: list[dict[str, Any]] = Field(default_factory=list)
+    total_chunks: int = 0
+    retrieval_probe: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: int = 0
+    error: str = ""
+
+
+@router.post("/knowledge/ingest-dir", response_model=KnowledgeIngestDirResponse)
+async def knowledge_ingest_dir(req: KnowledgeIngestDirRequest):
+    """把一个本地目录里的资料批量灌入知识库。
+
+    适合"一次性把复习资料/课程包导入"的场景：自动按扩展名筛选可解析文件、
+    跳过 Office 临时文件与二进制格式，逐文件统计入库块数，并把 0 块文件
+    （扫描版 PDF 等）单独列出，最后做一次真实检索自检。
+
+    dry_run=true 时只返回计划（会扫哪些文件、跳过哪些）而不写库。
+    """
+    from .ingest import ingest_directory
+
+    report = await asyncio.to_thread(
+        ingest_directory,
+        req.directory,
+        req.knowledge_base_id,
+        req.recursive,
+        req.limit,
+        req.dry_run,
+        req.max_file_bytes,
+    )
+    fields = set(KnowledgeIngestDirResponse.model_fields)
+    return KnowledgeIngestDirResponse(**{k: v for k, v in report.items() if k in fields})
+
+
 def _read_file_content_compatible(path, suffix: str) -> str:
     """更稳妥的文件内容读取器，按格式输出适合分块的纯文本。"""
     from pathlib import Path as _Path

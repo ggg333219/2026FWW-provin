@@ -1,4 +1,5 @@
 from datetime import datetime
+from contextlib import asynccontextmanager
 import sys
 import inspect
 # 必须模块级导入：函数内写 `import logging` 会让 logging 成为**该函数的局部名**
@@ -75,7 +76,50 @@ def _warn_missing_llm_key() -> None:
 
 _warn_missing_llm_key()
 
-app = FastAPI(title="多模态 AI 互动式教学智能体 AI 引擎", description="为前端提供解析、生成、问答、重讲等核心 AI 接口")
+@asynccontextmanager
+async def _app_lifespan(_app):
+    """启动钩子：按环境变量自动把本地资料灌入知识库。
+
+    未配置 KB_AUTO_INGEST_DIR / KB_AUTO_BOOTSTRAP 时本函数什么都不做，
+    请求路径完全不受影响。
+    """
+    import asyncio as _asyncio
+    import os as _os
+
+    task = None
+    raw_dirs = [d for d in (_os.getenv("KB_AUTO_INGEST_DIR") or "").split(_os.pathsep) if d.strip()]
+    if raw_dirs or _os.getenv("KB_AUTO_BOOTSTRAP") == "1":
+        from ai_engine.rag.ingest import bootstrap_from_env, resolve_directory
+
+        # 目录不可用要显式报错：否则会误以为"自动灌入已静默成功"
+        for directory in raw_dirs:
+            _, err = resolve_directory(directory)
+            if err:
+                print(f"[kb-bootstrap] 目录不可用 {directory} — {err}", flush=True)
+
+        async def _run() -> None:
+            for report in await _asyncio.to_thread(bootstrap_from_env):
+                ok = report.get("ok")
+                print(
+                    f"[kb-bootstrap] {'ok' if ok else 'FAILED'} {report.get('directory')}: "
+                    f"{len(report.get('ingested') or [])} 文件 / {report.get('total_chunks', 0)} 块"
+                    + (f" / 错误: {report['error']}" if report.get("error") else ""),
+                    flush=True,
+                )
+
+        task = _asyncio.create_task(_run())
+
+    yield
+
+    if task is not None and not task.done():
+        task.cancel()  # 引擎关停时灌入还没跑完，直接取消，避免悬挂任务告警
+
+
+app = FastAPI(
+    title="多模态 AI 互动式教学智能体 AI 引擎",
+    description="为前端提供解析、生成、问答、重讲等核心 AI 接口",
+    lifespan=_app_lifespan,
+)
 app.include_router(recommendation_router)
 # 保留旧的 /intent/* 供历史调试工具使用，同时提供 Go Backend 约定的 /api/v1/intent/*。
 app.include_router(intent_router)

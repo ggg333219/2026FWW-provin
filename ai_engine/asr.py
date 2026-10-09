@@ -3,12 +3,14 @@
 设计动机：Web Speech API 绑定 Chrome/Edge 且依赖 Google 识别服务（国内不可用），
 改为前端 MediaRecorder 录音 → 上传本端点 → 服务端转写 → 返回文本。
 
-Provider 链（按序尝试，首个可用者生效）：
-  1. dashscope   — 配置了 DASHSCOPE_API_KEY 时走阿里云 Paraformer
-                   （短音频同步识别，与 LLM 共用同一把 key）
-  2. local_whisper — 环境开启 ASR_ALLOW_LOCAL_WHISPER=1 且安装了 faster-whisper 时，
-                   用本地模型转写（默认 tiny int8，CPU 可跑；模型经 HF_ENDPOINT 镜像下载）
-  3. 未配置      — 返回 501 / ASR_NOT_CONFIGURED，前端展示明确提示
+Provider 链（按序尝试，首个成功者返回结果；失败自动落到下一个）：
+  1. dashscope   — 配置了 DASHSCOPE_API_KEY（或 AI_API_KEY）时走阿里云 Paraformer
+                   （短音频同步识别）
+  2. local_whisper — 开启了本地模型（ASR_ALLOW_LOCAL_WHISPER=1，或未设置但已安装
+                   faster-whisper 时自动启用），用本地 tiny/int8 模型转写，
+                   走 PyAV 解码，不需要系统安装 FFmpeg
+  3. 全部失败     — 返回最后一个 provider 的错误码，并把每个 provider 的
+                   失败原因一并返回（便于定位是 key、网络还是格式问题）
 
 对外契约（供前端/网关消费）：
   transcribe_bytes(data, content_type, language) -> {text, provider, duration_ms}
@@ -16,6 +18,7 @@ Provider 链（按序尝试，首个可用者生效）：
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import os
 import shutil
@@ -45,14 +48,39 @@ def _env(key: str, default: str = "") -> str:
 
 
 def _dashscope_api_key() -> str:
-    # AI_API_KEY belongs to the LLM gateway and may not be an Alibaba Cloud
-    # key.  Do not silently send it to DashScope: that produces an opaque
-    # Unauthorized response and makes the frontend look like networking failed.
-    return _env("DASHSCOPE_API_KEY")
+    """云端 Paraformer 使用的 key。
+
+    优先 DASHSCOPE_API_KEY，其次回落 AI_API_KEY（恢复合并前的队友行为：
+    很多环境把阿里云 key 同时当作 LLM key 使用）。之前曾把回落删掉，导致
+    只配了 AI_API_KEY 的环境 provider 直接判定为 none，语音输入整体返回
+    ASR_NOT_CONFIGURED(501)。现在即便回落选错 key，也只是该 provider 失败，
+    会带着明确原因落到下一个 provider，不再让前端表现为"网络异常"。
+    """
+    if _env("ASR_DASHSCOPE_DISABLE_AI_KEY") == "1":
+        return _env("DASHSCOPE_API_KEY")
+    return _env("DASHSCOPE_API_KEY") or _env("AI_API_KEY")
+
+
+def _whisper_installed() -> bool:
+    """faster-whisper 是否真的可用（只看 import，不加载模型）。"""
+    try:
+        return importlib.util.find_spec("faster_whisper") is not None
+    except Exception:
+        return False
 
 
 def local_whisper_enabled() -> bool:
-    return _env("ASR_ALLOW_LOCAL_WHISPER") == "1"
+    """本地模型是否启用。
+
+    ASR_ALLOW_LOCAL_WHISPER=1 强制开、=0 强制关；未设置时自动判断：
+    装了 faster-whisper 就启用（避免"明明装了却提示未配置"）。
+    """
+    flag = _env("ASR_ALLOW_LOCAL_WHISPER")
+    if flag == "1":
+        return True
+    if flag == "0":
+        return False
+    return _whisper_installed()
 
 
 def asr_provider_name() -> str:
@@ -60,7 +88,7 @@ def asr_provider_name() -> str:
     if _dashscope_api_key():
         return "dashscope"
     if local_whisper_enabled():
-        return "local_whisper"
+        return "local_whisper" if _whisper_installed() else "local_whisper(not_installed)"
     return "none"
 
 
@@ -275,22 +303,35 @@ def transcribe_bytes(data: bytes, content_type: str, language: str = "zh") -> di
     if language not in SUPPORTED_LANGUAGES:
         language = "zh"
 
-    errors: list[str] = []
+    providers: list[tuple[str, Any]] = []
     if _dashscope_api_key():
-        try:
-            return _transcribe_dashscope(data, content_type, language)
-        except ASRError as exc:
-            errors.append(f"dashscope: {exc.message}")
-            # 云端失败不自动落到本地：云端可用说明本地未必要开；但若本地也开了则继续尝试
-            if not local_whisper_enabled():
-                raise
+        providers.append(("dashscope", _transcribe_dashscope))
     if local_whisper_enabled():
+        providers.append(("local_whisper", _transcribe_local_whisper))
+
+    errors: list[str] = []
+    last_code, last_status = "ASR_PROVIDER_FAILED", 502
+    for name, fn in providers:
         try:
-            return _transcribe_local_whisper(data, content_type, language)
-        except ASRError:
-            raise
+            return fn(data, content_type, language)
+        except ASRError as exc:
+            # 单个 provider 失败不再中断整条链：记录原因后继续下一个 provider。
+            # 典型场景：云端 key 无效 → 落到本地 whisper；容器需要 FFmpeg 而没装
+            # → 落到本地 whisper（PyAV 自带解码，无需系统 FFmpeg）。
+            errors.append(f"{name}: {exc.message}")
+            last_code, last_status = exc.error_code, exc.status_code
+            print(f"[asr] {name} 失败，尝试下一个 provider — {exc.message}", flush=True)
+            continue
+        except Exception as exc:  # 非预期异常同样不阻断后续 provider
+            errors.append(f"{name}: {exc}")
+            print(f"[asr] {name} 异常，尝试下一个 provider — {exc}", flush=True)
+            continue
+
+    if errors:
+        raise ASRError(last_code, "语音识别失败：" + "；".join(errors), last_status)
     raise ASRError(
         "ASR_NOT_CONFIGURED",
-        "语音识别服务未配置：设置 DASHSCOPE_API_KEY（云端）或 ASR_ALLOW_LOCAL_WHISPER=1（本地模型）",
+        "语音识别服务未配置：设置 DASHSCOPE_API_KEY / AI_API_KEY（云端）"
+        "或 ASR_ALLOW_LOCAL_WHISPER=1 且安装 faster-whisper（本地模型）",
         501,
     )
