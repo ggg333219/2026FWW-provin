@@ -11,6 +11,12 @@ from uuid import NAMESPACE_URL, uuid5
 
 from ai_engine.core import LLMClient, IntentSummary, DialogueTurn, SessionStatus, ConversationSession, settings
 from ai_engine.intent.intent_engine import IntentEngine
+from ai_engine.intent.normalize import normalize_intent_payload
+from ai_engine.intent.rules import (
+    extract_topic_strict,
+    filter_knowledge_point_fragments,
+    is_grounded_knowledge_point,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +93,9 @@ class IntentUnderstandingService:
         if not any(item["role"].lower() == "teacher" for item in raw_messages):
             raise ValueError("至少需要一条教师消息")
 
-        summary, engine_name, used_fallback, fallback_reason = self._extract_summary(messages, raw_messages)
+        summary, engine_name, used_fallback, fallback_reason, notes = self._extract_summary(
+            messages, raw_messages
+        )
         if used_fallback:
             safe_request_id = request_id if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", request_id or "") else "unavailable"
             logging.getLogger(__name__).warning(
@@ -140,6 +148,9 @@ class IntentUnderstandingService:
             # 供监控/前端统一识别“LLM 失败→规则引擎兜底”的降级链路。
             "degraded": used_fallback,
             "fallback_reason": fallback_reason,
+            # F01 可观测性：真实模型输出的归一/丢弃说明。
+            # 非空表示模型输出可用但存在格式偏差；空表示模型输出本身规整。
+            "normalization_notes": notes,
         }
 
     def build_followup_questions(self, summary: IntentSummary, core_only: bool = False) -> list[str]:
@@ -191,19 +202,25 @@ class IntentUnderstandingService:
         self,
         messages: list[DialogueTurn],
         raw_messages: list[dict[str, str]],
-    ) -> tuple[IntentSummary, str, bool, str | None]:
+    ) -> tuple[IntentSummary, str, bool, str | None, list[str]]:
+        """提取结构化意图。
+
+        Returns:
+            ``(摘要, 引擎名, 是否降级, 降级原因, 归一说明)``。
+        """
         result: Any = None
+        notes: list[str] = []
         if self.engine is not None:
             try:
                 result = self.engine.extract_intent(raw_messages)
                 if isinstance(result, IntentSummary):
                     if result.topic:
-                        return result, self.engine.__class__.__name__, False, None
+                        return result, self.engine.__class__.__name__, False, None, notes
                     reason = "invalid_model_response"
                 elif isinstance(result, dict) and not result.get("error"):
-                    summary = IntentSummary(**result)
+                    summary, notes = self._build_summary_from_payload(result)
                     if summary.topic:
-                        return summary, self.engine.__class__.__name__, False, None
+                        return summary, self.engine.__class__.__name__, False, None, notes
                     self._log_degraded(
                         reason=f"自定义引擎输出缺少有效主题（topic={summary.topic!r}）",
                         raw_output=self._dump_raw_output(result),
@@ -232,7 +249,9 @@ class IntentUnderstandingService:
                     exc=exc,
                 )
                 reason = self._classify_engine_failure({"reason": f"{type(exc).__name__} {exc}"})
-            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason
+            # 降级到规则引擎时，模型输出并未被采用，因此不携带归一说明 ——
+            # 保持"normalization_notes 非空 ⇔ 模型输出被采用"的契约清晰。
+            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason, []
 
         prompt = self._build_extract_prompt(messages)
         try:
@@ -248,10 +267,10 @@ class IntentUnderstandingService:
                 ),
                 user=prompt,
             )
-            summary = IntentSummary(**(result or {}))
+            summary, notes = self._build_summary_from_payload(result or {})
             if not summary.topic:
                 raise ValueError("LLM 未返回有效主题")
-            return summary, "LLM", False, None
+            return summary, "LLM", False, None, notes
         except Exception as exc:
             self._log_degraded(
                 reason=f"LLM 意图提取失败：{type(exc).__name__}: {exc}",
@@ -262,7 +281,18 @@ class IntentUnderstandingService:
             reason = "invalid_model_response" if isinstance(exc, (ValueError, TypeError)) else self._classify_engine_failure(
                 {"reason": f"{type(exc).__name__} {exc}"}
             )
-            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason
+            # 同上：降级时模型输出未被采用，不携带归一说明。
+            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason, []
+
+    @staticmethod
+    def _build_summary_from_payload(payload: dict[str, Any]) -> tuple[IntentSummary, list[str]]:
+        """把模型原始输出归一后再构造摘要。
+
+        先归一再校验：单个字段的类型偏差（模型把 with_interactive 说成"需要"、
+        把 duration 说成"45分钟"等）不再连带丢弃其它已正确解析的字段。
+        """
+        normalized, notes = normalize_intent_payload(payload)
+        return IntentSummary(**normalized), notes
 
     @staticmethod
     def _classify_engine_failure(result: dict[str, Any]) -> str:
@@ -308,18 +338,43 @@ class IntentUnderstandingService:
 
     @staticmethod
     def _merge_rule_evidence(summary: IntentSummary, raw_messages: list[dict[str, str]]) -> IntentSummary:
-        """用可确定的教师原话校正模型结果，模型仍负责规则无法覆盖的开放字段。"""
+        """用可确定的教师原话校正模型结果，模型仍负责规则无法覆盖的开放字段。
+
+        校正原则：规则结论只在**高置信度**时才允许覆盖模型结果。
+        规则的兜底猜测（剥词取首句）容易产出"做45分钟快速排序"这类脏值，
+        若允许它覆盖，会把模型已经解析正确的字段弄坏。
+        """
         rule_summary = IntentEngine.extract_intent(raw_messages)
-        for field in ("topic", "duration_minutes", "style", "target_student"):
+        teacher_text = "。".join(item["content"] for item in raw_messages if item["role"].lower() == "teacher")
+
+        for field in ("duration_minutes", "style", "target_student"):
             value = getattr(rule_summary, field, None)
             if value not in (None, ""):
                 setattr(summary, field, value)
-        # Knowledge points are accepted only when the teacher explicitly labels
-        # them. This prevents ordinary request fragments (for example a style
-        # preference) from being promoted to course content by the model.
-        summary.knowledge_points = rule_summary.knowledge_points
 
-        teacher_text = "。".join(item["content"] for item in raw_messages if item["role"].lower() == "teacher")
+        # 主题：只有规则高置信度命中时才覆盖模型结果，否则保留模型给出的主题。
+        rule_topic = extract_topic_strict(teacher_text)
+        if rule_topic:
+            summary.topic = rule_topic
+
+        # 知识点：规则命中时以规则为准（教师明确标注的清单最可信）；
+        # 规则未命中时保留模型结果，但必须能在教师原话中找到依据 ——
+        # 既避免"教师已经说过的知识点被规则清空"，也避免模型自行脑补。
+        rule_points = rule_summary.knowledge_points
+        if rule_points:
+            summary.knowledge_points = rule_points
+        else:
+            candidates = [
+                point
+                for point in summary.knowledge_points
+                if is_grounded_knowledge_point(point, teacher_text)
+            ]
+            summary.knowledge_points = filter_knowledge_point_fragments(
+                candidates,
+                style=summary.style,
+                target_student=summary.target_student,
+            )
+
         if "互动设计" in teacher_text:
             summary.with_interactive = rule_summary.with_interactive
         elif rule_summary.with_interactive:

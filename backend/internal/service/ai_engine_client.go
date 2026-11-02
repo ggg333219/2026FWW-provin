@@ -380,6 +380,10 @@ type IntentExtractResponse struct {
 	Engine         string         `json:"engine,omitempty"`
 	UsedFallback   bool           `json:"used_fallback"`
 	FallbackReason string         `json:"fallback_reason,omitempty"`
+	// NormalizationNotes —— S1 真实模型输出的归一说明（F01）。
+	// 非空表示模型输出可用、但存在类型/格式偏差，已在引擎侧逐字段修正；
+	// 空表示模型输出本身规整。用于区分"模型生成成功"与"规则兜底"。
+	NormalizationNotes []string `json:"normalization_notes,omitempty"`
 }
 
 type IntentConfirmRequest struct {
