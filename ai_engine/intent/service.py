@@ -13,6 +13,7 @@ from ai_engine.core import LLMClient, IntentSummary, DialogueTurn, SessionStatus
 from ai_engine.intent.intent_engine import IntentEngine
 from ai_engine.intent.normalize import normalize_intent_payload
 from ai_engine.intent.rules import (
+    extract_explicit_knowledge_points,
     extract_topic_strict,
     filter_knowledge_point_fragments,
     is_grounded_knowledge_point,
@@ -357,12 +358,15 @@ class IntentUnderstandingService:
         if rule_topic:
             summary.topic = rule_topic
 
-        # 知识点：规则命中时以规则为准（教师明确标注的清单最可信）；
-        # 规则未命中时保留模型结果，但必须能在教师原话中找到依据 ——
-        # 既避免"教师已经说过的知识点被规则清空"，也避免模型自行脑补。
-        rule_points = rule_summary.knowledge_points
-        if rule_points:
-            summary.knowledge_points = rule_points
+        # 知识点：教师**明确标注**（"知识点：…"）时以规则为准，清单最可信；
+        # 未标注时保留模型结果，但要求能在教师原话中找到依据 ——
+        # 既避免"教师已经说过的知识点被规则清空"，也避免模型自行脑补，
+        # 也避免"互动选择题"这类**要求**被当成知识点。
+        # 注意：规则未命中时不从主题反推知识点 —— 主题是课程名，
+        # 推导出来的知识点属于凭空推断，会让系统不再追问真正缺失的信息。
+        explicit_points = extract_explicit_knowledge_points(teacher_text)
+        if explicit_points:
+            summary.knowledge_points = explicit_points
         else:
             candidates = [
                 point
@@ -379,7 +383,14 @@ class IntentUnderstandingService:
             summary.with_interactive = rule_summary.with_interactive
         elif rule_summary.with_interactive:
             summary.with_interactive = True
-        if re.search(r"PPT|ppt|幻灯|课件|Word|word|DOCX|docx|教案|讲义|讲稿", teacher_text):
+        # 输出格式：只有教师**明确点名**格式（PPT / 幻灯片 / Word / 教案…）才用规则结论覆盖模型。
+        # 通用词"课件"不算 —— 它几乎出现在每一句教学需求里（"做一节XX课件"），
+        # 若据此覆盖，会把模型已归一好的 ["ppt","doc"] 压成 ["ppt"]，
+        # 等于让 F01 的归一成果在合并阶段被丢弃。
+        if re.search(r"PPT|ppt|幻灯|Word|word|DOCX|docx|教案|讲义|讲稿", teacher_text):
+            summary.output_format = rule_summary.output_format
+        elif not summary.output_format:
+            # 模型没给格式、教师也没点名时，用规则的默认（PPT），不留空。
             summary.output_format = rule_summary.output_format
         return summary
 

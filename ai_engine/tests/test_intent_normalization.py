@@ -271,6 +271,25 @@ class F02KnowledgePointMergeTests(unittest.TestCase):
         self.assertEqual(points, ["分治思想", "枢轴选择"])
         self.assertNotIn("互动设计：需要", points)
 
+    def test_loose_verb_trigger_does_not_capture_requirement_as_knowledge_point(self):
+        # 团队固定主样例：教师说"要求包含互动选择题"——"包含"是普通动词，
+        # 规则曾把"互动选择题"当成知识点，进而覆盖模型正确抽出的核心知识点。
+        teacher = "请帮我做一节45分钟的冒泡排序与快速排序课件，面向大一计算机专业学生，教师要求包含互动选择题。"
+
+        self.assertEqual(extract_knowledge_points(teacher), [])
+
+    def test_explicit_label_still_wins_over_loose_verb(self):
+        # 教师明确标注知识点时，仍要能正常抽到，不能被上面的过滤误伤。
+        teacher = "请做一节45分钟的排序算法课件，知识点：分治思想、枢轴选择。"
+
+        self.assertEqual(extract_knowledge_points(teacher), ["分治思想", "枢轴选择"])
+
+    def test_loose_verb_captures_real_knowledge_list(self):
+        # 松散动词捕获到的确实是知识点时，不应被误删。
+        teacher = "请做一节45分钟的排序算法课件，包括冒泡排序和快速排序。"
+
+        self.assertEqual(extract_knowledge_points(teacher), ["冒泡排序", "快速排序"])
+
 
 class F02HelperTests(unittest.TestCase):
     """F02 辅助函数。"""

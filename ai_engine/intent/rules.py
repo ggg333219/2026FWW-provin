@@ -207,14 +207,13 @@ def extract_style(text: str) -> str | None:
     return known[-1].group(0) if known else None
 
 
-def extract_knowledge_points(text: str) -> list[str]:
-    raw = _last_match(text, [
-        rf"(?:核心知识点|知识点)\s*(?:是|为|包括|包含|[:：])\s*([^；;。！？!?\n]+){_CLAUSE_END}",
-        rf"(?:重点包括|重点包含|重点讲解|包括|包含|涉及|涵盖)\s*([^；;。！？!?\n]+){_CLAUSE_END}",
-    ])
-    if not raw:
-        return []
-    raw = re.split(r"(?:，|,)?\s*(?:并|同时|另外|此外|最好)(?:加入|安排|设置|设计|增加|配合)", raw, maxsplit=1)[0]
+def _split_knowledge_items(raw: str) -> list[str]:
+    """把一段捕获文本切成知识点条目，并做基础清洗。"""
+    raw = re.split(
+        r"(?:，|,)?\s*(?:并|同时|另外|此外|最好)(?:加入|安排|设置|设计|增加|配合)",
+        raw,
+        maxsplit=1,
+    )[0]
     items = re.split(r"[、，,；;]|和|与", raw)
     result: list[str] = []
     for item in items:
@@ -228,6 +227,43 @@ def extract_knowledge_points(text: str) -> list[str]:
         if cleaned and cleaned not in result:
             result.append(cleaned)
     return result[:12]
+
+
+def extract_explicit_knowledge_points(text: str) -> list[str]:
+    """只抽取教师**明确标注**为知识点的内容（高置信度）。
+
+    触发词限定为「知识点：」「核心知识点：」「重点包括/讲解」这类带标签的说法。
+    「包含」「涉及」等松散动词不在此列 —— 它们在普通教学需求里极常见
+    （"教师要求包含互动选择题"），命中它们会把**要求**当成知识点。
+    """
+    raw = _last_match(text, [
+        rf"(?:核心知识点|知识点)\s*(?:是|为|包括|包含|[:：])\s*([^；;。！？!?\n]+){_CLAUSE_END}",
+        rf"(?:重点包括|重点包含|重点讲解)\s*([^；;。！？!?\n]+){_CLAUSE_END}",
+    ])
+    if not raw:
+        return []
+    return _split_knowledge_items(raw)
+
+
+def extract_knowledge_points(text: str) -> list[str]:
+    """抽取知识点：优先显式标注，否则退回松散动词并过滤掉"要求类"片段。
+
+    松散动词（包含/包括/涉及/涵盖）捕获到的往往不是知识点，而是另一种要求
+    （互动选择题、Word 教案、45 分钟）。这类片段必须被剔除；若剔除后一条不剩，
+    说明规则**没有命中**，交由模型分支处理 —— 而不是拿一条假知识点去覆盖模型结果。
+    """
+    explicit = extract_explicit_knowledge_points(text)
+    if explicit:
+        return explicit
+
+    loose = _last_match(text, [
+        rf"(?:包括|包含|涉及|涵盖)\s*([^；;。！？!?\n]+){_CLAUSE_END}",
+    ])
+    if not loose:
+        return []
+    candidates = _split_knowledge_items(loose)
+    # 剔除"互动/格式/时长/风格"等要求类片段；一条不剩就视为规则未命中。
+    return filter_knowledge_point_fragments(candidates)[:12]
 
 
 def detect_interactive(text: str) -> bool:
