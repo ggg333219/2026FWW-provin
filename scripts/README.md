@@ -44,3 +44,66 @@ docker compose -f .\backend\docker-compose.yml down
 - 日志保存在 `logs/` 目录下（脚本会自动创建），PID 信息保存到 `scripts/pids.json`，供 `stop-all.ps1` 使用。
 
 如需我在当前机器上运行并验证这些脚本，我可以继续执行。需要我现在运行吗？
+
+---
+
+## S1 意图理解验收脚本（F01 / F02 / V04）
+
+这一组脚本用于**复现** S1 意图理解的验收证据。
+背景、根因与完整验证记录见 `docs/handoff/F01-F02-S1意图解析-交接文档.md`。
+
+### 依赖
+
+```bash
+cd scripts && npm install     # 只装 playwright-core，独立于仓库根与前端工程
+```
+
+浏览器不需要下载 —— 脚本默认用本机已安装的 Chrome，可用 `CHROME` 环境变量覆盖。
+
+### 脚本清单
+
+| 脚本 | 层级 | 用途 |
+|---|---|---|
+| `fake-llm-server.py` | 工具 | 受控模型桩（OpenAI 兼容，`:8899`）。注入真实模型常见的格式偏差：`"45分钟"`、`"需要"`、`["PPT"]`、脑补知识点、脏格式 |
+| `verify-f01-f02.py` | **L2 接口层** | F01/F02 验收 14 项，走完整真实链路（Go 网关 → Python 引擎 → 模型端点） |
+| `probe-intent-http.py` | 工具 | 打印一次请求的关键字段，重点看 `model_source` |
+| `drive-s1-intent.mjs` | **L3 浏览器** | F01/F02 浏览器验收 13 项（真实 Chrome） |
+| `drive-s1-intent-v04.mjs` | **L3 浏览器** | 来源三态验收：`real_model` 11 项 / `rule_fallback` 9 项 / `mock_frontend` 3 项 |
+
+### 完整复现步骤
+
+```bash
+# ① 受控模型桩
+python scripts/fake-llm-server.py                                   # :8899
+
+# ② AI 引擎（真实模型路径）
+cd ai_engine && PYTHONPATH="<repo>" AI_GEN_MODE=llm AI_MODEL=controlled-fake-model \
+  AI_BASE_URL="http://127.0.0.1:8899/v1" AI_API_KEY="sk-local-controlled-test-key" \
+  python -m uvicorn main:app --host 127.0.0.1 --port 8000
+
+# ③ Go 网关（S1 轻量模式，无 PostgreSQL/MinIO 也能起）
+cd backend && go build -o ../tmp/teacher_realtest.exe ./cmd/teacher
+A12_PROJECT_ROOT="<repo>/backend" ../tmp/teacher_realtest.exe        # :8082
+
+# ④ 教师端前端
+cd frontend/teacher && VITE_API_BASE="http://localhost:8082" \
+  VITE_AI_API_BASE="http://localhost:8000" npx vite --port 5173 --host 127.0.0.1
+
+# ⑤ 跑验收
+python scripts/verify-f01-f02.py
+cd scripts && node drive-s1-intent.mjs
+SCENARIO=real_model node drive-s1-intent-v04.mjs
+```
+
+### ⚠️ 关于「真实模型」的界定
+
+`fake-llm-server.py` 是**受控桩**，不是真实大模型。
+它证明的是「归一 / 合并 / 透传逻辑在**真实链路**上成立」，
+**不等于**「真实大模型（DashScope / qwen-plus）已验证」。
+
+现场自查跑的到底是什么：
+
+```bash
+curl -s http://127.0.0.1:8000/health
+# degraded:true / reason:"missing_api_key" → 跑的是 mock，不是真模型
+```

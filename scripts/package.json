@@ -1,0 +1,12 @@
+{
+  "name": "a12-verify-scripts",
+  "private": true,
+  "type": "module",
+  "description": "验收与浏览器驱动脚本的独立依赖环境（仅 playwright-core，不影响仓库根与前端工程）",
+  "scripts": {
+    "install:browser": "npm install --no-save playwright-core"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}
