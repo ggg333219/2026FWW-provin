@@ -243,6 +243,21 @@ class LLMClient:
 
     # ---- 核心调用 ----
 
+    def unavailable_reason(self) -> str:
+        """返回"本次调用不可能来自真实模型"的原因；空串表示可以调用真实模型。
+
+        取值：``"mock_mode"``（显式 mock 模式）、``"missing_api_key_mock"``（未配置
+        API Key，回退到内置桩）。两种情况下 :meth:`_call` 都会返回桩数据而非模型输出，
+        上层若不区分，就会把"压根没调模型"记成"模型输出无效"。
+
+        与 :meth:`chat_json` 的静默回退配套，用于让 S1 这类关键路径如实记录降级根因。
+        """
+        if settings.is_mock:
+            return "mock_mode"
+        if not self.api_key:
+            return "missing_api_key_mock"
+        return ""
+
     def chat(
         self,
         system: str,

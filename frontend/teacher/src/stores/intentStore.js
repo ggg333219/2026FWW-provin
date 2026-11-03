@@ -67,7 +67,11 @@ export const useIntentStore = defineStore('intent', {
     error: '',
     engine: '',
     usedFallback: false,
-    fallbackReason: ''
+    fallbackReason: '',
+    // 本次结果的真实来源：real_model / mock / rule_fallback / rule_engine。
+    // 用于在界面上区分"真实模型生成"与"未接入真实模型"，避免把 HTTP 200
+    // 当成真实模型成功（V04）。
+    modelSource: ''
   }),
 
   getters: {
@@ -97,6 +101,7 @@ export const useIntentStore = defineStore('intent', {
       this.engine = ''
       this.usedFallback = false
       this.fallbackReason = ''
+      this.modelSource = ''
       this.error = ''
       this.isAnalyzing = false
       this.isConfirming = false
@@ -146,6 +151,7 @@ export const useIntentStore = defineStore('intent', {
         this.engine = result.engine || ''
         this.usedFallback = Boolean(result.used_fallback)
         this.fallbackReason = result.fallback_reason || ''
+        this.modelSource = result.model_source || ''
         this.messages.push({
           role: 'assistant',
           content: result.response || this.followupQuestions[0] || '我已经更新了教学意图，请检查右侧方案卡。'
@@ -218,6 +224,7 @@ export const useIntentStore = defineStore('intent', {
       this.engine = ''
       this.usedFallback = false
       this.fallbackReason = ''
+      this.modelSource = ''
       if (typeof window !== 'undefined') {
         window.localStorage.removeItem(intentStorageKey(CONFIRMED_INTENT_KEY, this.projectId))
         window.localStorage.removeItem(intentStorageKey(INTENT_ID_KEY, this.projectId))
@@ -242,7 +249,8 @@ export const useIntentStore = defineStore('intent', {
         intentId: this.intentId,
         engine: this.engine,
         usedFallback: this.usedFallback,
-        fallbackReason: this.fallbackReason
+        fallbackReason: this.fallbackReason,
+        modelSource: this.modelSource
       }))
     }
   }

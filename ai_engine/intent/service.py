@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 # 降级日志中原始 LLM 输出的最大长度，避免超长输出刷爆日志。
 _DEGRADED_RAW_OUTPUT_MAX_CHARS = 800
 
+# ---- 结果来源标记（V04）----
+# 方案要求"真实模型成功、规则兜底成功、离线测试通过、模拟链路通过不能混为一谈"，
+# 因此响应里必须能一句话说清"这次结果到底是谁算出来的"。
+MODEL_SOURCE_REAL = "real_model"
+MODEL_SOURCE_MOCK = "mock"
+MODEL_SOURCE_RULE_FALLBACK = "rule_fallback"
+MODEL_SOURCE_RULE_ENGINE = "rule_engine"
 
 # 单进程会话仓库。生产环境可在不改变服务接口的情况下替换为 Redis。
 SESSIONS: dict[str, ConversationSession] = {}
@@ -94,7 +101,7 @@ class IntentUnderstandingService:
         if not any(item["role"].lower() == "teacher" for item in raw_messages):
             raise ValueError("至少需要一条教师消息")
 
-        summary, engine_name, used_fallback, fallback_reason, notes = self._extract_summary(
+        summary, engine_name, used_fallback, fallback_reason, notes, model_source = self._extract_summary(
             messages, raw_messages
         )
         if used_fallback:
@@ -146,9 +153,13 @@ class IntentUnderstandingService:
             "engine": engine_name,
             "used_fallback": used_fallback,
             # H0 可观测性：degraded 是 used_fallback 的显式别名，
-            # 供监控/前端统一识别“LLM 失败→规则引擎兜底”的降级链路。
+            # 供监控/前端统一识别"LLM 失败→规则引擎兜底"的降级链路。
             "degraded": used_fallback,
             "fallback_reason": fallback_reason,
+            # V04 可观测性：本次结果的真实来源。
+            # real_model=真实模型直出 / mock=未调用真实模型 / rule_fallback=模型失败已兜底
+            # / rule_engine=规则引擎直接产出。用于避免把 HTTP 200 等同于真实模型成功。
+            "model_source": model_source,
             # F01 可观测性：真实模型输出的归一/丢弃说明。
             # 非空表示模型输出可用但存在格式偏差；空表示模型输出本身规整。
             "normalization_notes": notes,
@@ -203,58 +214,72 @@ class IntentUnderstandingService:
         self,
         messages: list[DialogueTurn],
         raw_messages: list[dict[str, str]],
-    ) -> tuple[IntentSummary, str, bool, str | None, list[str]]:
+    ) -> tuple[IntentSummary, str, bool, str | None, list[str], str]:
         """提取结构化意图。
 
         Returns:
-            ``(摘要, 引擎名, 是否降级, 降级原因, 归一说明)``。
+            ``(摘要, 引擎名, 是否降级, 降级原因, 归一说明, 结果来源)``。
         """
         result: Any = None
         notes: list[str] = []
         if self.engine is not None:
+            model_capable = self._engine_model_capable()
+            unavailable = ""
             try:
                 result = self.engine.extract_intent(raw_messages)
+                # 必须等 extract_intent 跑完再问"本次能否触达真实模型"——
+                # 引擎是在调用过程中才把该状态写下来的。
+                unavailable = self._engine_unavailable_reason()
                 if isinstance(result, IntentSummary):
                     if result.topic:
-                        return result, self.engine.__class__.__name__, False, None, notes
-                    reason = "invalid_model_response"
+                        return (result, self.engine.__class__.__name__, False, None, notes,
+                                self._model_source(success=True, model_capable=model_capable,
+                                                   unavailable=unavailable))
+                    reason = unavailable or "invalid_model_response"
                 elif isinstance(result, dict) and not result.get("error"):
                     summary, notes = self._build_summary_from_payload(result)
                     if summary.topic:
-                        return summary, self.engine.__class__.__name__, False, None, notes
+                        return (summary, self.engine.__class__.__name__, False, None, notes,
+                                self._model_source(success=True, model_capable=model_capable,
+                                                   unavailable=unavailable))
                     self._log_degraded(
                         reason=f"自定义引擎输出缺少有效主题（topic={summary.topic!r}）",
                         raw_output=self._dump_raw_output(result),
                         path="engine",
                     )
-                    reason = "invalid_model_response"
+                    reason = unavailable or "invalid_model_response"
                 elif isinstance(result, dict):
                     self._log_degraded(
                         reason=f"自定义引擎返回错误（error={result.get('error')!r}）",
                         raw_output=self._dump_raw_output(result),
                         path="engine",
                     )
-                    reason = self._classify_engine_failure(result)
+                    reason = unavailable or self._classify_engine_failure(result)
                 else:
                     self._log_degraded(
                         reason=f"自定义引擎返回了不支持的类型（{type(result).__name__}）",
                         raw_output=self._dump_raw_output(result),
                         path="engine",
                     )
-                    reason = "invalid_model_response"
+                    reason = unavailable or "invalid_model_response"
             except Exception as exc:
+                unavailable = unavailable or self._engine_unavailable_reason()
                 self._log_degraded(
                     reason=f"自定义引擎输出校验失败：{type(exc).__name__}: {exc}",
                     raw_output=self._dump_raw_output(result),
                     path="engine",
                     exc=exc,
                 )
-                reason = self._classify_engine_failure({"reason": f"{type(exc).__name__} {exc}"})
+                reason = unavailable or self._classify_engine_failure(
+                    {"reason": f"{type(exc).__name__} {exc}"}
+                )
             # 降级到规则引擎时，模型输出并未被采用，因此不携带归一说明 ——
             # 保持"normalization_notes 非空 ⇔ 模型输出被采用"的契约清晰。
-            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason, []
+            return (IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason, [],
+                    self._model_source(success=False, model_capable=model_capable, unavailable=unavailable))
 
         prompt = self._build_extract_prompt(messages)
+        unavailable = self._client_unavailable_reason(self.client)
         try:
             result = self.client.chat_json(
                 system=(
@@ -271,7 +296,8 @@ class IntentUnderstandingService:
             summary, notes = self._build_summary_from_payload(result or {})
             if not summary.topic:
                 raise ValueError("LLM 未返回有效主题")
-            return summary, "LLM", False, None, notes
+            return (summary, "LLM", False, None, notes,
+                    self._model_source(success=True, model_capable=True, unavailable=unavailable))
         except Exception as exc:
             self._log_degraded(
                 reason=f"LLM 意图提取失败：{type(exc).__name__}: {exc}",
@@ -279,11 +305,59 @@ class IntentUnderstandingService:
                 path="chat_json",
                 exc=exc,
             )
-            reason = "invalid_model_response" if isinstance(exc, (ValueError, TypeError)) else self._classify_engine_failure(
-                {"reason": f"{type(exc).__name__} {exc}"}
+            # 缺 Key / mock 模式下真正的原因不是"模型输出无效"，而是压根没调模型；
+            # 这里保留真实根因，避免把"没接模型"误报成"模型坏了"。
+            reason = unavailable or (
+                "invalid_model_response" if isinstance(exc, (ValueError, TypeError))
+                else self._classify_engine_failure({"reason": f"{type(exc).__name__} {exc}"})
             )
             # 同上：降级时模型输出未被采用，不携带归一说明。
-            return IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason, []
+            return (IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason, [],
+                    self._model_source(success=False, model_capable=True, unavailable=unavailable))
+
+    def _engine_model_capable(self) -> bool:
+        """当前引擎是否具备调用模型的能力（有无底层 LLM 客户端）。"""
+        return getattr(self.engine, "client", None) is not None
+
+    def _engine_unavailable_reason(self) -> str:
+        """本次调用**不可能**来自真实模型的原因；空串表示可以。
+
+        非空表示结果来自内置桩或规则，而不是真实模型 —— 此时真实根因应记为该原因，
+        而不是"模型输出无效"，否则会把"压根没接模型"误报成"模型坏了"。
+        """
+        reason = str(getattr(self.engine, "last_unavailable_reason", "") or "")
+        if reason:
+            return reason
+        if settings.GEN_MODE.strip().lower() == "mock":
+            # 系统级 mock 模式：路由直接选用规则引擎，模型根本没参与本次请求。
+            return "mock_mode"
+        return ""
+
+    @staticmethod
+    def _client_unavailable_reason(client: Any) -> str:
+        """询问客户端"本次调用能否触达真实模型"，拿不到就当作可以。"""
+        getter = getattr(client, "unavailable_reason", None)
+        if not callable(getter):
+            return ""
+        try:
+            return str(getter() or "")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _model_source(*, success: bool, model_capable: bool, unavailable: str) -> str:
+        """把引擎状态收敛成单一的结果来源标记。
+
+        - ``real_model``：真实模型输出被采用（含轻度归一）
+        - ``mock``：**没有调用真实模型**（mock 模式 / 未配置 API Key）
+        - ``rule_fallback``：模型侧失败，已回退规则引擎
+        - ``rule_engine``：规则引擎直接产出（显式规则模式）
+        """
+        if unavailable:
+            return MODEL_SOURCE_MOCK
+        if not success:
+            return MODEL_SOURCE_RULE_FALLBACK
+        return MODEL_SOURCE_REAL if model_capable else MODEL_SOURCE_RULE_ENGINE
 
     @staticmethod
     def _build_summary_from_payload(payload: dict[str, Any]) -> tuple[IntentSummary, list[str]]:

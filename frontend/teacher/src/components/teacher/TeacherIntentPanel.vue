@@ -213,8 +213,8 @@
         </div>
       </section>
 
-      <div v-if="store.usedFallback" class="engine-note" role="status">
-        当前使用本地规则提取（{{ fallbackReasonLabel }}），请核对并补充识别结果。
+      <div v-if="engineNoteVisible" class="engine-note" role="status">
+        {{ engineNoteText }}
       </div>
 
       <footer class="intent-footer">
@@ -309,8 +309,31 @@ const fallbackReasonLabel = computed(() => ({
   timeout: 'AI 请求超时',
   engine_unavailable: 'AI 服务暂不可用',
   model_error: 'AI 服务返回异常',
-  invalid_model_response: 'AI 返回内容无法校验'
+  invalid_model_response: 'AI 返回内容无法校验',
+  mock_mode: '本地模拟模式',
+  missing_api_key_mock: '未配置 API Key'
 }[store.fallbackReason] || '解析服务异常'))
+// 结果来源判定（V04）：必须让"真实模型生成""规则兜底""未接入真实模型"在界面上可区分，
+// 不能把一次 HTTP 200 当成真实模型已经跑通。
+//   real_model   → 真实模型直出，不提示
+//   rule_fallback→ 模型失败已回退规则引擎，提示具体降级原因
+//   mock         → 压根没调用真实模型（mock 模式 / 未配置 API Key）
+//   rule_engine  → 规则引擎直接产出（显式规则模式）
+// 空串表示来源未知（旧数据），此时按旧逻辑只依据 usedFallback 提示，避免误报。
+const isRealModelSource = computed(() => store.modelSource === 'real_model')
+const isMockSource = computed(() => store.modelSource === 'mock' || store.modelSource === 'rule_engine')
+const engineNoteVisible = computed(() => {
+  if (store.modelSource) return !isRealModelSource.value
+  return store.usedFallback
+})
+const engineNoteText = computed(() => {
+  if (isMockSource.value) {
+    return '当前未接入真实模型（本地模拟/规则模式），识别结果仅供参考，请核对并补充。'
+  }
+  // 注意：这里是 JS 模板字符串，必须用 ${} 插值；
+  // 若误写成 Vue 的 {{ }}，界面上会原样显示 "{{ fallbackReasonLabel.value }}"。
+  return `当前使用本地规则提取（${fallbackReasonLabel.value}），请核对并补充识别结果。`
+})
 const ringStyle = computed(() => ({ background: `conic-gradient(#4f8f7b ${store.completionPct}%, #e7efeb 0)` }))
 const statusClass = computed(() => store.isConfirmed ? 'confirmed' : store.canConfirm ? 'confirming' : 'collecting')
 const statusText = computed(() => store.isConfirmed ? '已确认' : store.canConfirm ? '待确认' : '持续理解中')
