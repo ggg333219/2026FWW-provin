@@ -240,15 +240,25 @@ export const useMaterialStore = defineStore('material', {
     async indexKnowledgeBase(params = {}) {
       this.indexing = true
       try {
-        // S2 已解析的切片是当前资料的完整索引输入，不能按数量或字符数静默丢弃。
-        const chunkTexts = this.allChunks
-          .map((c) => (typeof c?.content === 'string' ? c.content.trim() : ''))
-          .filter((t) => t.length > 0)
+        const chunkIds = []
+        const texts = [...(params.texts || [])]
+        for (const chunk of this.allChunks) {
+          if (typeof chunk.content !== 'string' || !chunk.content.trim()) continue
+          if (chunk.sessionRegistered) {
+            const chunkId = chunk.chunkId || chunk.chunk_id
+            if (!chunkId) throw new Error('已解析切片缺少 chunk_id，无法按来源索引')
+            chunkIds.push(chunkId)
+          } else {
+            // 旧课件页没有 S2 session 登记，沿用原有的直接文本上传。
+            texts.push(chunk.content.trim())
+          }
+        }
 
         const resp = await teacherV1Api.rag.knowledgeUpload({
           sessionId: params.sessionId || '',
           files: params.files || [],
-          texts: [...(params.texts || []), ...chunkTexts]
+          texts,
+          chunkIds
         })
         return resp?.data || null
       } catch (err) {

@@ -227,7 +227,11 @@ async function refreshAutomaticEvidence({ indexMaterials = false, force = false 
   autoEvidenceError.value = ''
   try {
     if (indexMaterials && materialStore.allChunks.length) {
-      await materialStore.indexKnowledgeBase({ sessionId: sessionId.value })
+      const indexed = await materialStore.indexKnowledgeBase({ sessionId: sessionId.value })
+      if (!indexed) {
+        autoEvidenceError.value = materialStore.error || '知识库索引失败'
+        return null
+      }
     }
     const packet = await materialStore.generateEvidence({
       query,

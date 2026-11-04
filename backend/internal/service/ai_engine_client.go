@@ -490,10 +490,11 @@ type RAGEvidenceResponse struct {
 }
 
 type KnowledgeUploadRequest struct {
-	SessionID       string   `json:"session_id"`
-	KnowledgeBaseID string   `json:"knowledge_base_id,omitempty"`
-	Files           []string `json:"files,omitempty"`
-	Texts           []string `json:"texts,omitempty"`
+	SessionID       string    `json:"session_id"`
+	KnowledgeBaseID string    `json:"knowledge_base_id,omitempty"`
+	Files           []string  `json:"files,omitempty"`
+	Texts           []string  `json:"texts,omitempty"`
+	ChunkIDs        *[]string `json:"chunk_ids,omitempty"`
 }
 
 type KnowledgeUploadResponse struct {
