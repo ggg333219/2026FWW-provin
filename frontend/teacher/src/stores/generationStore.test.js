@@ -214,3 +214,40 @@ describe('预览持久化与版本快照恢复', () => {
     expect(store.previewVersion).toBeGreaterThan(0)
   })
 })
+
+describe('F05 生成进度显示修复', () => {
+  it('setGenerating(false) 保留完成态进度，页面才能展示 100% 生成完成', () => {
+    const store = useGenerationStore()
+
+    store.setGenerating(true)
+    store.setGenerateProgress(100, '生成完成')
+    store.setGenerating(false)
+
+    expect(store.generateProgress).toBe(100)
+    expect(store.generateStageText).toBe('生成完成')
+  })
+
+  it('waitForCoursewareGeneration 进度单调：后端回退不拉低进度条', async () => {
+    const statuses = [
+      { status: 'processing', progress_pct: 60, stage_text: '生成中' },
+      { status: 'processing', progress_pct: 20, stage_text: '生成中' },
+      { status: 'failed', error: '模型超时' }
+    ]
+    globalThis.fetch = async (url) => {
+      const parsed = new URL(url, 'http://localhost')
+      if (parsed.pathname === '/api/v1/gen/status/f05_task') {
+        const payload = statuses.length ? statuses.shift() : { status: 'failed', error: 'no more' }
+        return { ok: true, status: 200, json: async () => ({ ok: true, data: payload }) }
+      }
+      return { ok: false, status: 404, json: async () => ({ message: 'not mocked' }) }
+    }
+
+    const store = useGenerationStore()
+    // 真实调用顺序：页面在轮询前已预设阶段性进度（如 25%）
+    store.setGenerateProgress(25, '正在生成内容')
+
+    await expect(store.waitForCoursewareGeneration('f05_task', { intervalMs: 5 }))
+      .rejects.toThrow('模型超时')
+    expect(store.generateProgress).toBe(60) // 不被轮询回退拉低
+  })
+})
