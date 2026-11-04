@@ -66,6 +66,7 @@ export const teacherRagApi = {
    * @param {string} params.sessionId - 会话ID（关联 S2 已解析资料）
    * @param {string[]} params.files - 文件路径列表（minio:// 或本地路径，可选）
    * @param {string[]} params.texts - 直接上传的文本片段（可选）
+   * @param {string[]} params.chunkIds - S2 会话中要索引的原始切片 ID（可选；空数组表示不索引）
    * @param {string} params.knowledgeBaseId - 目标知识库ID（可选）
    * @returns {Promise<Object>} { code, data: { task_id, status, chunk_count, document_id } }
    */
@@ -77,7 +78,8 @@ export const teacherRagApi = {
         session_id: params.sessionId || '',
         knowledge_base_id: params.knowledgeBaseId || '',
         files: params.files || [],
-        texts: params.texts || []
+        texts: params.texts || [],
+        ...(params.chunkIds !== undefined ? { chunk_ids: params.chunkIds } : {})
       })
     })
 }
