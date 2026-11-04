@@ -171,10 +171,14 @@ export const useGenerationStore = defineStore('generation', {
      * 轮询全流程生成任务，并把完成后的节点树回填到 S3 编辑状态。
      */
     async waitForCoursewareGeneration(taskId, { intervalMs = 500, maxAttempts = 240 } = {}) {
+      // F05：轮询进度只升不降——processing 阶段的 progress_pct 可能回跳，
+      // 直接透传会让进度条倒退；失败时保留最后一次最高进度供页面展示。
+      let maxSeen = Number(this.generateProgress) || 0
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const status = await this.getCoursewareGenerationStatus(taskId)
         const progress = Number(status.progress_pct ?? (Number(status.progress || 0) * 100))
-        this.setGenerateProgress(Number.isFinite(progress) ? progress : 0, status.stage_text || '正在生成课件')
+        if (Number.isFinite(progress) && progress > maxSeen) maxSeen = progress
+        this.setGenerateProgress(maxSeen, status.stage_text || '正在生成课件')
 
         if (['done', 'completed', 'success'].includes(status.status)) {
           const nodes = Array.isArray(status.nodes) ? status.nodes : []
@@ -336,10 +340,10 @@ export const useGenerationStore = defineStore('generation', {
 
     setGenerating(generating) {
       this.isGenerating = generating
-      if (!generating) {
-        this.generateProgress = 0
-        this.generateStageText = ''
-      }
+      // 停止生成时不清零进度：成功路径会在 finally 里 setGenerating(false)，
+      // 100% 与「生成完成」文案需保留给页面完成态（S3CoursewareStudio 的
+      // watcher 依赖「isGenerating=false 且 generateProgress===100」记录完成日志）。
+      // 失败路径由调用方显式 setGenerateProgress(0)；新一轮生成开始时也会重设进度。
     },
 
     setSaving(saving) {
