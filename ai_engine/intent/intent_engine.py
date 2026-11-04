@@ -112,6 +112,43 @@ class IntentEngine:
 __all__ = ["IntentEngine"]
 
 
+def _normalize_llm_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """对 LLM 返回的字段做类型矫正（不改语义），保证 IntentSummary(**result) 不因类型抛错。
+
+    背景（2026-11-04 F05 验收实测）：GLM 系模型对数组字段的类型不稳定——
+    同一提示词下 output_format / key_difficulties / expected_outcomes 先后出现过
+    字符串形态，pydantic 的 list 校验会整体拒绝这份本已正确的提取结果，
+    使 S1 永远静默降级回规则引擎（degraded=true）。这里只矫正类型偏差；
+    missing_fields 由 IntentUnderstandingService._infer_missing_fields 重算，无需保真。
+    """
+    normalized = dict(result)
+    of = normalized.get("output_format")
+    if isinstance(of, str):
+        text = of.lower()
+        values: List[str] = []
+        if any(tag in text for tag in ("doc", "word", "教案", "讲义", "讲稿")):
+            values.append("doc")
+        if any(tag in text for tag in ("ppt", "课件", "幻灯", "slides")) or not values:
+            values.insert(0, "ppt")
+        normalized["output_format"] = values
+    for field in ("knowledge_points", "key_difficulties", "expected_outcomes", "missing_fields"):
+        value = normalized.get(field)
+        if isinstance(value, str):
+            text = value.strip()
+            normalized[field] = [text] if text else []
+        elif value is None:
+            normalized[field] = []
+    duration = normalized.get("duration_minutes")
+    if isinstance(duration, str) and duration.strip().isdigit():
+        normalized["duration_minutes"] = int(duration)
+    with_interactive = normalized.get("with_interactive")
+    if isinstance(with_interactive, str):
+        normalized["with_interactive"] = with_interactive.strip().lower() in {
+            "true", "1", "yes", "是", "需要", "要",
+        }
+    return normalized
+
+
 class LLMIntentEngine:
     """LLM-backed intent extractor using `ai_engine.core.LLMClient`.
 
@@ -162,7 +199,7 @@ class LLMIntentEngine:
         try:
             result = self.client.chat_json(system=self.SYSTEM_PROMPT, user=user_prompt, schema=self.JSON_SCHEMA)
             if isinstance(result, dict):
-                return result
+                return _normalize_llm_result(result)
             return {"error": "unexpected_response", "_raw": str(result)}
         except Exception as e:
             return {"error": "llm_call_failed", "reason": str(e)}
