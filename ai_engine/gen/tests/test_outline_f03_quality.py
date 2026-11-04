@@ -99,3 +99,13 @@ def test_markdown_path_also_rejects_a_single_node_lesson():
     assert result["used_fallback"] is False
     assert len(result["nodes"]) == 6
     assert len(llm.calls) == 2
+
+
+def test_authentication_failure_is_not_reported_as_bad_model_json():
+    class UnauthorizedLLM:
+        def chat_with_schema(self, *_args, **_kwargs):
+            raise RuntimeError("schema call failed: Error code: 401 invalid_api_key")
+
+    result = OutlineBuilder(llm_client=UnauthorizedLLM()).build(INTENT)
+    assert result["used_fallback"] is True
+    assert result["fallback_reason"] == "model_error"

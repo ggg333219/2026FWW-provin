@@ -240,6 +240,8 @@ class OutlineBuilder:
     def _fallback_reason(exc: Exception) -> str:
         name = type(exc).__name__.lower()
         message = str(exc).lower()
+        if "authentication" in name or "invalid_api_key" in message or "error code: 401" in message:
+            return "model_error"
         if "timeout" in name or "timed out" in message or "timeout" in message:
             return "timeout"
         if "json" in name or "parse" in message or "schema" in message:
