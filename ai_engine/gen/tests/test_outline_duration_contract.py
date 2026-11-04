@@ -241,8 +241,10 @@ class TestOutlineBuilderDurationEndToEnd(unittest.TestCase):
             {
                 "nodes": [
                     {"node_id": "node_001", "title": "导入", "node_type": "cover"},
-                    {"node_id": "node_002", "title": "核心", "node_type": "content"},
-                    {"node_id": "node_003", "title": "小结", "node_type": "summary"},
+                    {"node_id": "node_002", "title": "配方概念", "node_type": "content"},
+                    {"node_id": "node_003", "title": "配方演示", "node_type": "content"},
+                    {"node_id": "node_004", "title": "课堂练习", "node_type": "quiz"},
+                    {"node_id": "node_005", "title": "小结", "node_type": "summary"},
                 ]
             }
         )
@@ -250,7 +252,7 @@ class TestOutlineBuilderDurationEndToEnd(unittest.TestCase):
             {"topic": "一元二次方程", "knowledge_points": ["配方"], "duration_minutes": 45}
         )
         self.assertFalse(result["used_fallback"])
-        self._assert_go_contract(result["nodes"], expected_count=3)
+        self._assert_go_contract(result["nodes"], expected_count=5)
         self.assertEqual(
             sum(n["estimated_duration_minutes"] for n in result["nodes"]), 45
         )
@@ -285,13 +287,15 @@ class TestOutlineBuilderDurationEndToEnd(unittest.TestCase):
                     {"node_id": "node_001", "title": "测验", "node_type": "quiz",
                      "estimated_duration_minutes": 3},
                     {"node_id": "node_002", "title": "讲授", "node_type": "content",
-                     "estimated_duration_minutes": 27},
+                     "estimated_duration_minutes": 20},
+                    {"node_id": "node_003", "title": "例题", "node_type": "content",
+                     "estimated_duration_minutes": 7},
                 ]
             }
         )
         result = self.builder.build({"topic": "主题", "duration_minutes": 30})
         self.assertEqual(
-            [n["estimated_duration_minutes"] for n in result["nodes"]], [3, 27]
+            [n["estimated_duration_minutes"] for n in result["nodes"]], [3, 20, 7]
         )
 
     def test_build_zero_duration_from_llm_is_repaired(self):
@@ -342,11 +346,11 @@ class TestOutlineBuilderDurationEndToEnd(unittest.TestCase):
         self.assertEqual(result["fallback_reason"], "timeout")
         self.assertNotIn("internal detail", result["fallback_reason"])
 
-    def test_outline_llm_timeout_is_capped_at_90_seconds(self):
+    def test_outline_llm_timeout_leaves_room_for_one_quality_retry(self):
         with patch("ai_engine.gen.outline.resolve_llm_timeout", return_value=120):
             llm = OutlineBuilder()._get_llm()
 
-        self.assertEqual(llm.timeout, 90)
+        self.assertEqual(llm.timeout, 75)
         self.assertEqual(llm.max_attempts, 1)
         self.assertTrue(llm.disable_sdk_retries)
         self.assertTrue(llm.stop_schema_fallback_on_error)
@@ -359,10 +363,14 @@ class TestOutlineBuilderDurationEndToEnd(unittest.TestCase):
 
     def test_build_from_markdown_satisfies_contract(self):
         self.mock.set_json_response(
-            {"nodes": [{"node_id": "node_001", "title": "A"}, {"node_id": "node_002", "title": "B"}]}
+            {"nodes": [
+                {"node_id": f"node_{index:03d}", "title": f"环节{index}"}
+                for index in range(1, 6)
+            ]}
         )
         result = self.builder.build_from_markdown("# 课件", course_name="课程")
-        self._assert_go_contract(result["nodes"], expected_count=2)
+        self._assert_go_contract(result["nodes"], expected_count=5)
+        self.assertFalse(result["used_fallback"])
         self.assertEqual(
             sum(n["estimated_duration_minutes"] for n in result["nodes"]),
             DEFAULT_TOTAL_DURATION_MINUTES,
