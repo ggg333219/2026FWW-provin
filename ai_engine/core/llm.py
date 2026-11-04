@@ -478,7 +478,10 @@ class LLMClient:
                 logger.warning(
                     "[chat_with_schema] 级别 %s 调用异常，降级到下一级: %s", level_name, exc,
                 )
-                if self.stop_schema_fallback_on_error:
+                if self.stop_schema_fallback_on_error and not (
+                    level_name == "json_schema_strict"
+                    and "response_format type is unavailable" in str(exc).lower()
+                ):
                     break
                 continue
 
@@ -492,7 +495,10 @@ class LLMClient:
                 # A different JSON encoding cannot repair a slow or unavailable
                 # provider. Stop the format fallback chain and let the caller use
                 # its deterministic fallback instead of repeating long requests.
-                if self.stop_schema_fallback_on_error:
+                if self.stop_schema_fallback_on_error and not (
+                    level_name == "json_schema_strict"
+                    and "response_format type is unavailable" in (response.fallback_reason or "").lower()
+                ):
                     break
                 continue
 

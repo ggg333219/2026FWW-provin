@@ -29,6 +29,24 @@ def test_outline_client_stops_schema_fallback_after_first_provider_failure():
     assert len(calls) == 1
 
 
+def test_outline_client_uses_json_object_when_strict_format_is_unsupported():
+    client = LLMClient(api_key="test-key", stop_schema_fallback_on_error=True)
+    formats = []
+
+    def reply(**kwargs):
+        formats.append(kwargs.get("response_format", {}).get("type"))
+        if len(formats) == 1:
+            return LLMResponse(
+                content="", model="test-model", used_fallback=True,
+                fallback_reason="Error code: 400 - This response_format type is unavailable now",
+            )
+        return LLMResponse(content='{"nodes": []}', model="test-model")
+
+    client._call = reply
+    assert client.chat_with_schema("system", "user", {"type": "object"}) == {"nodes": []}
+    assert formats == ["json_schema", "json_object"]
+
+
 def test_outline_client_stops_schema_fallback_after_unparseable_response():
     client = LLMClient(
         api_key="test-key",
