@@ -93,7 +93,43 @@ def test_model_durations_are_scaled_to_the_lesson_length():
 def test_markdown_path_also_rejects_a_single_node_lesson():
     llm = SequenceLLM({"nodes": _nodes(["排序算法"])}, {"nodes": GOOD})
     result = OutlineBuilder(llm_client=llm).build_from_markdown(
-        "# 排序算法\n\n## 冒泡排序\n\n## 快速排序", "排序算法"
+        "# 排序算法\n\n课程总时长：45分钟\n\n## 冒泡排序\n\n## 快速排序", "排序算法"
+    )
+
+    assert result["used_fallback"] is False
+    assert len(result["nodes"]) == 6
+    assert len(llm.calls) == 2
+
+
+def test_short_markdown_keeps_a_valid_two_node_model_outline():
+    llm = SequenceLLM({"nodes": _nodes(["概念", "例子"], [3, 4])})
+    result = OutlineBuilder(llm_client=llm).build_from_markdown(
+        "# 简短说明\n\n## 概念\n一句定义。\n\n## 例子\n一个例子。", "简短说明"
+    )
+
+    assert result["used_fallback"] is False
+    assert len(result["nodes"]) == 2
+    assert [node["estimated_duration_minutes"] for node in result["nodes"]] == [3, 4]
+    assert len(llm.calls) == 1
+
+
+def test_short_markdown_keeps_a_valid_single_node_model_outline():
+    llm = SequenceLLM({"nodes": _nodes(["概念速览"], [5])})
+    result = OutlineBuilder(llm_client=llm).build_from_markdown(
+        "# 概念速览\n\n这是一个简短的概念说明。", "概念速览"
+    )
+
+    assert result["used_fallback"] is False
+    assert [node["title"] for node in result["nodes"]] == ["概念速览"]
+    assert result["nodes"][0]["estimated_duration_minutes"] == 5
+    assert len(llm.calls) == 1
+
+
+def test_markdown_with_intent_duration_still_requires_a_full_lesson_outline():
+    llm = SequenceLLM({"nodes": _nodes(["排序算法"])}, {"nodes": GOOD})
+    result = OutlineBuilder(llm_client=llm).build_from_markdown(
+        "# 排序算法\n\n## 冒泡排序\n\n## 快速排序",
+        duration_minutes=45,
     )
 
     assert result["used_fallback"] is False

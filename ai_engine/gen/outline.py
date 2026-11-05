@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ..schema import (
-    DEFAULT_TOTAL_DURATION_MINUTES,
     build_stage2_node_tree_schema,
     extract_nodes_payload,
     normalize_duration_minutes,
@@ -179,10 +178,15 @@ class OutlineBuilder:
         markdown: str,
         course_name: str | None = None,
         generation_instruction_set: dict[str, Any] | None = None,
+        duration_minutes: float | None = None,
     ) -> dict[str, Any]:
         """从已有 Markdown 构建节点树（兼容旧接口）"""
-        # 无 intent 时没有课时来源，用默认总课时，保证输出仍可被 Go 大纲确认接受。
-        total_duration = DEFAULT_TOTAL_DURATION_MINUTES
+        # 只有 Markdown 明确声明了总课时，才按整堂课要求检查节点数。
+        # 未声明课时的短材料保留模型给出的简短大纲和节点时长。
+        total_duration = (
+            normalize_duration_minutes(duration_minutes)
+            or self._markdown_total_duration_minutes(markdown)
+        )
         fallback = self._fallback_outline(course_name or "未命名课程", None, total_duration)
         markdown = self._append_generation_instructions(markdown, generation_instruction_set)
         return self._generate_checked(markdown, [], total_duration, fallback)
@@ -324,6 +328,10 @@ class OutlineBuilder:
             else "7. 每个节点必须输出 estimated_duration_minutes（单位：分钟），必须是大于 0 的数字。\n"
         )
         minimum_nodes = self._minimum_nodes(total_duration_minutes)
+        node_count_rule = (
+            "不要将整堂课压缩为一个节点。" if total_duration_minutes
+            else "简短材料允许单节点，按实际内容切分。"
+        )
         system_prompt = (
             "你是教学设计助手，负责将课件 Markdown 切分为结构化的可讲授节点树。\n"
             "【强制约束】\n"
@@ -334,7 +342,7 @@ class OutlineBuilder:
             "5. 仅当 Markdown 某段落明显为章节入口（## 开头且无详细内容）时才用 section 类型。\n"
             "6. 输出严格遵循 JSON Schema，additionalProperties=False，不得输出 schema 外字段。\n"
             + duration_rule
-            + f"8. 根据课时安排至少 {minimum_nodes} 个内容各异的教学节点，最多 {self.config.max_nodes} 个；不要将整堂课压缩为一个节点。\n"
+            + f"8. 至少 {minimum_nodes} 个内容各异的教学节点，最多 {self.config.max_nodes} 个；{node_count_rule}\n"
             + "9. 每个明确给出的知识点都要在节点标题、摘要或 key_points 中出现；标题不得重复。安排导入、概念/方法、示例、练习或检查、总结等教学环节，按教学顺序排列。\n"
         )
         user_prompt = (
@@ -379,6 +387,14 @@ class OutlineBuilder:
             if value is not None:
                 return value
         return None
+
+    @staticmethod
+    def _markdown_total_duration_minutes(markdown: str) -> float | None:
+        match = re.search(
+            r"(?im)^\s*(?:课程)?(?:总时长|课时|授课时长)\s*[:：]\s*(\d+(?:\.\d+)?)\s*分钟\s*$",
+            markdown or "",
+        )
+        return normalize_duration_minutes(match.group(1)) if match else None
 
     @staticmethod
     def _finalize(nodes: list[dict[str, Any]], total_duration_minutes: float | None) -> list[dict[str, Any]]:

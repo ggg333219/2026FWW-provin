@@ -18,7 +18,6 @@ from unittest.mock import patch
 
 from ai_engine.schema import (
     DEFAULT_NODE_DURATION_MINUTES,
-    DEFAULT_TOTAL_DURATION_MINUTES,
     assign_node_durations,
     normalize_duration_minutes,
     normalize_stage2_nodes,
@@ -372,8 +371,21 @@ class TestOutlineBuilderDurationEndToEnd(unittest.TestCase):
         self._assert_go_contract(result["nodes"], expected_count=5)
         self.assertFalse(result["used_fallback"])
         self.assertEqual(
-            sum(n["estimated_duration_minutes"] for n in result["nodes"]),
-            DEFAULT_TOTAL_DURATION_MINUTES,
+            [n["estimated_duration_minutes"] for n in result["nodes"]],
+            [DEFAULT_NODE_DURATION_MINUTES] * 5,
+        )
+
+    def test_build_from_markdown_respects_declared_total_duration(self):
+        self.mock.set_json_response(
+            {"nodes": [
+                {"node_id": f"node_{index:03d}", "title": f"环节{index}"}
+                for index in range(1, 6)
+            ]}
+        )
+        result = self.builder.build_from_markdown("# 课件\n\n课程总时长：45分钟")
+        self.assertFalse(result["used_fallback"])
+        self.assertEqual(
+            sum(n["estimated_duration_minutes"] for n in result["nodes"]), 45
         )
 
     def test_build_from_markdown_fallback_satisfies_contract(self):
