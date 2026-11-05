@@ -12,16 +12,17 @@
 """
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ..schema import (
-    DEFAULT_TOTAL_DURATION_MINUTES,
     build_stage2_node_tree_schema,
     extract_nodes_payload,
     normalize_duration_minutes,
     normalize_stage2_nodes,
+    normalize_text_list,
     to_outline_contract_nodes,
 )
 from ..core.llm import LLMClient, resolve_llm_timeout
@@ -159,7 +160,7 @@ class OutlineBuilder:
         intent = intent or {}
         title = str(intent.get("title") or intent.get("topic") or "未命名课件")
         description = str(intent.get("description") or intent.get("subtitle") or "")
-        key_points = intent.get("key_points") or intent.get("knowledge_points") or []
+        key_points = normalize_text_list(intent.get("key_points") or intent.get("knowledge_points"))
         # 意图课时：决定节点时长均分基准；缺失时留 None，走每节点默认时长。
         total_duration = self._intent_duration_minutes(intent)
         evidence_text = self._format_evidence(evidence_packet)
@@ -167,9 +168,34 @@ class OutlineBuilder:
         markdown = self._build_markdown_context(
             title, description, key_points, evidence_text, total_duration
         )
+        markdown = self._append_intent_context(markdown, intent)
         markdown = self._append_generation_instructions(markdown, generation_instruction_set)
         fallback = self._fallback_outline(title, key_points, total_duration)
+        return self._generate_checked(markdown, key_points, total_duration, fallback)
 
+    def build_from_markdown(
+        self,
+        markdown: str,
+        course_name: str | None = None,
+        generation_instruction_set: dict[str, Any] | None = None,
+        duration_minutes: float | None = None,
+    ) -> dict[str, Any]:
+        """从已有 Markdown 构建节点树（兼容旧接口）"""
+        # 只有 Markdown 明确声明了总课时，才按整堂课要求检查节点数。
+        # 未声明课时的短材料保留模型给出的简短大纲和节点时长。
+        total_duration = (
+            normalize_duration_minutes(duration_minutes)
+            or self._markdown_total_duration_minutes(markdown)
+        )
+        fallback = self._fallback_outline(course_name or "未命名课程", None, total_duration)
+        markdown = self._append_generation_instructions(markdown, generation_instruction_set)
+        return self._generate_checked(markdown, [], total_duration, fallback)
+
+    def _generate_checked(
+        self, markdown: str, key_points: list[str],
+        total_duration: float | None, fallback: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Accept only a usable model outline; retain an explicit fallback signal."""
         try:
             nodes = self._run_node_tree_generation(markdown, key_points, total_duration)
             if not nodes:
@@ -178,33 +204,20 @@ class OutlineBuilder:
                     "used_fallback": True,
                     "fallback_reason": "empty_model_response",
                 }
-            return {"nodes": self._finalize(nodes, total_duration), "used_fallback": False}
-        except Exception as exc:
-            return {
-                "nodes": self._finalize(fallback["nodes"], total_duration),
-                "used_fallback": True,
-                "fallback_reason": self._fallback_reason(exc),
-            }
-
-    def build_from_markdown(
-        self,
-        markdown: str,
-        course_name: str | None = None,
-        generation_instruction_set: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """从已有 Markdown 构建节点树（兼容旧接口）"""
-        # 无 intent 时没有课时来源，用默认总课时，保证输出仍可被 Go 大纲确认接受。
-        total_duration = DEFAULT_TOTAL_DURATION_MINUTES
-        fallback = self._fallback_outline(course_name or "未命名课程", None, total_duration)
-        markdown = self._append_generation_instructions(markdown, generation_instruction_set)
-        try:
-            nodes = self._run_node_tree_generation(markdown, [], total_duration)
-            if not nodes:
+            issues = self._quality_issues(nodes, key_points, total_duration)
+            if issues:
+                # A valid JSON response can still be an unusable lesson plan. Give the
+                # model one precise chance to correct it before using the local plan.
+                repair_prompt = markdown + "\n\n## 上次大纲需要修正\n" + "；".join(issues)
+                nodes = self._run_node_tree_generation(repair_prompt, key_points, total_duration)
+                issues = self._quality_issues(nodes, key_points, total_duration)
+            if issues:
                 return {
                     "nodes": self._finalize(fallback["nodes"], total_duration),
                     "used_fallback": True,
-                    "fallback_reason": "empty_model_response",
+                    "fallback_reason": "low_quality_model_response",
                 }
+            self._balance_durations(nodes, total_duration)
             return {"nodes": self._finalize(nodes, total_duration), "used_fallback": False}
         except Exception as exc:
             return {
@@ -231,6 +244,8 @@ class OutlineBuilder:
     def _fallback_reason(exc: Exception) -> str:
         name = type(exc).__name__.lower()
         message = str(exc).lower()
+        if "authentication" in name or "invalid_api_key" in message or "error code: 401" in message:
+            return "model_error"
         if "timeout" in name or "timed out" in message or "timeout" in message:
             return "timeout"
         if "json" in name or "parse" in message or "schema" in message:
@@ -312,6 +327,11 @@ class OutlineBuilder:
             if total_duration_minutes
             else "7. 每个节点必须输出 estimated_duration_minutes（单位：分钟），必须是大于 0 的数字。\n"
         )
+        minimum_nodes = self._minimum_nodes(total_duration_minutes)
+        node_count_rule = (
+            "不要将整堂课压缩为一个节点。" if total_duration_minutes
+            else "简短材料允许单节点，按实际内容切分。"
+        )
         system_prompt = (
             "你是教学设计助手，负责将课件 Markdown 切分为结构化的可讲授节点树。\n"
             "【强制约束】\n"
@@ -322,12 +342,14 @@ class OutlineBuilder:
             "5. 仅当 Markdown 某段落明显为章节入口（## 开头且无详细内容）时才用 section 类型。\n"
             "6. 输出严格遵循 JSON Schema，additionalProperties=False，不得输出 schema 外字段。\n"
             + duration_rule
+            + f"8. 至少 {minimum_nodes} 个内容各异的教学节点，最多 {self.config.max_nodes} 个；{node_count_rule}\n"
+            + "9. 每个明确给出的知识点都要在节点标题、摘要或 key_points 中出现；标题不得重复。安排导入、概念/方法、示例、练习或检查、总结等教学环节，按教学顺序排列。\n"
         )
         user_prompt = (
             f"课件 Markdown:\n{markdown}\n\n"
             f"关键点:\n{json.dumps(key_points, ensure_ascii=False)}\n\n"
             "请按上述约束输出 nodes 数组。node_id 示例：node_001 / node_002。\n"
-            "每个节点的 key_points 从对应段落中提取 2-6 条核心要点。"
+            "每个节点的 key_points 从对应段落中提取 2-4 条核心要点。"
         )
         llm = self._get_llm()
         schema = build_stage2_node_tree_schema()
@@ -344,7 +366,9 @@ class OutlineBuilder:
         return LLMClient(
             temperature=self.config.temperature,
             model=self.config.model or None,
-            timeout=min(resolve_llm_timeout(), 150),
+            # Two quality attempts must fit inside the Go outline request's
+            # 180-second deadline, with time left for transport and processing.
+            timeout=min(resolve_llm_timeout(), 75),
             max_attempts=1,
             disable_sdk_retries=True,
             stop_schema_fallback_on_error=True,
@@ -365,9 +389,79 @@ class OutlineBuilder:
         return None
 
     @staticmethod
+    def _markdown_total_duration_minutes(markdown: str) -> float | None:
+        match = re.search(
+            r"(?im)^\s*(?:课程)?(?:总时长|课时|授课时长)\s*[:：]\s*(\d+(?:\.\d+)?)\s*分钟\s*$",
+            markdown or "",
+        )
+        return normalize_duration_minutes(match.group(1)) if match else None
+
+    @staticmethod
     def _finalize(nodes: list[dict[str, Any]], total_duration_minutes: float | None) -> list[dict[str, Any]]:
         """统一出口：引擎归一化 + 收敛到 Go 大纲契约（node_type / summary / 时长）。"""
         return to_outline_contract_nodes(normalize_stage2_nodes(nodes, total_duration_minutes))
+
+    @staticmethod
+    def _minimum_nodes(total_duration_minutes: float | None) -> int:
+        if total_duration_minutes is None:
+            return 1
+        return max(2, min(8, math.ceil(total_duration_minutes / 10)))
+
+    def _quality_issues(
+        self, nodes: list[dict[str, Any]], key_points: list[str],
+        total_duration_minutes: float | None,
+    ) -> list[str]:
+        issues: list[str] = []
+        minimum = min(self._minimum_nodes(total_duration_minutes), self.config.max_nodes)
+        if len(nodes) < minimum:
+            issues.append(f"节点只有 {len(nodes)} 个，至少需要 {minimum} 个")
+        if len(nodes) > self.config.max_nodes:
+            issues.append(f"节点超过 {self.config.max_nodes} 个")
+        titles = [re.sub(r"[\W_]+", "", str(node.get("title") or "")).casefold() for node in nodes]
+        if any(not title for title in titles) or len(titles) != len(set(titles)):
+            issues.append("存在空标题或重复标题，请为每个教学环节使用不同标题")
+        searchable = "".join(
+            re.sub(r"[\W_]+", "", str(value)).casefold()
+            for node in nodes
+            for value in (node.get("title"), node.get("summary"), *(node.get("key_points") or []))
+        )
+        missing = [point for point in key_points if re.sub(r"[\W_]+", "", str(point)).casefold() not in searchable]
+        if missing:
+            issues.append("缺少明确知识点：" + "、".join(map(str, missing[:8])))
+        return issues
+
+    @staticmethod
+    def _balance_durations(nodes: list[dict[str, Any]], total_duration_minutes: float | None) -> None:
+        total = normalize_duration_minutes(total_duration_minutes)
+        if total is None or not nodes or int(total) < len(nodes):
+            return
+        target = int(total)
+        weights = [normalize_duration_minutes(node.get("estimated_duration_minutes")) or 1 for node in nodes]
+        if sum(round(weight) for weight in weights) == target:
+            return
+        remaining = target - len(nodes)
+        shares = [weight / sum(weights) * remaining for weight in weights]
+        durations = [1 + math.floor(share) for share in shares]
+        order = sorted(range(len(nodes)), key=lambda i: shares[i] - math.floor(shares[i]), reverse=True)
+        for index in order[:target - sum(durations)]:
+            durations[index] += 1
+        for node, duration in zip(nodes, durations):
+            node["estimated_duration_minutes"] = duration
+
+    @staticmethod
+    def _append_intent_context(markdown: str, intent: dict[str, Any]) -> str:
+        labels = {
+            "target_student": "授课对象", "style": "教学风格",
+            "key_difficulties": "重点难点", "expected_outcomes": "学习目标",
+        }
+        lines = []
+        for key, label in labels.items():
+            value = intent.get(key)
+            if isinstance(value, list):
+                value = "、".join(str(item) for item in value if str(item).strip())
+            if value:
+                lines.append(f"- {label}：{value}")
+        return markdown + ("\n\n## 教学要求\n" + "\n".join(lines) if lines else "")
 
     @staticmethod
     def _build_markdown_context(title: str, description: str,
@@ -415,6 +509,11 @@ class OutlineBuilder:
         未提供课时时由 assign_node_durations 补每节点默认时长。
         """
         points = key_points or ["核心概念", "关键应用", "总结过渡"]
+        if total_duration_minutes and total_duration_minutes >= 40:
+            # For a full lesson, a three-node emergency plan is too coarse even
+            # when the model is unavailable. Keep every explicit knowledge point.
+            scaffold = [f"{title}导入", *points, f"{title}案例分析", f"{title}课堂练习", f"{title}总结"]
+            points = list(dict.fromkeys(scaffold))
         nodes = []
         for idx, kp in enumerate(points[:self.config.max_nodes], start=1):
             node_id = f"node_{idx:03d}"

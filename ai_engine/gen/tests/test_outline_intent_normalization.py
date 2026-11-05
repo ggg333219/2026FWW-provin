@@ -17,15 +17,15 @@ _NODES_RESPONSE = {
     "nodes": [
         {
             "node_id": "node_001",
-            "title": "真实节点一",
-            "summary": "节点一摘要",
+            "title": "配方法",
+            "summary": "配方法示例",
             "source_span": "span1",
             "prerequisites": [],
         },
         {
             "node_id": "node_002",
-            "title": "真实节点二",
-            "summary": "节点二摘要",
+            "title": "公式法",
+            "summary": "公式法示例",
             "source_span": "span2",
             "prerequisites": ["node_001"],
         },
