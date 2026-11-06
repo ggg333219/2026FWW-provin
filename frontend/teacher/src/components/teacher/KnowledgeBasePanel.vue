@@ -179,6 +179,10 @@ const props = defineProps({
   boundNodeRef: {
     type: String,
     default: ''
+  },
+  autoSearch: {
+    type: Boolean,
+    default: true
   }
 })
 
@@ -279,7 +283,7 @@ onMounted(() => {
     if (!topic || !keywords || query.value.trim()) return
 
     query.value = keywords
-    void handleSearch()
+    if (props.autoSearch) void handleSearch()
   } catch {
     // 非法/过期缓存应被忽略，S2 仍保持可手动输入的正常空状态。
   }
