@@ -57,6 +57,7 @@
           <KnowledgeBasePanel
             :session-id="sessionId"
             bound-node-ref="draft"
+            :auto-search="false"
             @toast="handleToast"
             @bind-evidence="handleBindEvidence"
           />

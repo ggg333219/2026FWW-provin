@@ -107,6 +107,7 @@ export const teacherMaterialApi = {
     }
     return requestJson('/api/v1/parse/process', {
       method: 'POST',
+      timeoutMs: 30000,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     })

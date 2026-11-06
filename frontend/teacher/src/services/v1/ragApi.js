@@ -72,6 +72,7 @@ export const teacherRagApi = {
   knowledgeUpload: (params = {}) =>
     requestJson('/api/v1/knowledge/upload', {
       method: 'POST',
+      timeoutMs: 120000,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: params.sessionId || '',
