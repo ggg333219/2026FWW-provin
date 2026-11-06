@@ -731,7 +731,7 @@ func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, in
 				CourseName:        project.Title,
 				TargetNodeIDs:     intent.TargetIDs,
 				ModifyAction:      intent.Action,
-				ModifyConstraints: intent.Constraints,
+				ModifyConstraints: append(append([]string(nil), intent.Constraints...), instruction),
 				EvidenceRefs:      s.targetEvidenceRefs(ctx, projectID, intent.TargetIDs),
 			})
 			if err != nil {
@@ -742,7 +742,7 @@ func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, in
 				return nil, fmt.Errorf("局部重生成失败: %w", err)
 			}
 			updatedNodes = mergePartialResult(updatedNodes, partial, intent.TargetIDs)
-			if intent.Action == "expand" && !hasVisibleTargetChange(nodes, updatedNodes, intent.TargetIDs) {
+			if (intent.Action == "expand" || strings.Contains(instruction, "正文")) && !hasVisibleTargetChange(nodes, updatedNodes, intent.TargetIDs) {
 				return nil, fmt.Errorf("AI 引擎没有生成可见的课件内容，请重试或明确指定要添加的内容")
 			}
 			modifiedIDs = intent.TargetIDs

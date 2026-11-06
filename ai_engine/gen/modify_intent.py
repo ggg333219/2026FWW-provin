@@ -193,7 +193,7 @@ class ModifyIntentParser:
             return self._clarify("请描述你想要的修改，例如“第三页减少文字”。")
 
         element_snapshot = build_element_snapshot(nodes or [])
-        candidate_result = resolve_element_candidates(instruction, element_snapshot)
+        candidate_result = resolve_element_candidates(instruction, element_snapshot, active_node_id)
         if candidate_result["status"] == "ambiguous":
             return self._clarify_candidates(candidate_result["candidates"])
 
@@ -312,9 +312,9 @@ class ModifyIntentParser:
             str(t) for t in (result.get("target_element_ids") or [])
             if str(t) in element_map
         ]
-        if not target_element_ids and candidate_result and candidate_result.get("status") == "resolved":
+        if candidate_result and candidate_result.get("status") == "resolved":
             target_element_ids = list(candidate_result.get("target_element_ids") or [])
-        if target_element_ids and not target_ids:
+        if target_element_ids:
             target_ids = list(dict.fromkeys(element_map[item] for item in target_element_ids if item in element_map))
         target_ids = _resolve_active_target(
             instruction, target_ids, action, target_type, active_node_id, valid_ids

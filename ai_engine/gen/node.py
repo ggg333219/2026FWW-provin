@@ -417,6 +417,7 @@ class NodeGenerator:
                 # 只在局部修改路径上多带这一个键：新建/批量路径的返回形状保持不变。
                 # 空串不写回（由 partial_content 按「有值才覆盖」处理）。
                 output["summary"] = self._clean_text(result.get("summary"))
+                output["content"] = self._clean_text(result.get("content"))
                 node_kind = str(node.get("node_type") or node.get("type") or "content").strip().lower()
                 if node_kind in {"cover", "title", "title_slide", "agenda", "toc", "directory", "summary", "conclusion", "recap", "目录"}:
                     output["title"] = self._clean_text(result.get("title")) or title
