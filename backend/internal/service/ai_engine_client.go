@@ -363,6 +363,12 @@ type IntentExtractRequest struct {
 	SessionID string         `json:"session_id"`
 	RequestID string         `json:"request_id,omitempty"`
 	Messages  []DialogueTurn `json:"messages,omitempty"`
+	// 使用者自带的第三方 OpenAI 兼容模型配置（本产品不提供模型服务）。
+	// 仅随本次请求透传给 AI Engine，不落盘、不写日志、不回显。
+	// omitempty：未配置时完全不下发，保持旧请求体形状不变。
+	APIKey  string `json:"api_key,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
+	Model   string `json:"model,omitempty"`
 }
 
 type IntentExtractResponse struct {
@@ -389,10 +395,13 @@ type IntentExtractResponse struct {
 	// / rule_fallback=模型失败已回退规则引擎 / rule_engine=规则引擎直接产出。
 	// 用于避免把 HTTP 200 等同于真实模型成功。
 	ModelSource string `json:"model_source,omitempty"`
-	// NormalizationNotes —— S1 真实模型输出的归一说明（F01）。
-	// 非空表示模型输出可用、但存在类型/格式偏差，已在引擎侧逐字段修正；
-	// 空表示模型输出本身规整。用于区分"模型生成成功"与"规则兜底"。
-	NormalizationNotes []string `json:"normalization_notes,omitempty"`
+	// NormalizationNotes —— S1 真实模型输出的归一说明（F01，纯诊断信息）。
+	// 非空=存在类型/格式偏差且已逐字段修正；空=输出规整，或模型输出未被采用。
+	// 不能用它判断是否调用/采用模型 —— 干净的模型输出被采用时同样为空数组；
+	// 来源判定请用 ModelSource（配合 UsedFallback / FallbackReason）。
+	// 不加 omitempty：空数组也必须原样存在。否则下游读到 undefined，
+	// 更容易把"该字段没值"误当成"没用模型"——它本来就不是来源判据。
+	NormalizationNotes []string `json:"normalization_notes"`
 }
 
 type IntentConfirmRequest struct {

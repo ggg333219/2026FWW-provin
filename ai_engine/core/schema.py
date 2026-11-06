@@ -624,6 +624,14 @@ class IntentExtractRequest(BaseModel):
     request_id: str = ""
     messages: list[DialogueTurn] = Field(default_factory=list)
 
+    # 用户自带的第三方 OpenAI 兼容模型配置（本产品不提供模型服务）。
+    # 仅在本请求的内存中使用：不落盘、不写日志、不进入任何持久化配置文件；
+    # 也不回显到响应里。留空时沿用部署环境的 AI_* 配置（无 Key 则保持规则兜底）。
+    # 路由层会对长度与 base_url 协议做校验，避免任意内网地址被当作模型端点。
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+
 
 class IntentExtractResponse(BaseModel):
     code: int = 200

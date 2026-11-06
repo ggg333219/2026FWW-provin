@@ -160,8 +160,10 @@ class IntentUnderstandingService:
             # real_model=真实模型直出 / mock=未调用真实模型 / rule_fallback=模型失败已兜底
             # / rule_engine=规则引擎直接产出。用于避免把 HTTP 200 等同于真实模型成功。
             "model_source": model_source,
-            # F01 可观测性：真实模型输出的归一/丢弃说明。
-            # 非空表示模型输出可用但存在格式偏差；空表示模型输出本身规整。
+            # F01 可观测性：真实模型输出被修正/丢弃了什么（纯诊断信息）。
+            # 非空=存在格式偏差；空=输出规整，或模型输出根本未被采用。
+            # 判断"是否调用/采用真实模型"请用 model_source 等来源字段，
+            # 不要用本字段做判据 —— 干净的模型输出被采用时它同样是空数组。
             "normalization_notes": notes,
         }
 
@@ -273,8 +275,10 @@ class IntentUnderstandingService:
                 reason = unavailable or self._classify_engine_failure(
                     {"reason": f"{type(exc).__name__} {exc}"}
                 )
-            # 降级到规则引擎时，模型输出并未被采用，因此不携带归一说明 ——
-            # 保持"normalization_notes 非空 ⇔ 模型输出被采用"的契约清晰。
+            # 降级到规则引擎时模型输出未被采用，归一说明保持为空。
+            # 注意：normalization_notes 只描述"模型输出被修正过什么"，不是
+            # "是否调用/采用模型"的判据 —— 干净的模型输出同样被采用且说明为空。
+            # 来源判定请用 model_source（配合 used_fallback / fallback_reason）。
             return (IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason, [],
                     self._model_source(success=False, model_capable=model_capable, unavailable=unavailable))
 
@@ -312,6 +316,7 @@ class IntentUnderstandingService:
                 else self._classify_engine_failure({"reason": f"{type(exc).__name__} {exc}"})
             )
             # 同上：降级时模型输出未被采用，不携带归一说明。
+            # 该字段为空不代表"没用模型"，见 _extract_summary 上方的契约说明。
             return (IntentEngine.extract_intent(raw_messages), "IntentEngine", True, reason, [],
                     self._model_source(success=False, model_capable=True, unavailable=unavailable))
 
@@ -328,6 +333,12 @@ class IntentUnderstandingService:
         reason = str(getattr(self.engine, "last_unavailable_reason", "") or "")
         if reason:
             return reason
+        # 请求级自带 Key 的客户端不受部署级 mock 开关约束
+        # （见 LLMClient.force_real_model）。否则明明真实调用了模型，
+        # 也会被全局 GEN_MODE 误标成 mock。
+        client = getattr(self.engine, "client", None)
+        if client is not None and getattr(client, "force_real_model", False):
+            return ""
         if settings.GEN_MODE.strip().lower() == "mock":
             # 系统级 mock 模式：路由直接选用规则引擎，模型根本没参与本次请求。
             return "mock_mode"
@@ -348,7 +359,7 @@ class IntentUnderstandingService:
     def _model_source(*, success: bool, model_capable: bool, unavailable: str) -> str:
         """把引擎状态收敛成单一的结果来源标记。
 
-        - ``real_model``：真实模型输出被采用（含轻度归一）
+        - ``real_model``：真实模型输出被采用（可能经过轻度归一，也可能完全规整）
         - ``mock``：**没有调用真实模型**（mock 模式 / 未配置 API Key）
         - ``rule_fallback``：模型侧失败，已回退规则引擎
         - ``rule_engine``：规则引擎直接产出（显式规则模式）

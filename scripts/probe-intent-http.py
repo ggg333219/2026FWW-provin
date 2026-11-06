@@ -12,7 +12,9 @@
     used_fallback      —— 是否降级到规则引擎
     degraded           —— used_fallback 的显式别名（Python 侧无条件输出）
     fallback_reason    —— 降级根因
-    normalization_notes—— 模型输出的归一说明（非空 ⇔ 模型输出被采用）
+    normalization_notes—— 模型输出被修正过什么的诊断信息；非空只表示存在格式偏差，
+                           干净的模型输出被采用时同样为空，不能用它判断是否调用/采用模型
+                           （来源判定请用 model_source）
 """
 
 import json

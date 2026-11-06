@@ -213,7 +213,12 @@ class LLMClient:
         max_attempts: Optional[int] = None,
         disable_sdk_retries: bool = False,
         stop_schema_fallback_on_error: bool = False,
+        force_real_model: bool = False,
     ):
+        # 请求级开关：调用方显式提供了自己的 API Key 时置 True。
+        # 产品不提供模型服务，系统级 AI_GEN_MODE=mock 只是本地演示开关；
+        # 若它把用户自带 Key 的请求也拦成桩数据，用户会"填了 Key 却静默无效"。
+        self.force_real_model = force_real_model
         self.model = model or settings.MODEL
         self.temperature = temperature if temperature is not None else settings.TEMPERATURE
         # 超时保护：显式传入优先（如 video_processor 的 300s），
@@ -228,6 +233,20 @@ class LLMClient:
         self._base_url = base_url
 
     # ---- 属性（懒解析） ----
+
+    @property
+    def is_mock_effective(self) -> bool:
+        """本次调用是否应走内置桩（而不是真实模型）。
+
+        ``AI_GEN_MODE=mock`` 是部署级全局演示开关；但当调用方通过
+        ``force_real_model=True`` 明确表示"这次用的是用户自带的第三方 Key"时，
+        该开关不再适用 —— 否则前端配置页填了 Key 也拿不到真实模型输出。
+
+        注意：这里只绕开 mock 开关，**不会**绕开"缺 Key 回退桩"这条底线：
+        没有 API Key 时 :meth:`_call` 依旧返回桩数据，且
+        :meth:`unavailable_reason` 会如实报 ``missing_api_key_mock``。
+        """
+        return bool(settings.is_mock) and not self.force_real_model
 
     @property
     def api_key(self) -> str:
@@ -252,7 +271,7 @@ class LLMClient:
 
         与 :meth:`chat_json` 的静默回退配套，用于让 S1 这类关键路径如实记录降级根因。
         """
-        if settings.is_mock:
+        if self.is_mock_effective:
             return "mock_mode"
         if not self.api_key:
             return "missing_api_key_mock"
@@ -315,7 +334,7 @@ class LLMClient:
         ]
 
         # Mock 模式或缺少 API key → 回退为非流式 mock 输出（按字符拆分）
-        if settings.is_mock or not self.api_key:
+        if self.is_mock_effective or not self.api_key:
             fallback = self._mock_response(messages)
             # 按合理块模拟流式输出
             chunk_size = max(1, len(fallback) // 20)
@@ -391,6 +410,9 @@ class LLMClient:
             ],
             temperature=temperature or 0.1,
             model=model,
+            # 思考模型偶发把 JSON 全写进 reasoning、content 为空（真实模型实测）。
+            # JSON 类调用对空正文补一次重试，避免整包结果被误判为解析失败而降级。
+            retry_on_empty_content=True,
             **kwargs,
         )
 
@@ -452,7 +474,7 @@ class LLMClient:
             RuntimeError: 三级降级链全部失败时抛出（调用方应捕获并走 fallback）。
         """
         # Mock 模式 / 缺少 key：与旧 chat_json 行为一致，不进入降级链
-        if settings.is_mock or not self.api_key:
+        if self.is_mock_effective or not self.api_key:
             return self.chat_json(
                 system=system,
                 user=user,
@@ -580,7 +602,7 @@ class LLMClient:
         if not texts:
             return []
 
-        if settings.is_mock:
+        if self.is_mock_effective:
             return [[0.0] * embedding_dim for _ in range(len(texts))]
 
         global _local_embedder
@@ -626,16 +648,53 @@ class LLMClient:
             **kwargs,
         )
 
+    @staticmethod
+    def _message_content(message: Any) -> str:
+        """取模型返回的正文；兼容思考模型把 JSON 全写在 reasoning 里的情况。
+
+        真实模型实测（思考型 + ``response_format=json_object``）偶发返回
+        ``content=""``，把完整输出放在 ``reasoning_content`` / ``reasoning``。
+        旧实现只取 ``content``，于是 ``json.loads("")`` 失败 →
+        ``json_parse_failed`` → S1 整包降级到规则引擎，尽管模型其实答对了。
+
+        优先 ``content``；为空时退回 reasoning 扩展字段，并尝试把里面的
+        JSON 抠出来重新序列化成纯 JSON 文本，让上层 ``json.loads`` 直接成功。
+        仍找不到 JSON 时原样返回，由 :func:`extract_json` 做最后兜底。
+        """
+        def pick(obj: Any, key: str) -> str:
+            value = obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+            return value.strip() if isinstance(value, str) else ""
+
+        primary = pick(message, "content")
+        if primary:
+            return primary
+        for key in ("reasoning_content", "reasoning"):
+            alt = pick(message, key)
+            if not alt:
+                continue
+            try:
+                parsed = extract_json(alt)
+            except (ValueError, json.JSONDecodeError, TypeError):
+                return alt
+            return json.dumps(parsed, ensure_ascii=False)
+        return ""
+
     def _call(
         self,
         messages: list[dict[str, str]],
         temperature: Optional[float] = None,
         model: Optional[str] = None,
+        *,
+        retry_on_empty_content: bool = False,
         **kwargs: Any,
     ) -> LLMResponse:
-        """底层 LLM 调用，处理统一异常、超时重试、回退和日志。"""
+        """底层 LLM 调用，处理统一异常、超时重试、回退和日志。
+
+        ``retry_on_empty_content`` 只对 JSON 类调用开启：思考模型空正文时
+        额外补一次尝试（不改变其它路径的重试策略与次数）。
+        """
         # Mock 模式
-        if settings.is_mock:
+        if self.is_mock_effective:
             return LLMResponse(
                 content=self._mock_response(messages),
                 model=model or self.model,
@@ -658,14 +717,22 @@ class LLMClient:
 
         last_error: Optional[Exception] = None
         max_attempts = self.max_attempts or resolve_llm_retry_max_attempts()
+        attempts = max_attempts + (1 if retry_on_empty_content else 0)
         backoff = resolve_llm_retry_backoff_seconds()
-        for attempt in range(1, max_attempts + 1):
+        for attempt in range(1, attempts + 1):
             try:
                 response = self._post_chat_completions(
                     messages, actual_model, actual_temperature, **kwargs
                 )
 
-                content = response.choices[0].message.content or ""
+                content = self._message_content(response.choices[0].message)
+                if not content and retry_on_empty_content and attempt < attempts:
+                    logger.warning(
+                        "[LLMClient] 模型返回空正文（content/reasoning 均为空），"
+                        "补一次重试 (%d/%d): model=%s",
+                        attempt + 1, attempts, actual_model,
+                    )
+                    continue
                 usage = None
                 if hasattr(response, "usage") and response.usage:
                     usage = {

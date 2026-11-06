@@ -95,15 +95,39 @@ cd scripts && node drive-s1-intent.mjs
 SCENARIO=real_model node drive-s1-intent-v04.mjs
 ```
 
-### ⚠️ 关于「真实模型」的界定
+### 请求级模型配置（使用者自带第三方 Key）
 
-`fake-llm-server.py` 是**受控桩**，不是真实大模型。
-它证明的是「归一 / 合并 / 透传逻辑在**真实链路**上成立」，
-**不等于**「真实大模型（DashScope / qwen-plus）已验证」。
+本平台**不提供模型服务**。`POST /api/v1/intent/extract` 支持三个可选字段：
+
+| 字段 | 说明 |
+|---|---|
+| `api_key` | 使用者自己的第三方 API Key |
+| `base_url` | OpenAI 兼容端点，必须是 `http(s)://` |
+| `model` | 服务商提供的模型 ID |
+
+由教师端顶栏「模型接入」设置页填写并随请求下发（只存在本浏览器）。
+Go 网关只做长度与协议校验，Python 引擎只在**本次请求的内存**中构造
+`LLMClient(force_real_model=True)`；不落盘、不写日志、不回显。
+不填时保持旧行为（mock / 规则兜底），`model_source` 会如实标注。
+
+### 关于「真实模型」的界定与 L4 验证
+
+`fake-llm-server.py` 是**受控桩**（L3），不是真实大模型。
+它证明的是「归一 / 合并 / 透传逻辑在**真实链路**上成立」。
+
+**L4 真实大模型验证已于 2026-11-06 完成**：使用者在「模型接入」页填自己的
+第三方 OpenAI 兼容 Key，真实链路实测 `model_source=real_model`、
+`degraded=false`、`completion_pct=100`，并复现了真实模型把
+`output_format` 写成字符串 `"课件"` 的偏差。
+详见 `docs/handoff/F01-F02-S1意图解析-交接文档.md` 第 10.1 / 10.7 节。
+
+> **仓库里不包含任何厂商地址或密钥。** 本地测试用的地址 / Key 只通过
+> 进程环境变量临时注入，用完即止；不要写进脚本、`.env.example` 或文档。
 
 现场自查跑的到底是什么：
 
 ```bash
 curl -s http://127.0.0.1:8000/health
-# degraded:true / reason:"missing_api_key" → 跑的是 mock，不是真模型
+# 服务端没配全局 Key 时 degraded:true / reason:"missing_api_key" 属正常；
+# 是否真的调用了模型，要看本次响应的 model_source，而不是启动时的全局配置
 ```

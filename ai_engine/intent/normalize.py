@@ -45,6 +45,16 @@ _OUTPUT_FORMAT_ALIASES = {
     "ppt+doc": "both",
     "interactive": "interactive",
     "互动": "interactive",
+    # 真实模型实测：GLM 等常把 output_format 直接写成"课件"这类通用词
+    # （案例：裸句式请求返回字符串 "课件" 而非数组）。旧表只认精确别名时
+    # 这些值会被整项丢弃，最终 output_format=[] —— 虽然不再整包降级，
+    # 但模型给出的格式信息白白丢失。按规则侧 extract_output_formats 的口径
+    # 收敛到 ppt，与规则引擎保持一致。
+    "课件": "ppt",
+    "演示文稿": "ppt",
+    "ppt课件": "ppt",
+    "幻灯片课件": "ppt",
+    "课程课件": "ppt",
 }
 
 _TRUTHY_WORDS = {
@@ -152,10 +162,20 @@ def _coerce_output_format(value: Any) -> tuple[list[str], str | None]:
     normalized: list[str] = []
     dropped: list[str] = []
     for item in items:
-        alias = _OUTPUT_FORMAT_ALIASES.get(item.strip().lower())
+        key = item.strip().lower()
+        alias = _OUTPUT_FORMAT_ALIASES.get(key)
         if alias is None:
-            dropped.append(item)
-            continue
+            # 自然语言写法兜底："PPT 演示文稿""Word 教案"等含关键词但不在精确表里。
+            # 只做类型/取值收敛，不改语义（不会把"课件"臆断成 ppt+doc）。
+            if any(word in key for word in ("课件", "幻灯", "演示文稿", "powerpoint", "ppt")):
+                alias = "ppt"
+                note = f"{note}；按关键词映射 '{item}' → ppt" if note else f"按关键词映射 '{item}' → ppt"
+            elif any(word in key for word in ("教案", "讲义", "讲稿", "word", "docx", "doc")):
+                alias = "doc"
+                note = f"{note}；按关键词映射 '{item}' → doc" if note else f"按关键词映射 '{item}' → doc"
+            else:
+                dropped.append(item)
+                continue
         if alias == "both":
             for fmt in ("ppt", "doc"):
                 if fmt not in normalized:

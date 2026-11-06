@@ -55,6 +55,35 @@ func TestValidateIntentExtractRequest(t *testing.T) {
 			req:     service.IntentExtractRequest{SessionID: "s", Messages: []service.DialogueTurn{{Role: "assistant", Content: "问题"}}},
 			wantErr: "教师消息",
 		},
+		{
+			name: "user provided llm config is accepted and trimmed",
+			req: service.IntentExtractRequest{
+				SessionID: "s",
+				Messages:  []service.DialogueTurn{{Role: "teacher", Content: "排序算法课件"}},
+				APIKey:    " local-test-key ",
+				BaseURL:   " https://api.example.com/v1 ",
+				Model:     " unit-model ",
+			},
+		},
+		{
+			name: "non http base url is rejected",
+			req: service.IntentExtractRequest{
+				SessionID: "s",
+				Messages:  []service.DialogueTurn{{Role: "teacher", Content: "排序算法课件"}},
+				APIKey:    "local-test-key",
+				BaseURL:   "file:///etc/passwd",
+			},
+			wantErr: "http(s)",
+		},
+		{
+			name: "oversized llm config is rejected",
+			req: service.IntentExtractRequest{
+				SessionID: "s",
+				Messages:  []service.DialogueTurn{{Role: "teacher", Content: "排序算法课件"}},
+				APIKey:    strings.Repeat("k", 600),
+			},
+			wantErr: "超长",
+		},
 	}
 
 	for _, tt := range tests {
