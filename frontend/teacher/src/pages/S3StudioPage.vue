@@ -1330,6 +1330,7 @@ async function handleModifyApplied({ allNodes = [] } = {}) {
       outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
       { genId: "" },
     );
+    if (generationStore.previewHtml) currentPhase.value = "generating";
   }
   await projectStore.saveNow(draftSnapshot());
 }

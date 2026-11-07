@@ -64,10 +64,9 @@ def _derived_elements(node: dict[str, Any]) -> list[dict[str, Any]]:
     points = node.get("key_points") or node.get("core_points") or []
     if points:
         elements.append(_new_element(node_id, "list", "text", list(points), position="left"))
-    else:
-        body = _text(node.get("content") or node.get("summary") or node.get("script"))
-        if body:
-            elements.append(_new_element(node_id, "body", "text", body, position="right"))
+    body = _text(node.get("content") or node.get("summary") or node.get("script"))
+    if body:
+        elements.append(_new_element(node_id, "body", "text", body, position="right"))
 
     notes = _text(node.get("notes") or node.get("speaker_notes"))
     if notes:
@@ -156,15 +155,20 @@ def _requested_position(instruction: str) -> str | None:
     return None
 
 
-def resolve_element_candidates(instruction: str, nodes: list[dict[str, Any]]) -> dict[str, Any]:
+def resolve_element_candidates(instruction: str, nodes: list[dict[str, Any]], active_node_id: str = "") -> dict[str, Any]:
     """Resolve natural language to zero, one, or multiple element candidates."""
     normalized = build_element_snapshot(nodes)
     page = _requested_page(instruction)
+    use_active = page is None and any(
+        word in instruction for word in ("这页", "这一页", "本页", "当前页", "这张", "此页")
+    ) and any(str(n.get("node_id")) == active_node_id for n in normalized)
     roles = _requested_roles(instruction)
     position = _requested_position(instruction)
     lowered = instruction.lower()
     candidates: list[dict[str, Any]] = []
     for index, node in enumerate(normalized):
+        if use_active and str(node.get("node_id")) != active_node_id:
+            continue
         if page is not None and _page_number(node, index) != page:
             continue
         for element in node.get("metadata", {}).get("elements", []):
