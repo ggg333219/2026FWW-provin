@@ -95,14 +95,9 @@ cd scripts && node drive-s1-intent.mjs
 SCENARIO=real_model node drive-s1-intent-v04.mjs
 ```
 
-### 请求级模型配置（属于 PR #4，当前 MVP 分支不支持）
+### 请求级模型配置（使用者自带第三方 Key）
 
-> **拆分说明**：「使用者自带第三方 Key（BYOK）」已按评审要求从 PR #3 拆到
-> **PR #4**（`feature/byok-model-config`），之后再看。当前
-> `feature/f01-f02-intent-fix` 的请求体**不接受**下表三个字段，教师端也没有
-> 「模型接入」入口。以下内容保留作为 PR #4 的契约参考，合并后才会生效。
-
-平台**不提供模型服务**，PR #4 的 `POST /api/v1/intent/extract` 支持三个可选字段：
+本平台**不提供模型服务**。`POST /api/v1/intent/extract` 支持三个可选字段：
 
 | 字段 | 说明 |
 |---|---|
@@ -120,12 +115,11 @@ Go 网关只做长度与协议校验，Python 引擎只在**本次请求的内�
 `fake-llm-server.py` 是**受控桩**（L3），不是真实大模型。
 它证明的是「归一 / 合并 / 透传逻辑在**真实链路**上成立」。
 
-**L4 真实大模型验证是 2026-11-06 的历史事实**：当时使用者在「模型接入」页填自己的
+**L4 真实大模型验证已于 2026-11-06 完成**：使用者在「模型接入」页填自己的
 第三方 OpenAI 兼容 Key，真实链路实测 `model_source=real_model`、
 `degraded=false`、`completion_pct=100`，并复现了真实模型把
 `output_format` 写成字符串 `"课件"` 的偏差。
-**该验证依赖 BYOK / PR #4，当前 MVP 分支无法复现**，不要拿历史证据冒充本次验证。
-详见 `docs/handoff/F01-F02-S1意图解析-交接文档.md` 第 10.1 / 10.7 / 10.8 节。
+详见 `docs/handoff/F01-F02-S1意图解析-交接文档.md` 第 10.1 / 10.7 节。
 
 > **仓库里不包含任何厂商地址或密钥。** 本地测试用的地址 / Key 只通过
 > 进程环境变量临时注入，用完即止；不要写进脚本、`.env.example` 或文档。
