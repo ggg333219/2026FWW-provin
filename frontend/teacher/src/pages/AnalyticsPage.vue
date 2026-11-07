@@ -1,10 +1,11 @@
 <template>
   <AppShell>
     <div class="analytics-page">
-      <div class="page-header">
-        <h2>学情分析</h2>
-        <p>学情统计、掌握度雷达与班级趋势</p>
-      </div>
+      <header class="page-head">
+        <p class="page-head__eyebrow">教学数据</p>
+        <h1 class="page-head__title">学情分析</h1>
+        <p class="page-head__desc">学情统计、掌握度雷达与班级趋势</p>
+      </header>
       <div class="page-body">
         <AnalyticsAndQuestionsPanel
           :student-stats="analyticsStore.studentStats"
@@ -47,9 +48,31 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.analytics-page { padding: 20px; min-height: calc(100vh - 140px); }
-.page-header { margin-bottom: 20px; }
-.page-header h2 { margin: 0; font-size: 22px; color: #111827; }
-.page-header p { margin: 6px 0 0; font-size: 14px; color: #607a71; }
-.page-body { flex: 1; display: flex; flex-direction: column; gap: 24px; }
+.analytics-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6);
+  min-height: calc(100dvh - var(--topbar-height) - var(--shell-gutter) * 2);
+  background: var(--bg-page);
+}
+.page-head__eyebrow {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  color: var(--color-primary);
+}
+.page-head__title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+.page-head__desc { margin: var(--space-1) 0 0; font-size: var(--text-xs); color: var(--text-secondary); }
+.page-body { flex: 1; display: flex; flex-direction: column; gap: var(--space-6); min-width: 0; }
+@media (max-width: 767px) {
+  .analytics-page { padding: var(--space-4); gap: var(--space-4); }
+  .page-body { gap: var(--space-4); }
+}
 </style>

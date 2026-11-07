@@ -186,7 +186,7 @@ defineEmits(['apply', 'cancel'])
   font-size: 13px;
 }
 .node-type-badge {
-  font-size: 10px;
+  font-size: 12px;
   background: #2f605a;
   color: #fff;
   padding: 1px 6px;
@@ -195,7 +195,7 @@ defineEmits(['apply', 'cancel'])
 }
 .node-duration {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 12px;
   color: #94a3b8;
 }
 .node-preview-summary {
@@ -207,7 +207,7 @@ defineEmits(['apply', 'cancel'])
 .node-key-points {
   margin: 0;
   padding-left: 16px;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
 }
 .no-changes {

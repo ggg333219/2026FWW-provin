@@ -559,7 +559,7 @@ const handleRepair = async () => {
 }
 
 .metric-card span {
-  font-size: 11px;
+  font-size: 12px;
   color: #6a847a;
 }
 
@@ -593,7 +593,7 @@ const handleRepair = async () => {
   border: 1px solid rgba(228, 92, 92, 0.3);
   background: #fff5f4;
   color: #b14a4a;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .result-box {

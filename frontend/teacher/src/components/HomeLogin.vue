@@ -374,13 +374,13 @@ const handleRegister = async () => {
 /* ---- Reset & base ---- */
 .page {
   width: 100vw;
-  min-height: 100vh;
-  background: #f4f7f7;
+  min-height: 100dvh;
+  background: var(--bg-page);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;
-  font-family: 'Inter', 'PingFang SC', '-apple-system', sans-serif;
+  font-family: var(--font-sans);
 }
 
 /* ---- Wave background ---- */
@@ -484,7 +484,7 @@ const handleRegister = async () => {
 .logo-text {
   font-size: 16px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--neutral-800);
   letter-spacing: 0.5px;
 }
 
@@ -516,7 +516,7 @@ const handleRegister = async () => {
   display: inline-block;
   padding: 6px 14px;
   background: rgba(47, 96, 90, 0.1);
-  color: #2F605A;
+  color: var(--color-primary);
   border-radius: 20px;
   font-size: 13px;
   font-weight: 600;
@@ -541,7 +541,7 @@ const handleRegister = async () => {
   min-height: 1.2em;
   font-size: 64px;
   font-weight: 800;
-  color: #0b3d2e;
+  color: var(--brand-900);
 }
 
 .project-name {
@@ -555,7 +555,7 @@ const handleRegister = async () => {
   height: 0.95em;
   margin-left: 8px;
   border-radius: 2px;
-  background: #2F605A;
+  background: var(--color-primary);
   animation: caret-blink 0.9s steps(1, end) infinite;
 }
 
@@ -575,7 +575,7 @@ const handleRegister = async () => {
 
 .hero-desc {
   font-size: 16px;
-  color: #64748b;
+  color: var(--text-secondary);
   line-height: 1.8;
   margin: 0 0 32px;
   max-width: 440px;
@@ -598,14 +598,14 @@ const handleRegister = async () => {
 }
 
 .tagline-top {
-  color: #1e293b;
+  color: var(--neutral-800);
   font-size: 1em;
   font-weight: 800;
   line-height: 1.02;
 }
 
 .tagline-bottom {
-  color: #2F605A;
+  color: var(--color-primary);
   font-size: 1em;
   font-weight: 800;
   line-height: 1.02;
@@ -622,11 +622,11 @@ const handleRegister = async () => {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
   border-radius: 30px;
   font-size: 13px;
-  color: #334155;
+  color: var(--text-secondary);
   font-weight: 500;
   box-shadow: 0 2px 6px rgba(0,0,0,0.04);
 }
@@ -634,13 +634,13 @@ const handleRegister = async () => {
 .feature-chip svg {
   width: 16px;
   height: 16px;
-  color: #2F605A;
+  color: var(--color-primary);
   flex-shrink: 0;
 }
 
 .feature-chip-accent {
   background: linear-gradient(180deg, rgba(236, 248, 243, 0.96), rgba(217, 241, 233, 0.96));
-  color: #226a5a;
+  color: var(--brand-600);
   border-color: rgba(47, 96, 90, 0.18);
 }
 
@@ -653,7 +653,7 @@ const handleRegister = async () => {
   border-radius: 999px;
   background: rgba(236, 248, 243, 0.92);
   border: 1px solid rgba(47, 96, 90, 0.14);
-  color: #235f53;
+  color: var(--brand-700);
   font-size: 13px;
   font-weight: 600;
 }
@@ -662,7 +662,7 @@ const handleRegister = async () => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #14b8a6;
+  background: var(--brand-400);
   box-shadow: 0 0 0 0 rgba(20, 184, 166, 0.35);
   animation: pulse-pill 2s ease-in-out infinite;
 }
@@ -698,13 +698,13 @@ const handleRegister = async () => {
 .card-title {
   font-size: 26px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--neutral-800);
   margin: 0 0 6px;
 }
 
 .card-sub {
   font-size: 14px;
-  color: #64748b;
+  color: var(--text-secondary);
   margin: 0 0 32px;
 }
 
@@ -718,7 +718,7 @@ const handleRegister = async () => {
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: #334155;
+  color: var(--text-secondary);
   margin-bottom: 8px;
 }
 
@@ -733,7 +733,7 @@ const handleRegister = async () => {
   transform: translateY(-50%);
   width: 17px;
   height: 17px;
-  color: #94a3b8;
+  color: var(--text-tertiary);
   pointer-events: none;
 }
 
@@ -741,18 +741,18 @@ const handleRegister = async () => {
   width: 100%;
   height: 46px;
   padding: 0 16px 0 40px;
-  border: 1.5px solid #e2e8f0;
+  border: 1.5px solid var(--border-subtle);
   border-radius: 12px;
   font-size: 14px;
-  color: #1e293b;
-  background: #f8fafc;
+  color: var(--neutral-800);
+  background: var(--bg-subtle);
   outline: none;
   transition: all 0.2s;
   box-sizing: border-box;
 }
 
 .input-wrap input:focus {
-  border-color: #2F605A;
+  border-color: var(--color-primary);
   background: #fff;
   box-shadow: 0 0 0 3px rgba(47, 96, 90, 0.1);
 }
@@ -768,16 +768,16 @@ const handleRegister = async () => {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #475569;
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
 .checkbox-label input {
-  accent-color: #2F605A;
+  accent-color: var(--color-primary);
 }
 
 .link {
-  color: #2F605A;
+  color: var(--color-primary);
   font-weight: 500;
   text-decoration: none;
 }
@@ -788,7 +788,7 @@ const handleRegister = async () => {
   height: 48px;
   border: none;
   border-radius: 12px;
-  background: #2F605A;
+  background: var(--color-primary);
   color: #fff;
   font-size: 15px;
   font-weight: 600;
@@ -800,7 +800,7 @@ const handleRegister = async () => {
 }
 
 .submit:hover:not(:disabled) {
-  background: #234b46;
+  background: var(--brand-800);
   transform: translateY(-2px);
   box-shadow: 0 12px 24px rgba(47, 96, 90, 0.3);
 }
@@ -810,7 +810,7 @@ const handleRegister = async () => {
 }
 
 .submit:disabled {
-  background: #8FC1B5;
+  background: var(--brand-300);
   cursor: not-allowed;
   box-shadow: none;
 }
@@ -841,8 +841,8 @@ const handleRegister = async () => {
 
 .login-hint {
   margin-top: 20px;
-  font-size: 11.5px;
-  color: #94a3b8;
+  font-size: 12px;
+  color: var(--text-tertiary);
   text-align: center;
   line-height: 1.6;
 }
@@ -850,7 +850,7 @@ const handleRegister = async () => {
 .error-text {
   margin-top: 12px;
   font-size: 13px;
-  color: #ef4444;
+  color: var(--color-danger);
   text-align: center;
 }
 
@@ -865,6 +865,11 @@ const handleRegister = async () => {
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #475569;
+  color: var(--text-secondary);
+}
+
+/* 与工作台一致：减少动态效果偏好下关闭装饰性波浪动画 */
+@media (prefers-reduced-motion: reduce) {
+  .wave1, .wave2, .wave3 { animation: none !important; }
 }
 </style>

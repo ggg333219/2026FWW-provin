@@ -1,12 +1,17 @@
 <template>
   <div class="resume-page">
-    <section class="resume-card">
-      <div class="resume-icon">{{ failed ? '!' : '↻' }}</div>
+    <section class="resume-card" role="status" aria-live="polite">
+      <div class="resume-icon" :class="{ 'is-failed': failed }" aria-hidden="true">
+        <svg v-if="failed" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="12" cy="12" r="9" /><path d="M12 7.5v5M12 16h.01" />
+        </svg>
+        <span v-else class="resume-spinner"></span>
+      </div>
       <h1>{{ failed ? '无法恢复课件' : '正在恢复课件' }}</h1>
       <p>{{ message }}</p>
       <div v-if="failed" class="actions">
-        <button class="secondary" @click="router.replace({ name: 'Middle' })">返回我的课件</button>
-        <button class="primary" @click="restart">重新开始</button>
+        <button class="ds-btn ds-btn--secondary" type="button" @click="router.replace({ name: 'Middle' })">返回我的课件</button>
+        <button class="ds-btn ds-btn--primary" type="button" @click="restart">重新开始</button>
       </div>
     </section>
   </div>
@@ -96,4 +101,45 @@ onMounted(async () => {
   } catch (error) { failed.value = true; message.value = error?.message || '未找到该课件的本地编辑数据，是否重新开始？' }
 })
 </script>
-<style scoped>.resume-page{display:grid;min-height:100vh;place-items:center;color:#527066;background:linear-gradient(145deg,#f1f8f5,#fff)}.resume-card{width:min(480px,calc(100vw - 40px));padding:38px;text-align:center;border:1px solid #d5e7df;border-radius:20px;background:#fff;box-shadow:0 18px 50px rgba(36,83,68,.1)}.resume-icon{display:grid;place-items:center;width:48px;height:48px;margin:0 auto 14px;border-radius:50%;background:#e9f5f0;color:#26715f;font-size:24px}.resume-card h1{margin:0;color:#193d34}.resume-card p{margin:12px 0 0;line-height:1.7}.actions{display:flex;justify-content:center;gap:10px;margin-top:24px}.primary,.secondary{padding:9px 14px;border-radius:9px;font-weight:650;cursor:pointer}.primary{border:1px solid #277765;background:#277765;color:#fff}.secondary{border:1px solid #bfd5cd;background:#fff;color:#27594e}</style>
+<style scoped>
+.resume-page {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: var(--space-5);
+  background: var(--bg-page);
+}
+.resume-card {
+  width: min(480px, 100%);
+  padding: var(--space-10) var(--space-8);
+  text-align: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-md);
+}
+.resume-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto var(--space-4);
+  border-radius: 50%;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+.resume-icon.is-failed { background: var(--color-danger-soft); color: var(--color-danger); }
+.resume-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--brand-200);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: resume-spin 0.8s linear infinite;
+}
+@keyframes resume-spin { to { transform: rotate(360deg); } }
+.resume-card h1 { margin: 0; color: var(--text-primary); font-size: var(--text-lg); font-weight: var(--weight-semibold); }
+.resume-card p { margin: var(--space-3) 0 0; color: var(--text-secondary); font-size: var(--text-xs); line-height: var(--leading-relaxed); }
+.actions { display: flex; justify-content: center; gap: var(--space-2); margin-top: var(--space-6); flex-wrap: wrap; }
+@media (prefers-reduced-motion: reduce) { .resume-spinner { animation-duration: 0.01ms; } }
+</style>

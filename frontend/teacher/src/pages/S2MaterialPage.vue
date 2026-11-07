@@ -1,44 +1,39 @@
 <template>
   <AppShell>
     <div class="s2-page">
-      <div class="page-header">
-        <div>
-          <h2>资料与证据中心</h2>
-          <p>保留资料上传与解析；系统会依据 S1 教学意图自动检索，并把证据包绑定到整份 PPT 草稿。</p>
+      <header class="page-head">
+        <div class="page-head__text">
+          <p class="page-head__eyebrow">课件生成流程 · 可选环节</p>
+          <h1 class="page-head__title">资料与证据中心</h1>
+          <p class="page-head__desc">保留资料上传与解析；系统会依据 S1 教学意图自动检索，并把证据包绑定到整份 PPT 草稿。</p>
         </div>
-        <div class="page-header-right">
-          <button v-if="isMockModeActive" class="mock-exit-btn" @click="exitMockMode">
-            ⚠ Mock 模式 · 点击退出
-          </button>
-          <div class="step-pills">
-            <router-link :to="{ name: 'S1Intent', query: { project_id: projectStore.projectId } }" class="pill">教学意图</router-link>
-            <span class="pill active">资料中心</span>
-            <button class="pill pill-button" @click="requestContinue" :disabled="navigatingToS3">{{ navigatingToS3 ? '跳转中...' : 'S3 生成' }}</button>
-            <router-link :to="{ name: 'S4Version', query: { project_id: projectStore.projectId } }" class="pill">版本与导出</router-link>
-            <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
-          </div>
-        </div>
-      </div>
+        <button v-if="isMockModeActive" class="ds-tag ds-tag--warning mock-exit-btn" type="button" @click="exitMockMode">
+          <span class="ds-status-dot"></span>⚠ Mock 模式 · 点击退出
+        </button>
+      </header>
+
+      <StepNav current="s2" :project-id="projectStore.projectId" :action-keys="['s3']" @step-action="onStepAction" />
 
       <!-- 独立路由入口：复用 S2 资料中心工作台（与 Workspace 内嵌 tab 同一组件，路由/内嵌统一） -->
       <S2MaterialWorkspace />
 
       <!-- S2 是可选补充入口；主流程已改为 S1 → S3。 -->
-      <div class="next-step-bar">
-        <button class="next-step-btn" @click="requestContinue">
-          下一步：进入 S3 生成 →
+      <footer class="next-step-bar">
+        <p class="next-step-hint">资料为可选补充；没有绑定证据时，也可以选择仅依据 S1 教学意图生成。</p>
+        <button class="ds-btn ds-btn--primary ds-btn--lg next-step-btn" type="button" :disabled="navigatingToS3" @click="requestContinue">
+          {{ navigatingToS3 ? '跳转中…' : '下一步：进入 S3 生成 →' }}
         </button>
-        <div v-if="showNoEvidenceConfirm" class="continue-confirm" role="alert">
+        <div v-if="showNoEvidenceConfirm" class="ds-notice ds-notice--warning continue-confirm" role="alert">
           <div>
             <strong>当前还没有绑定可用证据</strong>
             <p>可以继续上传资料，系统会自动重新检索；也可以明确选择无资料生成。后者将仅依据 S1 教学意图生成。</p>
           </div>
           <div class="continue-actions">
-            <button class="secondary-btn" @click="showNoEvidenceConfirm = false">继续补充资料</button>
-            <button class="danger-outline-btn" @click="confirmWithoutEvidence">确认无资料生成</button>
+            <button class="ds-btn ds-btn--secondary ds-btn--sm" type="button" @click="showNoEvidenceConfirm = false">继续补充资料</button>
+            <button class="ds-btn ds-btn--secondary ds-btn--sm" type="button" @click="confirmWithoutEvidence">确认无资料生成</button>
           </div>
         </div>
-      </div>
+      </footer>
     </div>
   </AppShell>
 </template>
@@ -47,6 +42,7 @@
 import { ref, onBeforeUnmount, onMounted, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import AppShell from '../components/layout/AppShell.vue'
+import StepNav from '../components/common/StepNav.vue'
 import S2MaterialWorkspace from '../components/teacher/S2MaterialWorkspace.vue'
 import { useMaterialStore, isEvidencePacketUsable } from '../stores/materialStore'
 import { useIntentStore } from '../stores/intentStore'
@@ -106,6 +102,11 @@ const confirmWithoutEvidence = () => {
   router.push({ name: 'S3Studio', query: { project_id: projectStore.projectId } })
 }
 
+/** 流程条上的「课件生成」仍需先做无证据确认，不能直接跳路由。 */
+const onStepAction = key => {
+  if (key === 's3') requestContinue()
+}
+
 /** Mock 模式检测与退出 */
 const isMockModeActive = ref(false)
 
@@ -135,186 +136,90 @@ const exitMockMode = () => {
 
 <style scoped>
 .s2-page {
-  padding: 20px;
-  min-height: calc(100vh - 140px);
-  background:
-    radial-gradient(circle at 86% -15%, rgba(175, 221, 203, .2), transparent 30%),
-    linear-gradient(180deg, #fcfefd 0%, #f7faf8 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6);
+  min-height: calc(100dvh - var(--topbar-height) - var(--shell-gutter) * 2);
+  background: var(--bg-page);
 }
 
-.page-header {
+.page-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
+  gap: var(--space-6);
 }
-
-.page-header h2 {
+.page-head__eyebrow {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  color: var(--color-primary);
+}
+.page-head__title {
   margin: 0;
-  font-size: 22px;
-  color: #111827;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--text-primary);
 }
-
-.page-header p {
-  margin: 6px 0 0;
-  font-size: 14px;
-  color: #607a71;
-}
-
-.step-pills {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.page-header-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+.page-head__desc {
+  max-width: 78ch;
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-secondary);
 }
 
 .mock-exit-btn {
-  border: 1px solid #f0b429;
-  background: #fffbeb;
-  color: #b7791f;
-  font-size: 12px;
-  font-weight: 700;
-  border-radius: 999px;
-  padding: 6px 14px;
+  flex-shrink: 0;
+  min-height: 28px;
   cursor: pointer;
-  transition: all 0.15s;
+  font-family: var(--font-sans);
 }
-
-.mock-exit-btn:hover {
-  background: #fef3c7;
-  border-color: #d69e2e;
-}
-
-.pill {
-  font-size: 12px;
-  font-weight: 600;
-  color: #5f7467;
-  background: #f0f5f2;
-  border: 1px solid #e2ece6;
-  border-radius: 999px;
-  padding: 6px 14px;
-  text-decoration: none;
-  transition: all 0.15s;
-}
-
-.pill:hover {
-  border-color: #5ca68f;
-  color: #2f605a;
-}
-
-.pill.active {
-  color: #fff;
-  background: #2f605a;
-  border-color: #2f605a;
-}
-
-.pill-button {
-  font-family: inherit;
-  cursor: pointer;
-}
+.mock-exit-btn:hover { filter: brightness(0.97); }
 
 .next-step-bar {
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid #e2ece6;
-  text-align: right;
-}
-
-.next-step-btn {
-  display: inline-block;
-  padding: 10px 24px;
-  background: #2f605a;
-  color: #fff;
-  border-radius: 10px;
-  font-size: 14px;
-  font-weight: 600;
-  text-decoration: none;
-  transition: background 0.15s;
-  border: 0;
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.next-step-btn:hover {
-  background: #1e4a44;
-}
-
-.continue-confirm {
-  margin-top: 14px;
-  padding: 16px 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  text-align: left;
-  border: 1px solid #f1d5a8;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #fffaf0, #fffdf8);
-  color: #7c4a15;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-top: auto;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
 }
-
-.continue-confirm strong {
-  font-size: 14px;
+.next-step-hint {
+  flex: 1 1 320px;
+  margin: 0;
+  font-size: var(--text-2xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-tertiary);
 }
+.next-step-btn { flex-shrink: 0; }
 
+.continue-confirm {
+  flex: 1 1 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+.continue-confirm strong { font-size: var(--text-sm); }
 .continue-confirm p {
-  margin: 5px 0 0;
-  max-width: 720px;
-  color: #8a6337;
-  font-size: 12px;
-  line-height: 1.6;
+  margin: var(--space-1) 0 0;
+  max-width: 72ch;
+  font-size: var(--text-2xs);
+  line-height: var(--leading-relaxed);
 }
+.continue-actions { display: flex; gap: var(--space-2); flex-shrink: 0; }
 
-.continue-actions {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
+@media (max-width: 767px) {
+  .s2-page { padding: var(--space-4); gap: var(--space-4); }
+  .page-head { flex-direction: column; }
+  .next-step-bar { flex-direction: column; align-items: stretch; }
+  .next-step-btn { width: 100%; white-space: normal; }
+  .continue-confirm { flex-direction: column; align-items: stretch; }
+  .continue-actions { flex-wrap: wrap; }
 }
-
-.secondary-btn,
-.danger-outline-btn {
-  padding: 8px 14px;
-  border-radius: 9px;
-  font: 600 12px/1.2 inherit;
-  cursor: pointer;
-}
-
-.secondary-btn {
-  border: 1px solid #d8e3de;
-  background: #fff;
-  color: #46645a;
-}
-
-.danger-outline-btn {
-  border: 1px solid #d49a55;
-  background: transparent;
-  color: #9a5713;
-}
-
-@media (max-width: 760px) {
-  .page-header {
-    flex-direction: column;
-  }
-
-  .continue-confirm {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-  .pill.back-pill {
-    background: #e8f0ed;
-    border-color: #c6d9d0;
-    color: #3d6b60;
-  }
-  .pill.back-pill:hover {
-    background: #d6e8e0;
-  }
 </style>

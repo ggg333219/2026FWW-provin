@@ -1007,7 +1007,7 @@ defineExpose({ setEvidencePacket })
 }
 
 .kb-rail-hint {
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   line-height: 1.45;
   margin: 0 0 10px;
@@ -1037,7 +1037,7 @@ defineExpose({ setEvidencePacket })
 }
 
 .kb-rail-item span {
-  font-size: 11px;
+  font-size: 12px;
   color: #2d8cf0;
 }
 
@@ -1059,7 +1059,7 @@ defineExpose({ setEvidencePacket })
 .node-insight {
   display: block;
   margin-top: 4px;
-  font-size: 10px;
+  font-size: 12px;
   color: #64748b;
   line-height: 1.3;
 }
@@ -1102,7 +1102,7 @@ defineExpose({ setEvidencePacket })
 }
 
 .dock-title-sub {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 450;
   color: #64748b;
   line-height: 1.4;
@@ -1211,7 +1211,7 @@ defineExpose({ setEvidencePacket })
 }
 
 .stage-badge {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1382,14 +1382,14 @@ defineExpose({ setEvidencePacket })
 }
 
 .slide-preview-mock__sub {
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   letter-spacing: 0.02em;
 }
 
 .slide-preview-mock__page-pill {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
   color: #334155;
   padding: 5px 10px;
@@ -1422,7 +1422,7 @@ defineExpose({ setEvidencePacket })
 .slide-preview-mock__hint {
   margin: 0;
   padding: 8px 14px 11px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.45;
   color: #64748b;
   background: rgba(248, 250, 252, 0.95);
@@ -1451,7 +1451,7 @@ defineExpose({ setEvidencePacket })
 }
 
 .timeline-heading__hint {
-  font-size: 11px;
+  font-size: 12px;
   color: #94a3b8;
   line-height: 1.35;
 }
@@ -1613,7 +1613,7 @@ defineExpose({ setEvidencePacket })
 }
 
 .action-strip__desc {
-  font-size: 11px;
+  font-size: 12px;
   color: #94a3b8;
   line-height: 1.35;
   text-align: right;

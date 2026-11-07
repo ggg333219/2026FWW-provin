@@ -1,8 +1,13 @@
 <template>
-  <div class="loading-state" :class="[type, size, { 'loading-state--inline': inline }]">
+  <div
+    class="loading-state"
+    :class="[type, size, { 'loading-state--inline': inline }]"
+    :role="type === 'error' ? 'alert' : (type === 'loading' ? 'status' : undefined)"
+    :aria-live="type === 'loading' ? 'polite' : undefined"
+  >
     <!-- 加载态 -->
     <template v-if="type === 'loading'">
-      <div class="loading-state__spinner" :class="`spinner-${variant}`">
+      <div class="loading-state__spinner" :class="`spinner-${variant}`" aria-hidden="true">
         <span v-if="variant === 'dots'">
           <span class="dot" v-for="i in 3" :key="i" :style="{ animationDelay: `${i * 0.15}s` }" />
         </span>
@@ -16,7 +21,7 @@
 
     <!-- 空状态 -->
     <template v-else-if="type === 'empty'">
-      <div class="loading-state__icon">
+      <div class="loading-state__icon" aria-hidden="true">
         <svg v-if="icon === 'file'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
           <polyline points="14 2 14 8 20 8" />
@@ -36,12 +41,12 @@
       </div>
       <p class="loading-state__text">{{ text || '暂无数据' }}</p>
       <p v-if="hint" class="loading-state__hint">{{ hint }}</p>
-      <button v-if="actionText" class="loading-state__action" @click="$emit('action')">{{ actionText }}</button>
+      <button v-if="actionText" class="ds-btn ds-btn--secondary ds-btn--sm loading-state__action" type="button" @click="$emit('action')">{{ actionText }}</button>
     </template>
 
     <!-- 错误状态 -->
     <template v-else-if="type === 'error'">
-      <div class="loading-state__icon loading-state__icon--error">
+      <div class="loading-state__icon loading-state__icon--error" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="12" cy="12" r="10" />
           <path d="M12 8v4M12 16h.01" />
@@ -49,7 +54,7 @@
       </div>
       <p class="loading-state__text">{{ text || '加载失败' }}</p>
       <p v-if="hint" class="loading-state__hint">{{ hint }}</p>
-      <button v-if="actionText" class="loading-state__action" @click="$emit('action')">{{ actionText }}</button>
+      <button v-if="actionText" class="ds-btn ds-btn--secondary ds-btn--sm loading-state__action" type="button" @click="$emit('action')">{{ actionText }}</button>
     </template>
   </div>
 </template>
@@ -70,27 +75,56 @@ defineEmits(['action'])
 
 <style scoped>
 .loading-state {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  padding: 40px 20px; gap: 12px; text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-10) var(--space-5);
+  text-align: center;
 }
-.loading-state--inline { padding: 16px; }
-.loading-state.sm { padding: 20px 12px; }
-.loading-state.lg { padding: 60px 40px; }
-.loading-state__spinner { color: #2d5f58; }
-.loading-state__icon { color: #94a3b8; width: 48px; height: 48px; }
-.loading-state__icon--error { color: #e74c3c; }
-.loading-state__text { margin: 0; font-size: 15px; color: #475569; font-weight: 500; }
-.loading-state__hint { margin: 0; font-size: 13px; color: #94a3b8; max-width: 280px; line-height: 1.4; }
-.loading-state__action {
-  margin-top: 8px; padding: 8px 20px; border: 1px solid #2d5f58; border-radius: 8px;
-  background: transparent; color: #2d5f58; font-size: 13px; cursor: pointer;
-  transition: all 0.2s;
+.loading-state--inline { padding: var(--space-4); gap: var(--space-2); }
+.loading-state.sm { padding: var(--space-5) var(--space-3); }
+.loading-state.lg { padding: var(--space-16) var(--space-10); }
+
+.loading-state__spinner { color: var(--color-primary); display: inline-flex; align-items: center; }
+.loading-state__icon { width: 48px; height: 48px; color: var(--text-disabled); }
+.loading-state__icon--error { color: var(--color-danger); }
+
+.loading-state__text {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
 }
-.loading-state__action:hover { background: #2d5f58; color: #fff; }
-.spinner-ring { width: 36px; height: 36px; animation: spin 1s linear infinite; }
-.spinner-rings { width: 24px; height: 24px; }
+.loading-state__hint {
+  margin: 0;
+  max-width: 42ch;
+  font-size: var(--text-2xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-tertiary);
+}
+.loading-state__action { margin-top: var(--space-2); }
+
+.spinner-ring { width: 36px; height: 36px; animation: ls-spin 1s linear infinite; }
+@keyframes ls-spin { to { transform: rotate(360deg); } }
 .spinner-ring circle { stroke: currentColor; }
-.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; margin: 0 3px; animation: dot-bounce 1.2s ease-in-out infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-@keyframes dot-bounce { 0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); } 40% { opacity: 1; transform: scale(1.2); } }
+.loading-state.sm .spinner-ring { width: 24px; height: 24px; }
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin: 0 3px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: dot-bounce 1.2s ease-in-out infinite;
+}
+@keyframes dot-bounce {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1.2); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner-ring, .dot { animation-duration: 0.01ms; animation-iteration-count: 1; }
+}
 </style>

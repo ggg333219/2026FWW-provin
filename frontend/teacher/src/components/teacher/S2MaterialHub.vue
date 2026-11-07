@@ -790,7 +790,7 @@ onUnmounted(() => {
 
 .type-tag {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 12px;
   border-radius: 6px;
   padding: 3px 8px;
   font-weight: 600;
@@ -816,13 +816,13 @@ onUnmounted(() => {
 
 .material-meta {
   margin: 3px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   color: #8ba098;
 }
 
 .parse-badge {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 12px;
   border-radius: 999px;
   padding: 2px 9px;
   font-weight: 600;
@@ -888,7 +888,7 @@ onUnmounted(() => {
 }
 
 .chunk-seq {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: #5ca68f;
   background: #e8f5f0;
@@ -897,13 +897,13 @@ onUnmounted(() => {
 }
 
 .chunk-loc {
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
 }
 
 .chunk-score {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   background: #f1f5f9;
   border-radius: 999px;
