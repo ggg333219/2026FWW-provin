@@ -1,36 +1,40 @@
 <template>
   <AppShell>
     <div class="s1-page">
-      <div class="page-header">
-        <div>
-          <h2>S1 意图理解</h2>
-          <p>教学意图捕获与结构化分析</p>
+      <header class="page-head">
+        <div class="page-head__text">
+          <p class="page-head__eyebrow">课件生成流程</p>
+          <h1 class="page-head__title">S1 意图理解</h1>
+          <p class="page-head__desc">教学意图捕获与结构化分析</p>
         </div>
-        <div class="page-header-right">
-          <div class="step-pills">
-            <span class="pill active">S1 意图</span>
-            <router-link v-if="activationReady" :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="pill">资料上传（可选）</router-link>
-            <span v-else class="pill pill-disabled" aria-disabled="true">资料上传（可选）</span>
-            <router-link v-if="activationReady" :to="{ name: 'S3Studio', query: { project_id: projectStore.projectId } }" class="pill">S3 生成</router-link>
-            <span v-else class="pill pill-disabled" aria-disabled="true">S3 生成</span>
-            <router-link v-if="activationReady" :to="{ name: 'S4Version', query: { project_id: projectStore.projectId } }" class="pill">S4 版本</router-link>
-            <span v-else class="pill pill-disabled" aria-disabled="true">S4 版本</span>
-            <router-link :to="{ name: 'Middle' }" class="pill back-pill">返回中间页</router-link>
-          </div>
-        </div>
+        <p class="page-head__aside">用对话说明课程主题、课时、授课对象与产出形式，系统会整理为结构化教学意图。</p>
+      </header>
+
+      <StepNav current="s1" :project-id="projectStore.projectId" :ready="activationReady" />
+
+      <p v-if="activationError" class="ds-notice ds-notice--danger activation-notice" role="alert">
+        <span>{{ activationError }}</span>
+        <button
+          class="ds-btn ds-btn--secondary ds-btn--sm"
+          type="button"
+          @click="activateProject(String(route.query.project_id || projectStore.projectId || ''))"
+        >重试加载</button>
+      </p>
+
+      <div v-if="!activationReady && !activationError" class="ds-card activation-loading" role="status">
+        <LoadingState type="loading" text="正在恢复课件意图…" hint="正在读取上次的会话与草稿，请稍候" />
       </div>
-      <p v-if="activationError" class="activation-error" role="alert">{{ activationError }}</p>
-      <div v-if="!activationReady" class="activation-loading" role="status">
-        <span>{{ activationError || '正在恢复课件意图…' }}</span>
-        <button v-if="activationError" type="button" @click="activateProject(String(route.query.project_id || projectStore.projectId || ''))">重试加载</button>
-      </div>
-      <TeacherIntentPanel v-else :defer-initialize="true" />
+
+      <TeacherIntentPanel v-else-if="activationReady" :defer-initialize="true" />
+
       <!-- 主流程：S1 → S3；资料上传保留为可选入口 -->
-      <div v-if="activationReady" class="next-step-bar">
-        <router-link :to="{ name: 'S3Studio', query: { project_id: projectStore.projectId, auto_evidence: '1' } }" class="next-step-btn">
-          下一步：自动检索并生成课件 →
-        </router-link>
-      </div>
+      <footer v-if="activationReady" class="next-step-bar">
+        <p class="next-step-hint">确认教学意图后，即可进入课件生成；补充资料可在流程中随时添加。</p>
+        <router-link
+          :to="{ name: 'S3Studio', query: { project_id: projectStore.projectId, auto_evidence: '1' } }"
+          class="ds-btn ds-btn--primary ds-btn--lg next-step-btn"
+        >下一步：自动检索并生成课件 →</router-link>
+      </footer>
     </div>
   </AppShell>
 </template>
@@ -39,6 +43,8 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import AppShell from '../components/layout/AppShell.vue'
+import StepNav from '../components/common/StepNav.vue'
+import LoadingState from '../components/common/LoadingState.vue'
 import TeacherIntentPanel from '../components/teacher/TeacherIntentPanel.vue'
 import { intentStorageKey, useIntentStore } from '../stores/intentStore'
 import { useCoursewareProjectStore } from '../stores/coursewareProjectStore'
@@ -165,104 +171,81 @@ watch(
 </script>
 
 <style scoped>
-.activation-error { margin: 0 0 14px; padding: 10px 12px; border: 1px solid #f2b7b7; border-radius: 6px; color: #a52b2b; background: #fff5f5; }
-.activation-loading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 120px; padding: 20px; border: 1px solid #dce9e3; border-radius: 8px; color: #607a71; background: #fff; }
-.activation-loading button { padding: 8px 12px; border: 1px solid #c8ded4; border-radius: 6px; color: #244f49; background: #f5faf7; cursor: pointer; }
-.pill-disabled { opacity: .55; cursor: not-allowed; }
 .s1-page {
-  --ink: #18231f;
-  --muted: #718078;
-  --forest: #244f49;
-  --mint: #65a68f;
-  padding: 20px;
-  min-height: calc(100vh - 140px);
-  background:
-    radial-gradient(circle at 86% -15%, rgba(175, 221, 203, .2), transparent 30%),
-    linear-gradient(180deg, #fcfefd 0%, #f7faf8 100%);
-}
-.page-header {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6);
+  min-height: calc(100dvh - var(--topbar-height) - var(--shell-gutter) * 2);
+  background: var(--bg-page);
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
+  gap: var(--space-8);
 }
-.page-header-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+.page-head__eyebrow {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  color: var(--color-primary);
 }
-.page-body {
-  flex: 1;
+.page-head__title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--text-primary);
 }
-.step-pills {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+.page-head__desc {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
 }
-.pill {
-  font-size: 12px;
-  font-weight: 600;
-  color: #5f7467;
-  background: #f0f5f2;
-  border: 1px solid #e2ece6;
-  border-radius: 999px;
-  padding: 6px 14px;
-  text-decoration: none;
-  transition: all 0.15s;
-}
-.pill:hover {
-  border-color: #5ca68f;
-  color: #2f605a;
-}
-.pill.active {
-  color: #fff;
-  background: #2f605a;
-  border-color: #2f605a;
-}
-.next-step-bar {
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid #e2ece6;
+.page-head__aside {
+  max-width: 40ch;
+  margin: 0;
+  font-size: var(--text-2xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-tertiary);
   text-align: right;
 }
-.next-step-btn {
-  display: inline-block;
-  padding: 10px 24px;
-  background: #2f605a;
-  color: #fff;
-  border-radius: 10px;
-  font-size: 14px;
-  font-weight: 600;
-  text-decoration: none;
-  transition: background 0.15s;
+
+.activation-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
 }
-.next-step-btn:hover {
-  background: #1e4a44;
+.activation-loading { min-height: 200px; display: flex; align-items: center; justify-content: center; }
+
+.next-step-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  margin-top: auto;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
 }
-@media (max-width: 760px) {
-  .page-header {
-    flex-direction: column;
-  }
+.next-step-hint {
+  margin: 0;
+  font-size: var(--text-2xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-tertiary);
 }
-  .pill.back-pill {
-    background: #e8f0ed;
-    border-color: #c6d9d0;
-    color: #3d6b60;
-  }
-  .pill.back-pill:hover {
-    background: #d6e8e0;
-  }
-  .page-header h2 {
-    margin: 0;
-    font-size: 22px;
-    color: #111827;
-  }
-  .page-header p {
-    margin: 6px 0 0;
-    font-size: 14px;
-    color: #607a71;
-  }
+.next-step-btn { flex-shrink: 0; }
+
+@media (max-width: 1023px) {
+  .page-head__aside { display: none; }
+}
+@media (max-width: 767px) {
+  .s1-page { padding: var(--space-4); gap: var(--space-4); }
+  .next-step-bar { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+  .next-step-btn { width: 100%; white-space: normal; }
+  .activation-notice { flex-direction: column; align-items: stretch; }
+}
 </style>

@@ -473,7 +473,7 @@ defineExpose({ setPreviewHtml, setPreviewError, setOutlineNodes, addLog })
 .outline-node--active .outline-node__index { background: #2d5f58; color: #fff; }
 .outline-node__content { flex: 1; min-width: 0; }
 .outline-node__title { font-size: 13px; font-weight: 500; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.outline-node__summary { font-size: 11px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.outline-node__summary { font-size: 12px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
 .outline-node__status { flex-shrink: 0; }
 .status-dot { font-size: 14px; }
 .status-dot--done { color: #10b981; }

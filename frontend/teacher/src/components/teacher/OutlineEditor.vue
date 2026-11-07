@@ -692,7 +692,7 @@ function handleCancelRevision() {
   background: none;
   border: 1px solid #c6ded6;
   border-radius: 4px;
-  font-size: 10px;
+  font-size: 12px;
   color: #5ca68f;
   cursor: pointer;
   padding: 1px 4px;
@@ -724,7 +724,7 @@ function handleCancelRevision() {
   cursor: pointer;
 }
 .node-type-badge {
-  font-size: 11px;
+  font-size: 12px;
   background: #e2ece6;
   color: #5ca68f;
   padding: 2px 8px;
@@ -767,13 +767,13 @@ function handleCancelRevision() {
   gap: 6px;
   flex-wrap: wrap;
 }
-.kp-label { font-size: 11px; color: #94a3b8; white-space: nowrap; line-height: 22px; }
+.kp-label { font-size: 12px; color: #94a3b8; white-space: nowrap; line-height: 22px; }
 .kp-tags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .kp-tag {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 12px;
   background: #e8f5f0;
   color: #2f605a;
   padding: 2px 8px;
@@ -791,7 +791,7 @@ function handleCancelRevision() {
 }
 .kp-remove:hover { opacity: 1; }
 .kp-add-input {
-  font-size: 11px;
+  font-size: 12px;
   border: none;
   background: transparent;
   outline: none;
@@ -800,7 +800,7 @@ function handleCancelRevision() {
   padding: 2px 4px;
 }
 .kp-tag-static {
-  font-size: 11px;
+  font-size: 12px;
   background: #e8f5f0;
   color: #2f605a;
   padding: 2px 8px;
@@ -830,7 +830,7 @@ function handleCancelRevision() {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
 }
 .plan-fields input[type="number"] {
@@ -838,11 +838,11 @@ function handleCancelRevision() {
   padding: 2px 5px;
   border: 1px solid #c6ded6;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 12px;
   outline: none;
 }
 .plan-fields select {
-  font-size: 11px;
+  font-size: 12px;
   border: 1px solid #c6ded6;
   border-radius: 5px;
   padding: 2px 4px;
@@ -861,7 +861,7 @@ function handleCancelRevision() {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
 }
 .duration-input {
@@ -869,7 +869,7 @@ function handleCancelRevision() {
   padding: 2px 6px;
   border: 1px solid #c6ded6;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 12px;
   text-align: center;
   outline: none;
 }

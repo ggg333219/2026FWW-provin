@@ -848,7 +848,7 @@ watch(boundNodeIds, (ids) => {
   background: #f3faf7;
   color: #285f59;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
   padding: 4px 8px;
   cursor: pointer;
 }
@@ -888,7 +888,7 @@ watch(boundNodeIds, (ids) => {
 
 .video-meta,
 .video-reason {
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   line-height: 1.4;
 }
@@ -974,7 +974,7 @@ watch(boundNodeIds, (ids) => {
 }
 
 .suggestion-model {
-  font-size: 11px;
+  font-size: 12px;
   color: #999999;
   margin-top: 6px;
 }
@@ -1087,7 +1087,7 @@ watch(boundNodeIds, (ids) => {
   background: #e0f2fe;
   color: #0369a1;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -1103,7 +1103,7 @@ watch(boundNodeIds, (ids) => {
   color: #374151;
   border: 1px solid #d1d5db;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -1125,7 +1125,7 @@ watch(boundNodeIds, (ids) => {
   background: #dcfce7;
   color: #16a34a;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -1135,7 +1135,7 @@ watch(boundNodeIds, (ids) => {
   color: #991b1b;
   border: none;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -1155,7 +1155,7 @@ watch(boundNodeIds, (ids) => {
 }
 
 .selector-title {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: #0369a1;
 }
@@ -1170,7 +1170,7 @@ watch(boundNodeIds, (ids) => {
   background: #ffffff;
   border: 1px solid #bae6fd;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
   color: #0369a1;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -1326,7 +1326,7 @@ watch(boundNodeIds, (ids) => {
   background: #22c55e;
   color: #ffffff;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -1345,7 +1345,7 @@ watch(boundNodeIds, (ids) => {
   background: #fbbf24;
   color: #78350f;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -1387,7 +1387,7 @@ watch(boundNodeIds, (ids) => {
 }
 
 .cases-title {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: #374151;
 }
