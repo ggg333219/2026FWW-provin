@@ -97,6 +97,57 @@ describe('S1 意图理解 Mock 链路（extract / confirm）', () => {
     expect(store.fallbackReason).toBe('engine_unavailable')
   })
 
+  // V04：结果来源必须可区分"真实模型 / 未接入模型 / 规则兜底"，
+  // 不能把一次 HTTP 200 当成真实模型已经跑通。
+  it.each([
+    ['real_model', false, null],
+    ['rule_fallback', true, 'model_error'],
+    ['mock', false, null]
+  ])('结果来源 model_source=%s 会被如实记录并供界面区分', async (modelSource, usedFallback, fallbackReason) => {
+    vi.spyOn(teacherIntentApi, 'extract').mockResolvedValueOnce({
+      intent_summary: { topic: '排序算法', duration_minutes: 45 },
+      session_status: 'confirming',
+      used_fallback: usedFallback,
+      fallback_reason: fallbackReason,
+      model_source: modelSource
+    })
+    const store = useIntentStore()
+    store.initialize()
+
+    expect(await store.sendMessage('排序算法课')).toBe(true)
+    expect(store.modelSource).toBe(modelSource)
+    expect(store.usedFallback).toBe(usedFallback)
+  })
+
+  it('后端未返回 model_source 时保持空串（不臆断来源）', async () => {
+    vi.spyOn(teacherIntentApi, 'extract').mockResolvedValueOnce({
+      intent_summary: { topic: '排序算法', duration_minutes: 45 },
+      session_status: 'confirming',
+      used_fallback: false
+    })
+    const store = useIntentStore()
+    store.initialize()
+
+    expect(await store.sendMessage('排序算法课')).toBe(true)
+    expect(store.modelSource).toBe('')
+  })
+
+  it('重置会话会一并清空结果来源标记', async () => {
+    vi.spyOn(teacherIntentApi, 'extract').mockResolvedValueOnce({
+      intent_summary: { topic: '排序算法', duration_minutes: 45 },
+      session_status: 'confirming',
+      used_fallback: false,
+      model_source: 'real_model'
+    })
+    const store = useIntentStore()
+    store.initialize()
+    expect(await store.sendMessage('排序算法课')).toBe(true)
+    expect(store.modelSource).toBe('real_model')
+
+    store.reset()
+    expect(store.modelSource).toBe('')
+  })
+
   it('sendMessage → extract：提取主题并进入澄清（缺核心字段不能确认）', async () => {
     const store = useIntentStore()
     store.initialize()
