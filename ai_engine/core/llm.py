@@ -213,12 +213,7 @@ class LLMClient:
         max_attempts: Optional[int] = None,
         disable_sdk_retries: bool = False,
         stop_schema_fallback_on_error: bool = False,
-        force_real_model: bool = False,
     ):
-        # 请求级开关：调用方显式提供了自己的 API Key 时置 True。
-        # 产品不提供模型服务，系统级 AI_GEN_MODE=mock 只是本地演示开关；
-        # 若它把用户自带 Key 的请求也拦成桩数据，用户会"填了 Key 却静默无效"。
-        self.force_real_model = force_real_model
         self.model = model or settings.MODEL
         self.temperature = temperature if temperature is not None else settings.TEMPERATURE
         # 超时保护：显式传入优先（如 video_processor 的 300s），
@@ -238,15 +233,15 @@ class LLMClient:
     def is_mock_effective(self) -> bool:
         """本次调用是否应走内置桩（而不是真实模型）。
 
-        ``AI_GEN_MODE=mock`` 是部署级全局演示开关；但当调用方通过
-        ``force_real_model=True`` 明确表示"这次用的是用户自带的第三方 Key"时，
-        该开关不再适用 —— 否则前端配置页填了 Key 也拿不到真实模型输出。
+        与部署级 ``AI_GEN_MODE=mock`` 开关保持一致；集中成一个属性，
+        是为了让流式 / JSON / embedding / 降级链等所有入口判定同一处，
+        避免各分支各自读 settings 而出现行为不一致。
 
-        注意：这里只绕开 mock 开关，**不会**绕开"缺 Key 回退桩"这条底线：
+        注意：这只绕开 mock 开关，**不会**绕开「缺 Key 回退桩」这条底线：
         没有 API Key 时 :meth:`_call` 依旧返回桩数据，且
         :meth:`unavailable_reason` 会如实报 ``missing_api_key_mock``。
         """
-        return bool(settings.is_mock) and not self.force_real_model
+        return bool(settings.is_mock)
 
     @property
     def api_key(self) -> str:

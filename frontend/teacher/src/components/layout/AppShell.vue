@@ -7,22 +7,13 @@
       :platform-status-class="platformConnectionClass"
       :platform-status-text="platformConnectionText"
       :username="authStore.username"
-      :model-configured="llmConfig.isConfigured"
       @logout="handleLogout"
-      @open-settings="llmSettingsOpen = true"
     />
 
     <!-- 主内容容器 -->
     <div class="app-shell-content">
       <slot />
     </div>
-
-    <!-- 使用者自带第三方模型的接入设置（全局可达） -->
-    <LlmSettingsModal
-      :open="llmSettingsOpen"
-      @close="llmSettingsOpen = false"
-      @saved="showToast('模型接入配置已更新')"
-    />
 
     <!-- 全局 Toast -->
     <teleport to="body">
@@ -36,18 +27,14 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../../stores/authStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
-import { useLlmConfigStore } from '../../stores/llmConfigStore'
 import TeacherTopBar from '../teacher/TeacherTopBar.vue'
-import LlmSettingsModal from '../teacher/LlmSettingsModal.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
 const workspaceStore = useWorkspaceStore()
-const llmConfig = useLlmConfigStore()
 
 const toastVisible = ref(false)
 const toastMessage = ref('')
-const llmSettingsOpen = ref(false)
 let toastTimer = null
 
 const backendStatusClass = computed(() => {
@@ -92,7 +79,6 @@ const handleMockFallback = () => {
 defineExpose({ showToast })
 
 onMounted(async () => {
-  llmConfig.load()
   if (typeof window !== 'undefined') {
     window.localStorage.setItem('fuww_teacher_origin', window.location.origin)
     window.addEventListener('fuww:mock-fallback', handleMockFallback)

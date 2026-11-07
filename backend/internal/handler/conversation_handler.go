@@ -135,17 +135,6 @@ func validateIntentExtractRequest(req *service.IntentExtractRequest) string {
 	if teacherMessages == 0 {
 		return "至少需要一条教师消息"
 	}
-	// 请求级模型配置：只做长度与协议校验，绝不把它写进日志。
-	// 配置本身由 AI Engine 在单次请求的内存中使用，网关不持久化。
-	req.APIKey = strings.TrimSpace(req.APIKey)
-	req.BaseURL = strings.TrimSpace(req.BaseURL)
-	req.Model = strings.TrimSpace(req.Model)
-	if len(req.APIKey) > 512 || len(req.Model) > 128 || len(req.BaseURL) > 300 {
-		return "模型配置超长，请检查后重试"
-	}
-	if req.BaseURL != "" && !strings.HasPrefix(req.BaseURL, "https://") && !strings.HasPrefix(req.BaseURL, "http://") {
-		return "模型 base_url 必须是 http(s) 地址"
-	}
 	return ""
 }
 

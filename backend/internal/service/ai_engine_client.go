@@ -363,12 +363,6 @@ type IntentExtractRequest struct {
 	SessionID string         `json:"session_id"`
 	RequestID string         `json:"request_id,omitempty"`
 	Messages  []DialogueTurn `json:"messages,omitempty"`
-	// 使用者自带的第三方 OpenAI 兼容模型配置（本产品不提供模型服务）。
-	// 仅随本次请求透传给 AI Engine，不落盘、不写日志、不回显。
-	// omitempty：未配置时完全不下发，保持旧请求体形状不变。
-	APIKey  string `json:"api_key,omitempty"`
-	BaseURL string `json:"base_url,omitempty"`
-	Model   string `json:"model,omitempty"`
 }
 
 type IntentExtractResponse struct {

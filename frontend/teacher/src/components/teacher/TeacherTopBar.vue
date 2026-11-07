@@ -9,10 +9,6 @@
         <span class="status-dot"></span>
         {{ backendStatusText }}
       </div>
-      <button class="model-settings-btn" type="button" @click="$emit('open-settings')">
-        <span class="model-dot" :class="modelConfigured ? 'on' : 'off'"></span>
-        模型接入
-      </button>
       <div class="teacher-info">
         <div class="avatar">
           <span>{{ (username || '教').slice(0, 1) }}</span>
@@ -47,15 +43,10 @@ defineProps({
   username: {
     type: String,
     default: '用户'
-  },
-  // 是否已配置使用者自带的第三方模型（仅影响状态点颜色，不暴露任何密钥）。
-  modelConfigured: {
-    type: Boolean,
-    default: false
   }
 })
 
-defineEmits(['logout', 'open-settings'])
+defineEmits(['logout'])
 </script>
 
 <style scoped>
@@ -214,36 +205,6 @@ defineEmits(['logout', 'open-settings'])
   0%, 100% { opacity: 1; }
   50% { opacity: 0.25; }
 }
-
-.model-settings-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(120, 156, 140, 0.28);
-  background: rgba(248, 250, 252, 0.9);
-  color: #2f6052;
-  font-size: 12px;
-  font-weight: 650;
-  cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
-}
-
-.model-settings-btn:hover {
-  border-color: #5ca68f;
-  background: #ecf8f3;
-}
-
-.model-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.model-dot.on { background: #22c55e; }
-.model-dot.off { background: #cbd5e1; }
 
 .teacher-info {
   display: flex;

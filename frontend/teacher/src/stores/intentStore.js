@@ -1,6 +1,5 @@
 import { defineStore } from 'pinia'
 import { teacherIntentApi } from '../services/v1/intentApi'
-import { useLlmConfigStore } from './llmConfigStore'
 
 const WORKFLOW_SESSION_KEY = 'fuww_workflow_session_id'
 const S1_STATE_KEY = 'fuww_s1_conversation'
@@ -136,13 +135,9 @@ export const useIntentStore = defineStore('intent', {
       this.isAnalyzing = true
       this.persist()
       try {
-        // 使用者自带的第三方模型配置：只在这里随请求下发，不写入 S1 会话持久化状态。
-        const llmConfig = useLlmConfigStore()
-        llmConfig.load()
         const result = await teacherIntentApi.extract({
           sessionId: this.sessionId,
-          messages: this.messages.map(({ role, content: messageContent }) => ({ role, content: messageContent })),
-          llmConfig: llmConfig.requestConfig()
+          messages: this.messages.map(({ role, content: messageContent }) => ({ role, content: messageContent }))
         })
         if (operationEpoch !== this._operationEpoch) return false
         this.intentSummary = result.intent_summary || null
