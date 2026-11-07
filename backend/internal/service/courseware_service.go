@@ -742,6 +742,9 @@ func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, in
 				return nil, fmt.Errorf("局部重生成失败: %w", err)
 			}
 			updatedNodes = mergePartialResult(updatedNodes, partial, intent.TargetIDs)
+			if strings.Contains(instruction, "正文") && !hasBodyTargetChange(nodes, updatedNodes, intent.TargetIDs) {
+				return nil, fmt.Errorf("AI 未改写目标页面正文，请重试")
+			}
 			if (intent.Action == "expand" || strings.Contains(instruction, "正文")) && !hasVisibleTargetChange(nodes, updatedNodes, intent.TargetIDs) {
 				return nil, fmt.Errorf("AI 引擎没有生成可见的课件内容，请重试或明确指定要添加的内容")
 			}
@@ -858,6 +861,21 @@ func hasVisibleTargetChange(before, after []TeachingNodeItem, targetIDs []string
 			!reflect.DeepEqual(node.KeyPoints, previous.KeyPoints) || !reflect.DeepEqual(node.PointDetails, previous.PointDetails) ||
 			!reflect.DeepEqual(node.Questions, previous.Questions) {
 			return true
+		}
+	}
+	return false
+}
+
+func hasBodyTargetChange(before, after []TeachingNodeItem, targetIDs []string) bool {
+	old := make(map[string]TeachingNodeItem, len(before))
+	for _, n := range before {
+		old[n.NodeID] = n
+	}
+	for _, id := range targetIDs {
+		for _, n := range after {
+			if n.NodeID == id && (n.Content != old[id].Content || n.Summary != old[id].Summary) {
+				return true
+			}
 		}
 	}
 	return false

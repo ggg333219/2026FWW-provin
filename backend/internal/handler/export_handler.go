@@ -41,6 +41,11 @@ func NewExportHandler(aiClient exportAIClient, projectServices ...coursewareProj
 }
 
 func (h *ExportHandler) authorizeGeneration(c *gin.Context, genID string) bool {
+	// The lightweight teacher server has no project database or login middleware.
+	// Its export routes are used only for local integration runs.
+	if h.projectService == nil && genID != "" {
+		return true
+	}
 	userID := c.GetString("userID")
 	if userID == "" || h.projectService == nil || genID == "" {
 		exportContractError(c, http.StatusNotFound, "课件不存在")
@@ -195,23 +200,29 @@ func (h *ExportHandler) Create(c *gin.Context) {
 	}
 	if payload.ProjectID != "" {
 		userID := c.GetString("userID")
-		if userID == "" || h.projectService == nil {
-			exportContractError(c, http.StatusNotFound, "课件不存在")
-			return
-		}
-		project, err := h.projectService.Get(c.Request.Context(), userID, payload.ProjectID)
-		if err != nil {
-			exportContractError(c, http.StatusNotFound, "课件不存在")
-			return
-		}
-		if strings.TrimSpace(project.GenID) != "" {
-			genID = project.GenID
-		} else {
-			if len(payload.Nodes) == 0 {
+		if h.projectService == nil && userID == "" {
+			if genID != payload.ProjectID || len(payload.Nodes) == 0 {
 				exportContractError(c, http.StatusBadRequest, "项目版本缺少可导出的节点")
 				return
 			}
-			genID = payload.ProjectID
+		} else if userID == "" || h.projectService == nil {
+			exportContractError(c, http.StatusNotFound, "课件不存在")
+			return
+		} else {
+			project, err := h.projectService.Get(c.Request.Context(), userID, payload.ProjectID)
+			if err != nil {
+				exportContractError(c, http.StatusNotFound, "课件不存在")
+				return
+			}
+			if strings.TrimSpace(project.GenID) != "" {
+				genID = project.GenID
+			} else {
+				if len(payload.Nodes) == 0 {
+					exportContractError(c, http.StatusBadRequest, "项目版本缺少可导出的节点")
+					return
+				}
+				genID = payload.ProjectID
+			}
 		}
 	} else if !h.authorizeGeneration(c, genID) {
 		return

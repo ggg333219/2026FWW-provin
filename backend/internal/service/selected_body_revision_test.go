@@ -45,3 +45,13 @@ func TestSelectedBodyRewriteRejectsUnchangedModelResult(t *testing.T) {
 		t.Fatal("正文未改变时不能报告成功")
 	}
 }
+
+func TestBodyChangeDoesNotAcceptOnlyScriptOrPointChanges(t *testing.T) {
+	before := sampleTeachingNodes()
+	after := append([]TeachingNodeItem(nil), before...)
+	after[1].Script = "讲稿已改但正文未改"
+	after[1].KeyPoints = []string{"新要点"}
+	if hasBodyTargetChange(before, after, []string{"node_2"}) {
+		t.Fatal("正文未变化")
+	}
+}

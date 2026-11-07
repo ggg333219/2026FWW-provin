@@ -394,6 +394,22 @@ class NodeGenerator:
                 )
             result = self._get_llm(max_attempts).chat_json(system_prompt, user_prompt,
                                                            temperature=self.config.temperature)
+            if revise_slide and "正文" in extra_instruction:
+                def changed_body(value):
+                    body = str(value.get("content") or value.get("summary") or "").strip()
+                    return bool(body) and body not in {
+                        str(node.get("content") or "").strip(),
+                        str(node.get("summary") or "").strip(),
+                    }
+                if not changed_body(result):
+                    result = self._get_llm(max_attempts).chat_json(
+                        system_prompt,
+                        user_prompt + "\n上次输出未改写正文。必须在 summary 字段返回修改后的幻灯片正文，"
+                        "同时满足教师的其他修改要求；不能只改 script/segments。",
+                        temperature=self.config.temperature,
+                    )
+                if not changed_body(result):
+                    raise ValueError("模型未返回修改后的正文")
             segments = _normalize_single_segments(result.get("segments"), node_id)
             script = self._clean_text(result.get("script"))
             if not script and segments:

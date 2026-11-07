@@ -49,6 +49,20 @@ def test_explicit_page_and_genuine_ambiguity_are_preserved():
     assert resolve_element_candidates(INSTRUCTION, deck, "node_2")["status"] == "ambiguous"
 
 
+def test_body_request_retries_when_only_script_and_details_changed():
+    class Model:
+        calls = 0
+        def chat_json(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {"script": "新讲稿", "point_details": [{"point": "新要点", "detail": "新解释"}]}
+            return {"summary": BODY}
+    model = Model()
+    result = NodeGenerator(llm_client=model).generate_single(nodes()[1], revise_slide=True, extra_instruction=INSTRUCTION)
+    assert model.calls == 2
+    assert result["summary"] == BODY
+
+
 def test_revised_body_reaches_preview_and_pptx_without_changing_other_pages(monkeypatch):
     monkeypatch.setattr("ai_engine.gen.partial_content.get_evidence_retriever", lambda: None)
     original = nodes()
