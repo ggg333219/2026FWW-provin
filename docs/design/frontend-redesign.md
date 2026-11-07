@@ -177,7 +177,10 @@ token 与基础样式下保持一致，不投入逐个重写。全局 reset 刻�
 |---|---|---|---|---|
 | 1 | `feature/f01-f02-intent-fix` | **#3** | 纯 MVP 修复（F01 / F02 / V04） | 优先收敛、待组长合并 |
 | 2 | `feature/byok-model-config` | **#10** | BYOK 自带第三方模型 | 之后再看，暂不合并 |
-| 3 | `feature/frontend-redesign` | 见本 PR | 前端整体重设计 | 与 #3 同批或随后 |
+| 3 | `feature/frontend-redesign` | **#11** | 前端整体重设计 | 与 #3 同批或随后 |
+
+> 本 PR 地址：https://github.com/ggg333219/2026FWW-provin/pull/11
+> （head `2d57bb4`，41 changed files，open / 未合并）
 
 > 交接文档与 `scripts/README.md` 里写的「PR #4 / PR #5」是**拆分时的概念编号**；
 > GitHub 上 BYOK 的实际编号是 **#10**（仓库已有其他 PR 占用了编号），不要按 #4 去找。
