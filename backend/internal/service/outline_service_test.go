@@ -76,6 +76,9 @@ func TestOutlineFallbackMetadataPersistenceRoundTrip(t *testing.T) {
 }
 
 func TestNormalizeOutlineFallbackReasonOnlyReturnsSafeCategories(t *testing.T) {
+	if got := normalizeOutlineFallbackReason(true, "low_quality_model_response"); got != "low_quality_model_response" {
+		t.Fatalf("大纲质量回退原因未保留: %q", got)
+	}
 	if got := normalizeOutlineFallbackReason(true, "timeout: secret detail"); got != "model_error" {
 		t.Fatalf("不安全的回退原因未归一: %q", got)
 	}

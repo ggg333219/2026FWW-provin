@@ -722,8 +722,11 @@ async def generate_outline(req: GenOutlineRequest):
             args = (req.markdown, req.course_name)
             if "generation_instruction_set" in inspect.signature(method).parameters:
                 args += (req.generation_instruction_set,)
+            kwargs = {}
+            if "duration_minutes" in inspect.signature(method).parameters:
+                kwargs["duration_minutes"] = builder._intent_duration_minutes(req.intent)
             result = await asyncio.to_thread(
-                method, *args,
+                method, *args, **kwargs,
             )
         else:
             method = builder.build
@@ -2033,7 +2036,8 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
             builder = OutlineBuilder()
             if req.markdown:
                 outline = builder.build_from_markdown(
-                    req.markdown, req.intent.topic or "课件", instruction_set
+                    req.markdown, req.intent.topic or "课件", instruction_set,
+                    duration_minutes=req.intent.duration_minutes,
                 )
             else:
                 intent_dict = req.intent.model_dump() if hasattr(req.intent, "model_dump") else req.intent
