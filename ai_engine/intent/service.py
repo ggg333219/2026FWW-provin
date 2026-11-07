@@ -333,6 +333,12 @@ class IntentUnderstandingService:
         reason = str(getattr(self.engine, "last_unavailable_reason", "") or "")
         if reason:
             return reason
+        # 请求级自带 Key 的客户端不受部署级 mock 开关约束
+        # （见 LLMClient.force_real_model）。否则明明真实调用了模型，
+        # 也会被全局 GEN_MODE 误标成 mock。
+        client = getattr(self.engine, "client", None)
+        if client is not None and getattr(client, "force_real_model", False):
+            return ""
         if settings.GEN_MODE.strip().lower() == "mock":
             # 系统级 mock 模式：路由直接选用规则引擎，模型根本没参与本次请求。
             return "mock_mode"
