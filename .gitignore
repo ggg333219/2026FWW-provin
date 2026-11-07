@@ -102,3 +102,10 @@ lark_auth_qr.png
 # Local AI session artifacts (HANDOFF / backups / scratch / drafts) — 不入库
 .rivet/
 .docx_review/
+
+# ---- 本地验证产物与 AI 会话记忆（2026-11-04 仓库整理）----
+# WorkBuddy/Claude 等 AI 工具的本地会话记忆目录：含个人工作日志，不属于交付物
+.workbuddy/
+# 本地真实链路验证产物：启动日志、截图、临时可执行文件、探针脚本
+# （正式交付说明与证据已整理进 docs/handoff/ 入库）
+记录/

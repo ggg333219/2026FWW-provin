@@ -32,6 +32,89 @@ def _clean_phrase(value: str | None) -> str | None:
     return cleaned or None
 
 
+# 意图字段标签：形如「互动设计：需要」「授课对象：…」的子句描述的是**别的字段**，
+# 不是知识点。规则抽取知识点时若不剔除，会把这类子句混进知识点列表。
+_FIELD_CLAUSE_LABELS = (
+    "互动设计", "教学风格", "授课风格", "讲课风格", "授课对象", "教学对象",
+    "核心知识点", "知识点", "重点难点", "学习目标", "预期成果", "预期学习成果",
+    "输出格式", "授课时长", "课程时长", "课程主题", "教学主题", "难点", "目标", "主题",
+)
+
+_FIELD_CLAUSE_PATTERN = re.compile(
+    r"^(?:" + "|".join(re.escape(label) for label in _FIELD_CLAUSE_LABELS) + r")\s*[:：]"
+)
+
+
+def is_field_clause(text: str) -> bool:
+    """判断文本是否是「其它字段名：值」形式的子句。
+
+    只匹配带冒号的标签形式，避免误伤「代码风格」「面向对象编程」这类正当知识点。
+    """
+    return bool(_FIELD_CLAUSE_PATTERN.match((text or "").strip()))
+
+
+# 互动要求类片段：属于「要不要互动」的需求，不是课程内容。
+_INTERACTION_FRAGMENT_MARKERS = (
+    "互动", "小游戏", "课堂游戏", "小测", "测验", "翻卡", "闪卡",
+    "动画演示", "角色扮演", "课堂练习", "抢答",
+)
+
+
+def _normalize_for_match(text: str) -> str:
+    """去掉空白与标点，只保留可比对的实义字符。"""
+    return re.sub(r"[\s，,。；;：:、！!？?（）()《》〈〉\"'’“”\-—_·]+", "", text or "")
+
+
+def is_grounded_knowledge_point(point: str, teacher_text: str) -> bool:
+    """判断模型给出的知识点是否能在教师原话中找到依据。
+
+    没有依据的知识点多半是模型自行脑补的，必须丢弃；能找到依据的才予以保留。
+    """
+    normalized_point = _normalize_for_match(point)
+    normalized_text = _normalize_for_match(teacher_text)
+    if len(normalized_point) < 2:
+        return False
+    # 教师原话本身包含该知识点 —— 直接判定为有依据。
+    if normalized_point in normalized_text:
+        return True
+    # 反向包含（教师说"分治"，模型给出"分治思想"）只在教师原话足够具体时成立，
+    # 否则一句短话（如"45"）会把毫不相关的知识点全部"接地"，等于没校验。
+    return len(normalized_text) >= 4 and normalized_text in normalized_point
+
+
+def filter_knowledge_point_fragments(
+    points: Iterable[str],
+    style: str | None = None,
+    target_student: str | None = None,
+) -> list[str]:
+    """剔除被模型误当成知识点的碎片。
+
+    三类碎片：
+
+    1. 「其它字段名：值」子句，例如把「互动设计：需要」当成知识点；
+    2. 已经作为 style / target_student 抽走的原话被重复塞进知识点，
+       例如把「风格活泼一点」当成知识点；
+    3. 互动要求类片段，例如把「课堂小游戏」当成知识点。
+    """
+    style_value = (style or "").strip()
+    student_value = (target_student or "").strip()
+    result: list[str] = []
+    for item in points or []:
+        text = str(item).strip()
+        if not text:
+            continue
+        if is_field_clause(text):
+            continue
+        if len(style_value) >= 2 and (style_value in text or text in style_value):
+            continue
+        if len(student_value) >= 2 and (student_value in text or text in student_value):
+            continue
+        if any(marker in text for marker in _INTERACTION_FRAGMENT_MARKERS):
+            continue
+        result.append(text)
+    return result
+
+
 def extract_duration(text: str) -> int | None:
     candidates: list[tuple[int, int]] = []
     patterns = [
@@ -55,9 +138,23 @@ def extract_duration(text: str) -> int | None:
     return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 
-def extract_topic(text: str) -> str | None:
+def extract_topic_strict(text: str) -> str | None:
+    """只做高置信度的主题抽取（显式标注 / 关于X / 帮我做X课件）。
+
+    与 :func:`extract_topic` 的区别是**不含兜底猜测**：兜底分支靠剥词取首句，
+    在"请做45分钟快速排序课件"这类句子上会产出"做45分钟快速排序"这种脏值。
+
+    合并阶段用本函数判断规则结论是否可信：可信才允许覆盖模型结果，
+    不可信时保留模型给出的主题。
+    """
+    # 主题值在逗号处即止：真实模型案例里教师写
+    # 「主题是冒泡排序与快速排序（算法章节），大一计算机专业。」，
+    # 旧捕获字符类允许逗号，会把后面的授课对象一起吃进来；合并阶段再用这条
+    # 脏值覆盖模型给出的干净主题，就出现了图片里的 "topic 带尾巴"。
+    # 不复用全局 _CLAUSE_END —— 知识点/风格/对象等抽取需要逗号分隔多个条目。
+    topic_clause_end = r"(?=[；;。！？!?，,\n]|$)"
     explicit = _last_match(text, [
-        rf"(?:课程主题|教学主题|主题)\s*(?:是|为|[:：])\s*([^；;。！？!?\n]+){_CLAUSE_END}",
+        rf"(?:课程主题|教学主题|主题)\s*(?:是|为|[:：])\s*([^；;。！？!?，,\n]+){topic_clause_end}",
     ])
     if explicit:
         return _clean_phrase(re.sub(r"(?:课件|课程|一节课|的课)$", "", explicit))
@@ -69,13 +166,22 @@ def extract_topic(text: str) -> str | None:
         return _clean_phrase(about)
 
     request = _last_match(text, [
-        r"(?:帮我做|帮我准备|请设计|设计|准备|我想做|我想要|我需要|需要|请给我|来一份)"
+        r"(?:帮我做|帮我准备|请做|请设计|设计|准备|我想做|我想要|我需要|需要|请给我|来一份)"
         r"(?:一份|一节)?(?:\d+\s*分钟)?(?:的)?(?:关于)?"
         r"([\u4e00-\u9fa5A-Za-z0-9+\-]{2,40}?)"
         r"(?:的)?(?:课件|课程|课|讲稿|讲解|教学)(?=[，,。；;！？!?]|$)",
     ])
     if request:
         return _clean_phrase(re.sub(r"\d+\s*分钟", "", request))
+
+    return None
+
+
+def extract_topic(text: str) -> str | None:
+    """抽取课程主题；高置信度抽取失败时退回保守的兜底猜测。"""
+    strict = extract_topic_strict(text)
+    if strict:
+        return strict
 
     cleaned = re.sub(r"(?:请帮我|帮我|请|麻烦|做一份|做一节|我要|我需要)", "", text)
     cleaned = re.sub(r"(?:课件|课程|一节|一份|的课|讲稿)", "", cleaned)
@@ -107,14 +213,13 @@ def extract_style(text: str) -> str | None:
     return known[-1].group(0) if known else None
 
 
-def extract_knowledge_points(text: str) -> list[str]:
-    raw = _last_match(text, [
-        rf"(?:核心知识点|知识点)\s*(?:是|为|包括|包含|[:：])\s*([^；;。！？!?\n]+){_CLAUSE_END}",
-        rf"(?:重点包括|重点包含|重点讲解|包括|包含|涉及|涵盖)\s*([^；;。！？!?\n]+){_CLAUSE_END}",
-    ])
-    if not raw:
-        return []
-    raw = re.split(r"(?:，|,)?\s*(?:并|同时|另外|此外|最好)(?:加入|安排|设置|设计|增加|配合)", raw, maxsplit=1)[0]
+def _split_knowledge_items(raw: str) -> list[str]:
+    """把一段捕获文本切成知识点条目，并做基础清洗。"""
+    raw = re.split(
+        r"(?:，|,)?\s*(?:并|同时|另外|此外|最好)(?:加入|安排|设置|设计|增加|配合)",
+        raw,
+        maxsplit=1,
+    )[0]
     items = re.split(r"[、，,；;]|和|与", raw)
     result: list[str] = []
     for item in items:
@@ -122,9 +227,49 @@ def extract_knowledge_points(text: str) -> list[str]:
         if not cleaned:
             continue
         cleaned = re.sub(r"^(?:重点|主要|核心)", "", cleaned).strip()
+        # 「互动设计：需要」这类子句描述的是别的字段，不是知识点。
+        if is_field_clause(cleaned):
+            continue
         if cleaned and cleaned not in result:
             result.append(cleaned)
     return result[:12]
+
+
+def extract_explicit_knowledge_points(text: str) -> list[str]:
+    """只抽取教师**明确标注**为知识点的内容（高置信度）。
+
+    触发词限定为「知识点：」「核心知识点：」「重点包括/讲解」这类带标签的说法。
+    「包含」「涉及」等松散动词不在此列 —— 它们在普通教学需求里极常见
+    （"教师要求包含互动选择题"），命中它们会把**要求**当成知识点。
+    """
+    raw = _last_match(text, [
+        rf"(?:核心知识点|知识点)\s*(?:是|为|包括|包含|[:：])\s*([^；;。！？!?\n]+){_CLAUSE_END}",
+        rf"(?:重点包括|重点包含|重点讲解)\s*([^；;。！？!?\n]+){_CLAUSE_END}",
+    ])
+    if not raw:
+        return []
+    return _split_knowledge_items(raw)
+
+
+def extract_knowledge_points(text: str) -> list[str]:
+    """抽取知识点：优先显式标注，否则退回松散动词并过滤掉"要求类"片段。
+
+    松散动词（包含/包括/涉及/涵盖）捕获到的往往不是知识点，而是另一种要求
+    （互动选择题、Word 教案、45 分钟）。这类片段必须被剔除；若剔除后一条不剩，
+    说明规则**没有命中**，交由模型分支处理 —— 而不是拿一条假知识点去覆盖模型结果。
+    """
+    explicit = extract_explicit_knowledge_points(text)
+    if explicit:
+        return explicit
+
+    loose = _last_match(text, [
+        rf"(?:包括|包含|涉及|涵盖)\s*([^；;。！？!?\n]+){_CLAUSE_END}",
+    ])
+    if not loose:
+        return []
+    candidates = _split_knowledge_items(loose)
+    # 剔除"互动/格式/时长/风格"等要求类片段；一条不剩就视为规则未命中。
+    return filter_knowledge_point_fragments(candidates)[:12]
 
 
 def detect_interactive(text: str) -> bool:

@@ -2567,7 +2567,9 @@ function handleIntentExtractRequest(store, options) {
     max_turns: maxTurns,
     can_confirm: canConfirm,
     engine: 'rule',
-    used_fallback: false
+    used_fallback: false,
+    // 前端内置 mock 数据：如实标注来源，避免与真实模型结果混淆（V04）。
+    model_source: 'mock'
   })
 }
 
