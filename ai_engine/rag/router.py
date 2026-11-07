@@ -243,6 +243,8 @@ class KnowledgeUploadRequest(BaseModel):
     """文件 URL 列表（minio:// 或本地路径），为空则从 session 查找已解析文件"""
     texts: list[str] = Field(default_factory=list)
     """直接上传的文本片段（用于测试/手动添加）"""
+    chunk_ids: Optional[list[str]] = None
+    """显式指定 S2 session 中要索引的 Chunk；空数组表示不索引会话切片"""
 
 
 class KnowledgeUploadResponse(BaseModel):
@@ -268,6 +270,17 @@ async def knowledge_upload(req: KnowledgeUploadRequest):
     try:
         all_chunks: list[Chunk] = []
 
+        if req.chunk_ids is not None:
+            selected_ids = list(dict.fromkeys(req.chunk_ids))
+            if selected_ids and not req.session_id:
+                raise HTTPException(status_code=400, detail="按 chunk_id 索引时 session_id 不能为空")
+            session_chunks = _find_session_chunks(req.session_id) if selected_ids else []
+            chunks_by_id = {chunk.chunk_id: chunk for chunk in session_chunks}
+            missing_ids = [chunk_id for chunk_id in selected_ids if chunk_id not in chunks_by_id]
+            if missing_ids:
+                raise HTTPException(status_code=400, detail=f"会话中不存在 chunk_id: {', '.join(missing_ids)}")
+            all_chunks.extend(chunks_by_id[chunk_id].model_copy(deep=True) for chunk_id in selected_ids)
+
         # ---- 处理直接文本 ----
         for i, text in enumerate(req.texts):
             if not text.strip():
@@ -291,7 +304,7 @@ async def knowledge_upload(req: KnowledgeUploadRequest):
                 print(f"[KB-Upload] 文件处理失败: {file_url} — {e}")
 
         # ---- 从 session 查找已解析文件（S2 产出） ----
-        if req.session_id and not req.files and not req.texts:
+        if req.session_id and not req.files and not req.texts and req.chunk_ids is None:
             session_chunks = _find_session_chunks(req.session_id)
             all_chunks.extend(session_chunks)
 
@@ -326,6 +339,8 @@ async def knowledge_upload(req: KnowledgeUploadRequest):
             document_id=doc_id,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,

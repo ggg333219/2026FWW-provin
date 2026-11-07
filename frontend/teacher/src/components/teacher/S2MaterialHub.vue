@@ -424,6 +424,8 @@ function normalizeChunk(c, materialId) {
   return {
     ...c,
     chunkId: c.chunkId || c.chunk_id,
+    // 只有解析状态接口返回的切片能在 Python 的 session 登记表中按 ID 找回。
+    sessionRegistered: true,
     materialId: c.materialId || materialId,
     content: c.content || '',
     sourceType,

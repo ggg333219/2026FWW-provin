@@ -6,6 +6,41 @@ import (
 	"testing"
 )
 
+func TestKnowledgeUploadRequestChunkIDsPresence(t *testing.T) {
+	marshal := func(ids *[]string) map[string]json.RawMessage {
+		t.Helper()
+		raw, err := json.Marshal(KnowledgeUploadRequest{SessionID: "session-f04", ChunkIDs: ids})
+		if err != nil {
+			t.Fatalf("序列化知识库请求失败: %v", err)
+		}
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatalf("解析知识库请求失败: %v", err)
+		}
+		return body
+	}
+
+	if _, present := marshal(nil)["chunk_ids"]; present {
+		t.Fatal("未提供 chunk_ids 时应省略字段")
+	}
+	empty := []string{}
+	if got := string(marshal(&empty)["chunk_ids"]); got != "[]" {
+		t.Fatalf("显式空 chunk_ids 应序列化为 []，实际为 %s", got)
+	}
+	ids := []string{"chunk-a", "chunk-b"}
+	if got := string(marshal(&ids)["chunk_ids"]); got != `["chunk-a","chunk-b"]` {
+		t.Fatalf("chunk_ids 未正确透传，实际为 %s", got)
+	}
+
+	var decoded KnowledgeUploadRequest
+	if err := json.Unmarshal([]byte(`{"session_id":"session-f04","chunk_ids":[]}`), &decoded); err != nil {
+		t.Fatalf("解析显式空 chunk_ids 失败: %v", err)
+	}
+	if decoded.ChunkIDs == nil || len(*decoded.ChunkIDs) != 0 {
+		t.Fatalf("显式空 chunk_ids 必须区别于未提供: %+v", decoded)
+	}
+}
+
 // 契约 v1.0 模块1 接口3：POST /api/v1/gen/modify 新增 page_id / evidence_refs / user_instruction。
 //
 // 锁定两件事：
