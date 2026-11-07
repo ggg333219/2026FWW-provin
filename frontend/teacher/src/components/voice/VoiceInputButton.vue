@@ -260,13 +260,13 @@ defineExpose({
 .voice-live, .voice-error {
   position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 20;
   display: flex; align-items: center; gap: 7px; max-width: 340px;
-  padding: 8px 11px; border-radius: 12px; font-size: 11px; line-height: 1.5;
+  padding: 8px 11px; border-radius: 12px; font-size: 12px; line-height: 1.5;
   white-space: normal; text-align: left;
 }
 .voice-live { border: 1px solid #f0d4d0; color: #8a4a43; background: #fffdfa; box-shadow: 0 10px 26px rgba(120, 60, 50, 0.14); }
 .voice-live i { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: #d26a5f; animation: voice-dot 1.1s ease-in-out infinite; }
 @keyframes voice-dot { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1.1); } }
-.voice-error { z-index: 21; width: max-content; border: 1px solid #f1d4d1; color: #a0443f; background: #fff8f7; font-size: 10px; }
+.voice-error { z-index: 21; width: max-content; border: 1px solid #f1d4d1; color: #a0443f; background: #fff8f7; font-size: 12px; }
 .voice-error svg { flex: 0 0 auto; width: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
 .voice-error span { flex: 1; }
 .voice-error-close { flex: 0 0 auto; display: grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 6px; color: #b07a74; background: transparent; cursor: pointer; }

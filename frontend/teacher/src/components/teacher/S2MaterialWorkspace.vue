@@ -334,8 +334,8 @@ defineExpose({ setSearchQuery })
 .auto-evidence-card p { margin:5px 0 0; color:#668078; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .auto-evidence-card button { padding:8px 14px; border:1px solid #72ad98; border-radius:9px; background:#fff; color:#2f6658; font:600 12px/1.2 inherit; cursor:pointer; }
 .auto-evidence-card button:disabled { opacity:.55; cursor:not-allowed; }
-.auto-badge { display:inline-flex; padding:3px 8px; border-radius:999px; background:#2f8069; color:#fff; font-size:10px; font-weight:700; }
-.auto-error { max-width:240px; color:#a54b36; font-size:11px; }
+.auto-badge { display:inline-flex; padding:3px 8px; border-radius:999px; background:#2f8069; color:#fff; font-size: 12px; font-weight:700; }
+.auto-error { max-width:240px; color:#a54b36; font-size: 12px; }
 .auto-result-panel { padding:18px; border:1px solid #dceae4; border-radius:14px; background:#fff; }
 .auto-result-panel h4 { margin:0 0 7px; color:#2f605a; }
 .auto-result-panel p { margin:0; color:#6d8179; font-size:12px; line-height:1.6; }
@@ -399,7 +399,7 @@ defineExpose({ setSearchQuery })
   border-radius: 5px;
   background: #5ca68f;
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -423,7 +423,7 @@ defineExpose({ setSearchQuery })
 
 .strip-meta {
   margin: 4px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   color: #7a8a9a;
 }
 
@@ -499,7 +499,7 @@ defineExpose({ setSearchQuery })
 }
 
 .node-ref-hint {
-  font-size: 11px;
+  font-size: 12px;
   color: #94a3b8;
 }
 

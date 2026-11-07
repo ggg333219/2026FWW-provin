@@ -206,7 +206,7 @@ function masteryLevel(score) {
 .insight-summary { margin: 0 0 10px; line-height: 1.5; color: #607a71; }
 .insight-group { margin-bottom: 8px; }
 .insight-group strong { display: block; font-size: 12px; color: #607a71; margin-bottom: 4px; }
-.insight-tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; margin: 2px 4px 2px 0; }
+.insight-tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; margin: 2px 4px 2px 0; }
 .tag-warn { background: #fef3c7; color: #92400e; }
 .tag-info { background: #e0f2fe; color: #0369a1; }
 

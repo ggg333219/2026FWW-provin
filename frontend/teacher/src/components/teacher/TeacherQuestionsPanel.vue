@@ -534,8 +534,8 @@ const emit = defineEmits(['update:filterPage', 'focus-node'])
 .trend-item { border: 1px solid #e2ebe7; border-radius: 8px; background: #f8fcfa; padding: 6px 4px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; }
 .bar-track { width: 18px; height: 72px; border-radius: 6px; background: #e8f2ee; position: relative; overflow: hidden; display: flex; align-items: flex-end; }
 .trend-item i { position: absolute; left: 1px; right: 1px; bottom: 1px; display: block; border-radius: 6px 6px 0 0; background: linear-gradient(180deg,#9ddfcb,#2f605a); min-height: 6px; }
-.trend-item span { font-size: 11px; color: #5e756e; }
-.trend-item em { font-size: 11px; color: #2f605a; font-style: normal; }
+.trend-item span { font-size: 12px; color: #5e756e; }
+.trend-item em { font-size: 12px; color: #2f605a; font-style: normal; }
 
 .question-cards { display: grid; gap: 10px; }
 .group-section + .group-section { margin-top: 10px; }

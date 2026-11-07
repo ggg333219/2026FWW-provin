@@ -10,29 +10,18 @@
         <span v-if="asyncActivity.progress != null" class="async-progress">{{ asyncActivity.progress }}%</span>
       </div>
       <!-- 页面头部 -->
-      <div class="page-header">
-        <div>
-          <h2>S3 课件生成</h2>
-          <p>大纲编辑 → 内容生成 → 页面预览</p>
+      <header class="page-head">
+        <div class="page-head__text">
+          <p class="page-head__eyebrow">课件生成流程</p>
+          <h1 class="page-head__title">S3 课件生成</h1>
+          <p class="page-head__desc">大纲编辑 → 内容生成 → 页面预览</p>
         </div>
-        <div class="page-header-right">
-          <button v-if="projectStore.projectId" class="save-state" :class="projectStore.saveState" aria-live="polite" @click="projectStore.saveNow(draftSnapshot())">{{ projectStore.saveLabel || '保存草稿' }}</button>
-          <button v-if="generationStore.currentScriptNodes.length" class="save-version" :disabled="saveVersionState === 'saving'" @click="handleSaveNewVersion">{{ saveVersionState === 'saving' ? '正在保存版本…' : (lastSavedVersion ? `已保存 v${lastSavedVersion}` : '保存新版本') }}</button>
-          <div class="step-pills">
-            <router-link :to="{ name: 'S1Intent', query: { project_id: projectStore.projectId } }" class="pill"
-              >S1 意图</router-link
-            >
-            <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="pill"
-              >S2 资料</router-link
-            >
-            <span class="pill active">S3 生成</span>
-            <button type="button" class="pill" @click="goToS4">S4 版本</button>
-            <router-link :to="{ name: 'Middle' }" class="pill back-pill"
-              >返回中间页</router-link
-            >
-          </div>
+        <div class="page-head__actions">
+          <button v-if="projectStore.projectId" class="ds-btn ds-btn--secondary ds-btn--sm save-state" :class="projectStore.saveState" aria-live="polite" type="button" @click="projectStore.saveNow(draftSnapshot())">{{ projectStore.saveLabel || '保存草稿' }}</button>
+          <button v-if="generationStore.currentScriptNodes.length" class="ds-btn ds-btn--secondary ds-btn--sm save-version" type="button" :disabled="saveVersionState === 'saving'" @click="handleSaveNewVersion">{{ saveVersionState === 'saving' ? '正在保存版本…' : (lastSavedVersion ? `已保存 v${lastSavedVersion}` : '保存新版本') }}</button>
         </div>
-      </div>
+      </header>
+      <StepNav current="s3" :project-id="projectStore.projectId" :action-keys="['s4']" @step-action="onStepAction" />
       <div v-if="genError && currentPhase !== 'generating'" class="error-bar" role="alert">{{ genError }}</div>
 
       <!-- 模式提示条 -->
@@ -106,6 +95,8 @@
         <button class="phase-tab" :class="{ active: currentPhase === 'style' }" role="tab" :aria-selected="currentPhase === 'style'" :disabled="!generationStore.lastGenId" @click="currentPhase = 'style'">🎨 PPT 样式</button>
       </div>
 
+      <!-- ==================== 三栏工作区：证据 / 主内容 / AI 修改 ==================== -->
+      <div class="s3-workbench">
       <!-- ==================== 大纲阶段 ==================== -->
       <!-- ==================== 大纲阶段 ==================== -->
       <EvidenceSidebar
@@ -119,13 +110,15 @@
         @apply="handleEvidenceApply"
         @selection-change="handleEvidenceSelection"
       />
-      <!-- C6: AI 修改对话面板（右侧浮动；projectId 绑定后显示） -->
-      <ModifyPanel
-        class="s3-ai-panel"
-        :include-special-pages="currentPhase !== 'outline' || !!generationStore.lastGenId"
-        @style-request="handleStyleRequest"
-        @applied="handleModifyApplied"
-      />
+      <!-- C6: AI 修改对话面板（projectId 绑定后显示；外层列在无内容时自动收起） -->
+      <div class="s3-assistant-col">
+        <ModifyPanel
+          class="s3-ai-panel"
+          :include-special-pages="currentPhase !== 'outline' || !!generationStore.lastGenId"
+          @style-request="handleStyleRequest"
+          @applied="handleModifyApplied"
+        />
+      </div>
       <div v-if="currentPhase === 'outline'" class="phase-panel">
         <OutlineEditor
           :session-id="intentStore.sessionId"
@@ -600,6 +593,7 @@
           </div>
         </div>
       </div>
+      </div><!-- /.s3-workbench -->
     </div>
   </AppShell>
 </template>
@@ -608,6 +602,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import AppShell from "../components/layout/AppShell.vue";
+import StepNav from "../components/common/StepNav.vue";
 import OutlineEditor from "../components/teacher/OutlineEditor.vue";
 import ModifyPanel from "../components/teacher/ModifyPanel.vue";
 import EvidenceSidebar from "../components/teacher/EvidenceSidebar.vue";
@@ -1906,6 +1901,11 @@ async function goToS4() {
   router.push({ name: "S4Version", query: { project_id: projectStore.projectId, generation_id: generationStore.lastGenId } });
 }
 
+/** 流程条上的「版本与导出」仍需先保存版本，不能直接跳路由。 */
+function onStepAction(key) {
+  if (key === "s4") void goToS4();
+}
+
 function handleError(msg) {
   genError.value = msg;
   console.warn("[S3StudioPage]", msg);
@@ -1916,43 +1916,106 @@ function handleError(msg) {
 .s3-page {
   display: flex;
   flex-direction: column;
-  padding: 20px 380px 20px 340px;
-  min-height: calc(100vh - 140px);
-  overflow: hidden;
-  background:
-    radial-gradient(
-      circle at 86% -15%,
-      rgba(175, 221, 203, 0.2),
-      transparent 30%
-    ),
-    linear-gradient(180deg, #fcfefd 0%, #f7faf8 100%);
+  gap: var(--space-4);
+  padding: var(--space-6);
+  min-height: calc(100dvh - var(--topbar-height) - var(--shell-gutter) * 2);
+  background: var(--bg-page);
 }
-.studio-loading{position:fixed;inset:82px 20px 20px;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;border-radius:22px;background:rgba(248,252,250,.96);backdrop-filter:blur(8px);color:#27594e}.studio-loading strong{margin-top:14px;font-size:18px}.studio-loading p{margin:7px 0;color:#70857d;font-size:13px}.studio-spinner{width:42px;height:42px;border:4px solid #d8ebe4;border-top-color:#28735f;border-radius:50%;animation:studio-spin .8s linear infinite}@keyframes studio-spin{to{transform:rotate(360deg)}}
-.async-activity{position:fixed;top:92px;left:50%;z-index:40;display:flex;align-items:center;gap:11px;min-width:min(440px,calc(100vw - 40px));box-sizing:border-box;padding:12px 16px;border:1px solid #bcdcd0;border-radius:14px;background:rgba(249,253,251,.97);box-shadow:0 14px 38px rgba(26,75,60,.18);color:#28594c;transform:translateX(-50%);backdrop-filter:blur(10px)}.async-activity>div{display:grid;gap:2px;flex:1}.async-activity strong{font-size:13px}.async-activity small{color:#718880;font-size:11px}.async-spinner{width:22px;height:22px;flex:0 0 auto;border:3px solid #d6e9e1;border-top-color:#28735f;border-radius:50%;animation:studio-spin .75s linear infinite}.async-progress{font-size:12px;font-weight:700;color:#28735f}
-.page-header {
+.studio-loading {
+  position: fixed;
+  inset: var(--topbar-height) var(--shell-gutter) var(--shell-gutter);
+  z-index: var(--z-overlay);
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  text-align: center;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--color-primary);
+  box-shadow: var(--shadow-md);
 }
-.page-header h2 {
-  margin: 0;
-  font-size: 22px;
-  color: #111827;
-}
-.page-header p {
-  margin: 6px 0 0;
-  font-size: 14px;
-  color: #607a71;
-}
-.page-header-right {
+.studio-loading strong { font-size: var(--text-lg); }
+.studio-loading p { color: var(--text-secondary); font-size: var(--text-xs); }
+.studio-spinner { width: 36px; height: 36px; border: 3px solid var(--brand-100); border-top-color: var(--color-primary); border-radius: 50%; animation: studio-spin .8s linear infinite; }
+@keyframes studio-spin { to { transform: rotate(360deg); } }
+.async-activity {
+  position: fixed;
+  top: calc(var(--topbar-height) + var(--space-4));
+  left: 50%;
+  z-index: calc(var(--z-overlay) + 1);
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  gap: var(--space-3);
+  min-width: min(440px, calc(100vw - 40px));
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-primary-border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  transform: translateX(-50%);
 }
+.async-activity > div { display: grid; gap: 2px; flex: 1; }
+.async-activity strong { font-size: var(--text-xs); }
+.async-activity small { color: var(--text-tertiary); font-size: var(--text-2xs); }
+.async-spinner { width: 20px; height: 20px; flex: 0 0 auto; border: 3px solid var(--brand-100); border-top-color: var(--color-primary); border-radius: 50%; animation: studio-spin .75s linear infinite; }
+.async-progress { font-size: var(--text-2xs); font-weight: var(--weight-semibold); color: var(--color-primary); font-variant-numeric: tabular-nums; }
+
+/* 三栏工作区：栅格列 + sticky，替代原来的 position:fixed 与让位 padding */
+.s3-workbench {
+  display: grid;
+  /* 第三列用 auto：助手面板未挂载时由 :empty 收起，不留 340px 死白 */
+  grid-template-columns: 300px minmax(0, 1fr) auto;
+  grid-template-areas: "evidence main assistant";
+  gap: var(--space-4);
+  align-items: start;
+  flex: 1;
+  min-height: 0;
+}
+.s3-workbench > :deep(.evidence-sidebar) { grid-area: evidence; }
+.s3-workbench > .phase-panel { grid-area: main; min-width: 0; }
+.s3-workbench > .s3-assistant-col { grid-area: assistant; width: 340px; min-width: 0; }
+/* Vue 的 v-if 占位是注释节点，CSS :empty 会忽略注释 —— 正好用来收起空列 */
+.s3-workbench > .s3-assistant-col:empty { display: none; }
+.s3-workbench :deep(.s3-ai-panel) {
+  position: sticky;
+  top: calc(var(--topbar-height) + var(--shell-gutter));
+  width: 100%;
+  max-height: calc(100dvh - var(--topbar-height) - var(--space-10));
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+.page-head__eyebrow {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  color: var(--color-primary);
+}
+.page-head__title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--text-primary);
+}
+.page-head__desc {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.page-head__actions { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
 .page-body {
   flex: 1;
 }
@@ -2051,31 +2114,44 @@ function handleError(msg) {
   gap: 14px;
 }
 
-.s3-ai-panel { position: fixed; top: 118px; right: 20px; bottom: 20px; width: 340px; z-index: 12; box-shadow: 0 12px 34px rgba(30, 72, 60, .12); border: 1px solid #dce9e3; border-radius: 14px; overflow: hidden; }
-.style-ai-hint { padding: 12px; border-radius: 10px; background: #f1f8f5; color: #45685e; font-size: 13px; line-height: 1.6; }
-@media (max-width: 1400px) { .s3-page { padding-left: 20px; } }
-@media (max-width: 1100px) { .s3-page { padding-right: 20px; } .s3-ai-panel { position: static; width: auto; min-height: 420px; margin-bottom: 14px; } }
-@media (max-width: 700px) {
-  .s3-page { padding: 14px 12px; overflow: visible; }
-  .page-header { flex-direction: column; }
-  .page-header-right { width: 100%; justify-content: flex-start; }
-  .step-pills { width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
-  .pill { flex: 0 0 auto; }
+.s3-ai-panel { background: var(--bg-surface); }
+.style-ai-hint { padding: var(--space-3); border-radius: var(--radius-sm); background: var(--color-primary-soft); color: var(--text-secondary); font-size: var(--text-xs); line-height: var(--leading-relaxed); }
+
+/* 统一断点：1280 / 1024 / 768；不再用 1400 / 1100 / 700 让位 padding */
+@media (max-width: 1279px) {
+  .s3-workbench {
+    grid-template-columns: 280px minmax(0, 1fr);
+    grid-template-areas: "evidence main" "assistant assistant";
+  }
+  .s3-workbench > .s3-assistant-col { width: 100%; }
+  .s3-workbench :deep(.s3-ai-panel) { position: static; max-height: 480px; }
+}
+@media (max-width: 1023px) {
+  .s3-workbench {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "main" "evidence" "assistant";
+  }
+  .s3-workbench > :deep(.evidence-sidebar) { position: static; max-height: 420px; }
+  .s3-workbench :deep(.s3-ai-panel) { max-height: 480px; }
+}
+@media (max-width: 767px) {
+  .s3-page { padding: var(--space-4); gap: var(--space-3); }
+  .page-head { flex-direction: column; align-items: flex-start; }
+  .page-head__actions { flex-wrap: wrap; }
   .phase-tabs { overflow-x: auto; }
-  .phase-tab { flex: 0 0 auto; padding: 8px 12px; }
+  .phase-tab { flex: 0 0 auto; padding: var(--space-2) var(--space-3); }
   .evidence-warning { align-items: flex-start; flex-direction: column; }
-  .evidence-warning div { align-items: flex-start; flex-direction: column; gap: 4px; }
-  .s3-ai-panel { min-height: 520px; }
-  .style-panel { padding: 16px; }
+  .evidence-warning div { align-items: flex-start; flex-direction: column; gap: var(--space-1); }
+  .style-panel { padding: var(--space-4); }
   .style-actions,.gen-complete-actions { flex-direction: column; }
   .style-actions button,.gen-complete-actions button { width: 100%; }
   .preview-frame { height: 360px; }
   .page-item { align-items: flex-start; flex-direction: column; }
   .page-item-right { width: 100%; justify-content: flex-end; }
 }
-.save-state { border: 1px solid #bdd8cb; border-radius: 999px; padding: 6px 10px; background: #fff; color: #42675d; font-size: 12px; cursor: pointer; }
-.save-state.saving { color: #996a14; }.save-state.error { color: #b42318; }
-.save-version { border: 1px solid #2f605a; border-radius: 999px; padding: 6px 11px; background: #2f605a; color: #fff; font-size: 12px; cursor: pointer; }.save-version:disabled{opacity:.55;cursor:not-allowed}
+.save-state.saving { color: var(--color-warning); border-color: var(--color-warning-border); }
+.save-state.error { color: var(--color-danger); border-color: var(--color-danger-border); }
+.save-version:disabled { opacity: 0.48; cursor: not-allowed; }
 .style-panel { max-width: 680px; padding: 22px; border: 1px solid #dce9e3; border-radius: 14px; background: #fff; }
 .style-panel h3 { margin: 0; color: #24483e; }.style-panel p { color: #667b73; font-size: 13px; }
 .style-panel label { display: grid; gap: 6px; margin-top: 14px; color: #365e52; font-size: 13px; font-weight: 600; }
@@ -2291,7 +2367,7 @@ function handleError(msg) {
   margin-bottom: 8px;
 }
 .node-order {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: #2f605a;
   background: #e8f5f0;
@@ -2304,7 +2380,7 @@ function handleError(msg) {
   color: #1e293b;
 }
 .node-badge {
-  font-size: 11px;
+  font-size: 12px;
   padding: 2px 8px;
   border-radius: 999px;
   font-weight: 600;
@@ -2366,7 +2442,7 @@ function handleError(msg) {
   margin-top: 8px;
 }
 .key-point-tag {
-  font-size: 11px;
+  font-size: 12px;
   background: #e8f5f0;
   color: #2f605a;
   padding: 2px 8px;
@@ -2472,7 +2548,7 @@ function handleError(msg) {
   border-radius: 999px;
   background: #24a36f;
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 @keyframes pageModified {
@@ -2508,7 +2584,7 @@ function handleError(msg) {
   gap: 8px;
 }
 .page-status-badge {
-  font-size: 11px;
+  font-size: 12px;
   padding: 2px 8px;
   border-radius: 999px;
   font-weight: 600;
@@ -2578,7 +2654,7 @@ function handleError(msg) {
   color: #1e293b;
 }
 .int-node-type {
-  font-size: 11px;
+  font-size: 12px;
   background: #e8f5f0;
   color: #2f605a;
   padding: 1px 6px;
@@ -2648,52 +2724,9 @@ function handleError(msg) {
   cursor: not-allowed;
 }
 
-/* 步骤导航 */
-.step-pills {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.pill {
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
-  color: #5f7467;
-  background: #f0f5f2;
-  border: 1px solid #e2ece6;
-  border-radius: 999px;
-  padding: 6px 14px;
-  text-decoration: none;
-  transition: all 0.15s;
-}
-.pill:hover {
-  border-color: #5ca68f;
-  color: #2f605a;
-}
-.pill.active {
-  color: #fff;
-  background: #2f605a;
-  border-color: #2f605a;
-}
-
-@media (max-width: 760px) {
-  .page-header {
-    flex-direction: column;
-  }
-  .gen-control-bar {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  .phase-tabs {
-    overflow-x: auto;
-  }
-}
-.pill.back-pill {
-  background: #e8f0ed;
-  border-color: #c6d9d0;
-  color: #3d6b60;
-}
-.pill.back-pill:hover {
-  background: #d6e8e0;
+/* 步骤导航已抽为公共组件 StepNav，流程条样式不再在此重复定义 */
+@media (max-width: 767px) {
+  .gen-control-bar { flex-direction: column; align-items: flex-start; }
+  .phase-tabs { overflow-x: auto; }
 }
 </style>

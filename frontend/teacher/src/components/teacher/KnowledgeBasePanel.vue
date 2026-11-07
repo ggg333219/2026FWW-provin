@@ -500,7 +500,7 @@ const handleBind = () => {
 
 .source-page {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   background: #f1f5f9;
   border-radius: 6px;
@@ -519,7 +519,7 @@ const handleBind = () => {
   align-items: center;
   gap: 4px;
   color: #2f605a;
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 

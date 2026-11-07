@@ -653,7 +653,7 @@ onMounted(() => {
 
 .type-tag {
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 12px;
   padding: 2px 8px;
   height: fit-content;
 }
