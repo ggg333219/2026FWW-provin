@@ -326,8 +326,8 @@ func runS1Standalone(mode string, preferredPort int, runtimeDir string, aiClient
 	}
 
 	// S4: 导出
-	exp := r.Group("/api/v1/export")
-	{
+	for _, prefix := range []string{"/api/v1/export", "/api/v1/exp"} {
+		exp := r.Group(prefix)
 		exp.POST("/:gen_id", exportHandler.Create)
 		exp.GET("/status/:job_id", exportHandler.Status)
 		exp.GET("/download/:job_id/:extension", exportHandler.Download)

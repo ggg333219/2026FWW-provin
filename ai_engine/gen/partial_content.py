@@ -254,11 +254,14 @@ def apply_page_revision(node: dict[str, Any], revision: Any,
             updated["key_points"] = [str(item).strip() for item in raw_points if str(item).strip()]
             updated["core_points"] = list(updated["key_points"])
 
-    new_summary = str(revision.get("summary") or "").strip()
+    new_content = str(revision.get("content") or "").strip()
+    new_summary = str(revision.get("summary") or new_content or "").strip()
     if new_summary:
         updated["summary"] = new_summary
         if str(node.get("content") or "").strip():
-            updated["content"] = new_summary
+            updated["content"] = new_content or new_summary
+    if new_content:
+        updated["content"] = new_content
 
     if "point_details" in revision:
         updated["point_details"] = revision.get("point_details") or []
@@ -332,7 +335,7 @@ def run_partial_pipeline(
     action_prompts = {
         "simplify": "请精简该节点的内容：减少冗余文字、保留核心知识点，使表述更简洁有力。",
         "expand": "请扩充该节点的内容：在保留现有要点的基础上增加更多细节、案例或讲解。",
-        "rewrite": "请重写该节点的讲稿内容：保持核心知识点不变，用更清晰的方式重新表述。",
+        "rewrite": "请重写该节点幻灯片上可见的正文：保持核心知识点不变，用更清晰的方式重新表述，并落实教师要求的例子。",
         "delete": "",  # delete 在上层处理（从列表移除），不进入重生成
         "add": "",  # add 在上层处理（追加新节点），不进入重生成
         "reorder": "",  # reorder 在上层处理（换位），不进入重生成
