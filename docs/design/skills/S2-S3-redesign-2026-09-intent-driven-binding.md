@@ -1,6 +1,8 @@
 # Skill 2 / Skill 3 重设计方案：意图驱动的自动绑定 + 页面级资料
 
 > 状态：**草稿 v0.2（用户回复了 §8 的 4 个问题后修订）** · 最后更新：2026-09-18
+> **实现状态（2026-11-08）**：本文是设计方案，不是当前行为说明。页面级绑定与整课件级
+> `evidence_packet` 目前**两者并存**，「新生成只填 PageEvidenceBinding」未完全落地。
 > 适用读者：成员 A（Go 后端）/ B（AI 引擎）/ C（前端）/ D（协调）
 > 与既有文档关系：**覆写** `docs/design/skills/S2-multimodal-interaction.md` 第 3 节主流程
 > 与既有文档关系：**扩展** `docs/design/skills/S3-courseware-generation.md` §2 三阶段管道（页面管理、互动资源保留为现有内容）
@@ -43,7 +45,7 @@ S1（意图）→ S2（资料上传 + 手工搜索 + 证据绑定）→ S3（生
 | 主流程必经步 | S1→S2→S3→S4 | S1→S3→S4（S2 路由删除，代码复用进 S3） |
 | S2 路由 | 独立页面 `S2MaterialPage.vue` | 删除路由入口；组件代码并入 S3 左栏 |
 | 资料上传入口 | 仅 S2 页面 | 仅 S3 左栏"按页面上传"（取消"按整课件上传"路径） |
-| 证据绑定粒度 | 整份课件（evidence_packet） | 单个 page（per-page binding） |
+| 证据绑定粒度 | 整份课件（evidence_packet） | 单个 page（per-page binding，设计目标；当前两者并存） |
 | 自动 vs 手动 | 全部手动 | 意图关键词 → S3 进入时自动绑定；局部补充 → 手动 |
 | 阶段切换 | 一锅烩七阶段 | 4 phase-tabs（大纲/内容/页面管理/样式），3 个确认门（大纲/内容/样式）硬阻塞 |
 
@@ -130,6 +132,9 @@ PageUploadSlot:                     # S3 阶段教师上传的"针对该页"的�
 - `evidence_refs` 元素必须是已有 `chunk_id`（沿用 `ai_engine/rag/chunker.py:364` 的 `_make_deterministic_chunk_id`），禁止重新发明 UUID
 - `auto_bound=true` 的 binding 在教师手动覆盖前是只读"建议"；教师可解绑或追加，教师优先原则记录在 `bound_by`
 - **页面级绑定与旧 `evidence_packet` 并行存在**：旧字段保留兼容旧课件，新生成只填 `PageEvidenceBinding`
+  - 状态订正（2026-11-08）：上句末段是 2026-09 的设计目标，并非当前实现。当前
+    `selectedEvidencePacket` 仍是整课件包，页面级通过 `page_bindings` / `citation_refs` /
+    `source_chunk_ids` 表达，且 `bindEvidenceToWholeDraft()` 会把整份 refs 刷到所有节点。
 
 #### 2.3.2 阶段确认门（硬阻塞）
 

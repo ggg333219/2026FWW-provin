@@ -31,7 +31,7 @@
 | **层隔离** | Agent Orchestrator (Go) 分发任务；Skill 逻辑在 AI Engine (Python) 中。Skill 间不直接调用 — 路由经 Orchestrator |
 | **默认异步** | 解析/生成/导出任务走 Redis 任务队列。API 立即返回 task_id，前端轮询状态 |
 | **工具复用** | 上传、文档解析、视频解析、OCR、索引是共享工具层模块，不在 Skill 内重复 |
-| **证据协议** | 每次生成调用接收结构化的 `evidence_packet`；每个生成输出携带 `citation_refs[]` |
+| **证据协议** | `/gen/create` 接收结构化的 `evidence_packet`；`/gen/content` 不接收（资料在 `generation_instruction_set.confirmed_evidence`，S4 局部修改走 `evidence_refs`）；每个生成输出携带 `citation_refs[]` |
 | **版本边界** | 版本模块在生成/预览/导出后调用 — Skill 产生内容，版本模块快照 |
 
 ## 3. Skill 间依赖关系
