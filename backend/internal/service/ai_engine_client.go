@@ -380,6 +380,22 @@ type IntentExtractResponse struct {
 	Engine         string         `json:"engine,omitempty"`
 	UsedFallback   bool           `json:"used_fallback"`
 	FallbackReason string         `json:"fallback_reason,omitempty"`
+	// Degraded —— used_fallback 的显式别名，Python 侧同时输出，用于统一降级口径。
+	// 不加 omitempty：Python 侧无条件输出该字段，网关也必须始终存在，
+	// 否则 false 会被整个键省略，下游读到的会是 undefined 而非 false。
+	Degraded bool `json:"degraded"`
+	// ModelSource —— 本次结果的真实来源（V04）。
+	// real_model=真实模型直出 / mock=未调用真实模型（mock 模式或未配置 API Key）
+	// / rule_fallback=模型失败已回退规则引擎 / rule_engine=规则引擎直接产出。
+	// 用于避免把 HTTP 200 等同于真实模型成功。
+	ModelSource string `json:"model_source,omitempty"`
+	// NormalizationNotes —— S1 真实模型输出的归一说明（F01，纯诊断信息）。
+	// 非空=存在类型/格式偏差且已逐字段修正；空=输出规整，或模型输出未被采用。
+	// 不能用它判断是否调用/采用模型 —— 干净的模型输出被采用时同样为空数组；
+	// 来源判定请用 ModelSource（配合 UsedFallback / FallbackReason）。
+	// 不加 omitempty：空数组也必须原样存在。否则下游读到 undefined，
+	// 更容易把"该字段没值"误当成"没用模型"——它本来就不是来源判据。
+	NormalizationNotes []string `json:"normalization_notes"`
 }
 
 type IntentConfirmRequest struct {
@@ -490,10 +506,11 @@ type RAGEvidenceResponse struct {
 }
 
 type KnowledgeUploadRequest struct {
-	SessionID       string   `json:"session_id"`
-	KnowledgeBaseID string   `json:"knowledge_base_id,omitempty"`
-	Files           []string `json:"files,omitempty"`
-	Texts           []string `json:"texts,omitempty"`
+	SessionID       string    `json:"session_id"`
+	KnowledgeBaseID string    `json:"knowledge_base_id,omitempty"`
+	Files           []string  `json:"files,omitempty"`
+	Texts           []string  `json:"texts,omitempty"`
+	ChunkIDs        *[]string `json:"chunk_ids,omitempty"`
 }
 
 type KnowledgeUploadResponse struct {

@@ -698,7 +698,7 @@ func normalizeOutlineFallbackReason(usedFallback bool, reason string) string {
 		return ""
 	}
 	switch strings.ToLower(strings.TrimSpace(reason)) {
-	case "timeout", "invalid_model_response", "empty_model_response", "model_error":
+	case "timeout", "invalid_model_response", "empty_model_response", "low_quality_model_response", "model_error":
 		return strings.ToLower(strings.TrimSpace(reason))
 	default:
 		return "model_error"

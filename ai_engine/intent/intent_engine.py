@@ -154,6 +154,20 @@ class LLMIntentEngine:
             disable_sdk_retries=True,
             stop_schema_fallback_on_error=True,
         )
+        # 本次调用是否**可能**来自真实模型（空串=可以）。
+        # 缺 API Key 或 mock 模式下 LLMClient 会静默返回桩数据，
+        # 若不记录这一点，上层会把"没调模型"误记成"模型输出无效"。
+        self.last_unavailable_reason: str = ""
+
+    def _detect_unavailable_reason(self) -> str:
+        """询问底层客户端"本次调用能否触达真实模型"，拿不到就当作可以。"""
+        getter = getattr(self.client, "unavailable_reason", None)
+        if not callable(getter):
+            return ""
+        try:
+            return str(getter() or "")
+        except Exception:  # 探测失败不应影响主流程
+            return ""
 
     def extract_intent(self, messages: List[Dict[str, Any]]) -> dict:
         # build a simple user prompt containing recent teacher messages
@@ -165,6 +179,7 @@ class LLMIntentEngine:
                 teacher_texts.append(content or "")
         user_prompt = "\n".join(teacher_texts) or "教师未提供内容。"
 
+        self.last_unavailable_reason = self._detect_unavailable_reason()
         try:
             result = self.client.chat_json(system=self.SYSTEM_PROMPT, user=user_prompt, schema=self.JSON_SCHEMA)
             if isinstance(result, dict):

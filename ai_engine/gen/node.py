@@ -394,6 +394,22 @@ class NodeGenerator:
                 )
             result = self._get_llm(max_attempts).chat_json(system_prompt, user_prompt,
                                                            temperature=self.config.temperature)
+            if revise_slide and "正文" in extra_instruction:
+                def changed_body(value):
+                    body = str(value.get("content") or value.get("summary") or "").strip()
+                    return bool(body) and body not in {
+                        str(node.get("content") or "").strip(),
+                        str(node.get("summary") or "").strip(),
+                    }
+                if not changed_body(result):
+                    result = self._get_llm(max_attempts).chat_json(
+                        system_prompt,
+                        user_prompt + "\n上次输出未改写正文。必须在 summary 字段返回修改后的幻灯片正文，"
+                        "同时满足教师的其他修改要求；不能只改 script/segments。",
+                        temperature=self.config.temperature,
+                    )
+                if not changed_body(result):
+                    raise ValueError("模型未返回修改后的正文")
             segments = _normalize_single_segments(result.get("segments"), node_id)
             script = self._clean_text(result.get("script"))
             if not script and segments:
@@ -417,6 +433,7 @@ class NodeGenerator:
                 # 只在局部修改路径上多带这一个键：新建/批量路径的返回形状保持不变。
                 # 空串不写回（由 partial_content 按「有值才覆盖」处理）。
                 output["summary"] = self._clean_text(result.get("summary"))
+                output["content"] = self._clean_text(result.get("content"))
                 node_kind = str(node.get("node_type") or node.get("type") or "content").strip().lower()
                 if node_kind in {"cover", "title", "title_slide", "agenda", "toc", "directory", "summary", "conclusion", "recap", "目录"}:
                     output["title"] = self._clean_text(result.get("title")) or title
@@ -425,6 +442,8 @@ class NodeGenerator:
                         output["key_points"] = result.get("key_points")
             return output
         except Exception:
+            if revise_slide:
+                raise
             return fallback
 
     # ── 批量生成 ──

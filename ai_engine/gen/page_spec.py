@@ -254,7 +254,8 @@ def body_paragraphs(node: dict[str, Any]) -> list[str]:
             paragraphs.append(value.strip())
         elif isinstance(value, list):
             paragraphs.extend(str(v).strip() for v in value if str(v).strip())
-    return paragraphs
+    # 局部修改会同步 content/summary；同一段正文只呈现一次。
+    return list(dict.fromkeys(paragraphs))
 
 
 def normalize_segments(node: dict[str, Any]) -> list[dict]:

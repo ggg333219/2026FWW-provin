@@ -20,7 +20,7 @@ import { requestJson } from './request'
  *   POST   /coursewares/:id/rollback       回滚（A7，克隆式）
  *   GET    /coursewares/:id/latest-generation-context 权威读端点（契约 v1.0 §3.2）
  */
-const MODIFY_LLM_TIMEOUT_MS = 240000 // 意图解析与局部任务轮询共用一次请求
+const MODIFY_LLM_TIMEOUT_MS = 240000 // 意图解析与任务启动；结果通过状态接口独立查询
 
 export const projectModifyApi = {
   /** 新建课件项目 */
@@ -84,6 +84,11 @@ export const projectModifyApi = {
       headers: { 'Content-Type': 'application/json' },
       timeoutMs: MODIFY_LLM_TIMEOUT_MS,
       body: JSON.stringify({ instruction, nodes, confirmed, active_node_id: activeNodeId || '' }),
+    }),
+
+  modifyTask: (project_id, task_id) =>
+    requestJson(`/api/v1/coursewares/${encodeURIComponent(project_id)}/modify-tasks/${encodeURIComponent(task_id)}`, {
+      method: 'GET',
     }),
 
   /** 修改记录列表 */

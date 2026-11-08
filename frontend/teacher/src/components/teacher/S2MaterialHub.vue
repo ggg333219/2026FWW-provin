@@ -228,6 +228,12 @@ const handleFiles = async (fileList) => {
   const files = Array.from(fileList || [])
   if (files.length === 0) return
   uploadError.value = ''
+  materialStore.setError('')
+  for (const task of materialStore.parseTasks) {
+    if (task.status === 'failed' && files.some((file) => file.name === task.fileName)) {
+      materialStore.removeParseTask(task.taskId)
+    }
+  }
   materialStore.setUploading(true)
   // 多文件并行上传：单个失败不阻塞其余文件
   const results = await Promise.allSettled(files.map(uploadOne))
@@ -242,9 +248,10 @@ const handleFiles = async (fileList) => {
 
 /** 单个文件：先 multipart 上传，再创建解析任务并轮询 */
 async function uploadOne(file) {
+  const placeholderId = `placeholder_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  const taskId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
   try {
     // 步骤0：立即添加本地占位素材，让用户立即看到上传中状态
-    const placeholderId = `placeholder_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
     const placeholderMaterial = {
       id: placeholderId,
       sessionId: props.sessionId,
@@ -261,7 +268,6 @@ async function uploadOne(file) {
     materialStore.addMaterial(placeholderMaterial)
     materialStore.selectMaterial(placeholderId)
 
-    const taskId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
     materialStore.addParseTask({
       taskId,
       fileName: file.name,
@@ -319,14 +325,18 @@ async function uploadOne(file) {
       filePaths: [pathHint],
       fileContents: fileText ? { [pathHint]: fileText } : undefined
     })
-    const realTaskId = parseResp?.data?.task_id || taskId
+    const realTaskId = parseResp?.data?.task_id
+    if (!realTaskId) throw new Error('解析任务创建响应缺少 task_id')
     materialStore.updateParseTask(taskId, { taskId: realTaskId })
 
     // 步骤3：轮询解析状态
     pollParseTask(realTaskId, file.name, placeholderId)
     emit('task-finished', { taskId: realTaskId, fileName: file.name })
   } catch (err) {
-    materialStore.setError(String(err?.message || err))
+    const message = String(err?.message || err)
+    materialStore.updateParseTask(taskId, { status: 'failed', error: message })
+    materialStore.removeMaterial(placeholderId)
+    materialStore.setError(message)
     emit('toast', `上传失败：${err?.message || err}`)
     throw err
   }
@@ -424,6 +434,8 @@ function normalizeChunk(c, materialId) {
   return {
     ...c,
     chunkId: c.chunkId || c.chunk_id,
+    // 只有解析状态接口返回的切片能在 Python 的 session 登记表中按 ID 找回。
+    sessionRegistered: true,
     materialId: c.materialId || materialId,
     content: c.content || '',
     sourceType,

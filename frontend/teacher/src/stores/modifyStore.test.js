@@ -19,6 +19,34 @@ beforeEach(() => {
 })
 
 describe('modifyStore C6/C7 对话迭代', () => {
+  it('后台修改完成后才更新节点和版本', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(projectModifyApi, 'modify').mockResolvedValue({ data: {
+        task_id: 'mod_1', status: 'processing', intent: { action: 'rewrite', target_ids: ['node_2'] },
+      } })
+      vi.spyOn(projectModifyApi, 'modifyTask').mockResolvedValue({ data: {
+        task_id: 'mod_1', status: 'done', intent: { action: 'rewrite', target_ids: ['node_2'] },
+        modified_nodes: [{ node_id: 'node_2', title: '新正文' }],
+        all_nodes: [{ node_id: 'node_2', title: '新正文' }], new_version_no: 2,
+      } })
+      vi.spyOn(projectModifyApi, 'versions').mockResolvedValue({ data: { items: [{ version_no: 2 }] } })
+      vi.spyOn(projectModifyApi, 'upsertAIMessages').mockResolvedValue({ data: {} })
+      const store = useModifyStore()
+      store.bindProject('project_1')
+      store.inputText = '重写第二页'
+      const applied = vi.fn()
+      const pending = store.sendModify([], applied)
+      await vi.advanceTimersByTimeAsync(2000)
+      await pending
+      expect(projectModifyApi.modifyTask).toHaveBeenCalledWith('project_1', 'mod_1')
+      expect(applied).toHaveBeenCalledTimes(1)
+      expect(store.currentVersionNo).toBe(2)
+      expect(store.pendingTaskId).toBe('')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
   it('把教师对追问的回答与原指令合并后再次解析', async () => {
     const modify = vi.spyOn(projectModifyApi, 'modify')
       .mockResolvedValueOnce({ data: { clarification: '要修改哪一页？', intent: { action: 'simplify' } } })
@@ -86,6 +114,30 @@ describe('modifyStore C6/C7 对话迭代', () => {
     store.setActiveNode('node_2')
     store.bindProject('project_2')
     expect(store.activeNodeId).toBe('')
+  })
+
+  it('恢复同一课件时保留选中页，历史节点变化后清除失效选中页', () => {
+    const store = useModifyStore()
+    store.bindProject('project_1')
+    store.setActiveNode('node_2')
+
+    store.bindProject('project_1')
+    expect(store.activeNodeId).toBe('node_2')
+
+    store.syncActiveNode(['node_1', 'node_3'])
+    expect(store.activeNodeId).toBe('')
+  })
+
+  it('恢复课件时清除没有对应追问消息的旧 pendingClarification', async () => {
+    vi.spyOn(projectModifyApi, 'latestGenerationContext').mockResolvedValue({ data: { version_no: 1 } })
+    vi.spyOn(projectModifyApi, 'listAIMessages').mockResolvedValue({ data: { messages: [] } })
+    const store = useModifyStore()
+    store.bindProject('project_1')
+    store.pendingClarification = { originalInstruction: '旧指令', question: '请选择元素' }
+
+    await store.loadLatestContext('project_1')
+
+    expect(store.pendingClarification).toBeNull()
   })
 
   it('限制超长输入并支持失败后重新填写', async () => {

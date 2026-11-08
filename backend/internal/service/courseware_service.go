@@ -427,7 +427,7 @@ func AutoMigrateCourseware(db *gorm.DB) error {
 	// schema uses a UUID id primary key. Do not let the legacy A6/A7 row model
 	// rewrite that table; only create the version/draft/binding tables here.
 	// coursewarePageBindingRow is added by 模块 1（契约 v1.0 页面级资料绑定）。
-	return db.AutoMigrate(&coursewareVersionRow{}, &coursewareDraftRow{}, &coursewarePageBindingRow{}, &coursewareAIMessageRow{})
+	return db.AutoMigrate(&coursewareVersionRow{}, &coursewareDraftRow{}, &coursewarePageBindingRow{}, &coursewareAIMessageRow{}, &coursewareModifyTaskRow{})
 }
 
 // ---- A1 最小基础 ----
@@ -634,6 +634,9 @@ func (s *CoursewareService) targetEvidenceRefs(ctx context.Context, projectID st
 
 // ModifyResult —— modify 响应。
 type ModifyResult struct {
+	TaskID               string             `json:"task_id,omitempty"`
+	Status               string             `json:"status,omitempty"`
+	Error                string             `json:"error,omitempty"`
 	ModifiedNodes        []TeachingNodeItem `json:"modified_nodes"`
 	AllNodes             []TeachingNodeItem `json:"all_nodes"`
 	Intent               ModifyIntent       `json:"intent"`
@@ -656,9 +659,19 @@ func (s *CoursewareService) Modify(ctx context.Context, projectID, instruction s
 // ModifyWithOptions adds the explicit confirmation boundary required for
 // destructive, media, structural, and batch element operations.
 func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, instruction string, nodes []TeachingNodeItem, confirmed bool, activeNodeID ...string) (*ModifyResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("局部修改已取消: %w", err)
+	}
 	project, err := s.store.GetProject(ctx, projectID)
 	if err != nil {
 		return nil, err
+	}
+	pending, err := s.taskStore().PendingModifyTasks(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if len(pending) > 0 {
+		return nil, fmt.Errorf("当前课件已有局部修改任务，请等待完成")
 	}
 	if strings.TrimSpace(instruction) == "" {
 		return nil, fmt.Errorf("instruction 不能为空")
@@ -731,18 +744,24 @@ func (s *CoursewareService) ModifyWithOptions(ctx context.Context, projectID, in
 				CourseName:        project.Title,
 				TargetNodeIDs:     intent.TargetIDs,
 				ModifyAction:      intent.Action,
-				ModifyConstraints: intent.Constraints,
+				ModifyConstraints: append(append([]string(nil), intent.Constraints...), instruction),
 				EvidenceRefs:      s.targetEvidenceRefs(ctx, projectID, intent.TargetIDs),
 			})
 			if err != nil {
 				return nil, fmt.Errorf("局部重生成失败: %w", err)
+			}
+			if resp != nil && resp.ContentID != "" && len(resp.Nodes) == 0 {
+				return s.startModifyTask(ctx, projectID, instruction, nodes, intent, resp)
 			}
 			partial, err := s.waitContentResult(ctx, resp)
 			if err != nil {
 				return nil, fmt.Errorf("局部重生成失败: %w", err)
 			}
 			updatedNodes = mergePartialResult(updatedNodes, partial, intent.TargetIDs)
-			if intent.Action == "expand" && !hasVisibleTargetChange(nodes, updatedNodes, intent.TargetIDs) {
+			if strings.Contains(instruction, "正文") && !hasBodyTargetChange(nodes, updatedNodes, intent.TargetIDs) {
+				return nil, fmt.Errorf("AI 未改写目标页面正文，请重试")
+			}
+			if (intent.Action == "expand" || strings.Contains(instruction, "正文")) && !hasVisibleTargetChange(nodes, updatedNodes, intent.TargetIDs) {
 				return nil, fmt.Errorf("AI 引擎没有生成可见的课件内容，请重试或明确指定要添加的内容")
 			}
 			modifiedIDs = intent.TargetIDs
@@ -858,6 +877,21 @@ func hasVisibleTargetChange(before, after []TeachingNodeItem, targetIDs []string
 			!reflect.DeepEqual(node.KeyPoints, previous.KeyPoints) || !reflect.DeepEqual(node.PointDetails, previous.PointDetails) ||
 			!reflect.DeepEqual(node.Questions, previous.Questions) {
 			return true
+		}
+	}
+	return false
+}
+
+func hasBodyTargetChange(before, after []TeachingNodeItem, targetIDs []string) bool {
+	old := make(map[string]TeachingNodeItem, len(before))
+	for _, n := range before {
+		old[n.NodeID] = n
+	}
+	for _, id := range targetIDs {
+		for _, n := range after {
+			if n.NodeID == id && (n.Content != old[id].Content || n.Summary != old[id].Summary) {
+				return true
+			}
 		}
 	}
 	return false
@@ -1542,10 +1576,11 @@ func (s *CoursewareService) GetVersionByID(ctx context.Context, projectID, versi
 // =============================================================================
 
 type memCoursewareStore struct {
-	mu       sync.RWMutex
-	projects map[string]*CoursewareProject
-	drafts   map[string]string
-	versions map[string][]*CoursewareVersion // project_id → 按 version_no 升序
+	mu          sync.RWMutex
+	modifyTasks map[string]*coursewareModifyTaskRow
+	projects    map[string]*CoursewareProject
+	drafts      map[string]string
+	versions    map[string][]*CoursewareVersion // project_id → 按 version_no 升序
 	// pageBindings[project_id][page_id] → PageEvidenceBinding
 	pageBindings map[string]map[string]PageEvidenceBinding
 	// aiMessages[project_id][message_id] → AIMessageItem（按 created_at 升序）
@@ -1554,6 +1589,7 @@ type memCoursewareStore struct {
 
 func newMemCoursewareStore() *memCoursewareStore {
 	return &memCoursewareStore{
+		modifyTasks:  make(map[string]*coursewareModifyTaskRow),
 		projects:     make(map[string]*CoursewareProject),
 		drafts:       make(map[string]string),
 		versions:     make(map[string][]*CoursewareVersion),

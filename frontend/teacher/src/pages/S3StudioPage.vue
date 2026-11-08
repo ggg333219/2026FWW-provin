@@ -906,6 +906,7 @@ onMounted(async () => {
             page_order: Number(node.page_order || node.order || index + 1),
             status: node.status || "completed",
           }));
+          modifyStore.syncActiveNode(restoredNodes.map((node) => node.node_id));
           restoredGenerationNodes = restoredNodes.length > 0;
           if (restoredGenerationNodes) currentPhase.value = "pages";
         }
@@ -1330,6 +1331,7 @@ async function handleModifyApplied({ allNodes = [] } = {}) {
       outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
       { genId: "" },
     );
+    if (generationStore.previewHtml) currentPhase.value = "generating";
   }
   await projectStore.saveNow(draftSnapshot());
 }

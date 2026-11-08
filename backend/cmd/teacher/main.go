@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -156,6 +157,9 @@ func main() {
 		)
 	}
 	coursewareService := service.NewCoursewareServiceWithDB(aiClient, db)
+	if err := coursewareService.ResumeModifyTasks(context.Background()); err != nil {
+		applogger.Error("恢复课件局部修改任务失败", zap.Error(err))
+	}
 	// 把 coursewareService 透传给 genHandler：让 POST /api/v1/gen/modify 在
 	// AI Engine 返回后能把（请求 + 响应）作为 CoursewareVersion 快照落库，
 	// 同时把 evidence_refs 回写到 page_bindings（契约 v1.0 §1.1 + §3.2）。
@@ -326,8 +330,8 @@ func runS1Standalone(mode string, preferredPort int, runtimeDir string, aiClient
 	}
 
 	// S4: 导出
-	exp := r.Group("/api/v1/export")
-	{
+	for _, prefix := range []string{"/api/v1/export", "/api/v1/exp"} {
+		exp := r.Group(prefix)
 		exp.POST("/:gen_id", exportHandler.Create)
 		exp.GET("/status/:job_id", exportHandler.Status)
 		exp.GET("/download/:job_id/:extension", exportHandler.Download)

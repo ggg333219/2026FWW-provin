@@ -254,11 +254,14 @@ def apply_page_revision(node: dict[str, Any], revision: Any,
             updated["key_points"] = [str(item).strip() for item in raw_points if str(item).strip()]
             updated["core_points"] = list(updated["key_points"])
 
-    new_summary = str(revision.get("summary") or "").strip()
+    new_content = str(revision.get("content") or "").strip()
+    new_summary = str(revision.get("summary") or new_content or "").strip()
     if new_summary:
         updated["summary"] = new_summary
         if str(node.get("content") or "").strip():
-            updated["content"] = new_summary
+            updated["content"] = new_content or new_summary
+    if new_content:
+        updated["content"] = new_content
 
     if "point_details" in revision:
         updated["point_details"] = revision.get("point_details") or []
@@ -332,7 +335,7 @@ def run_partial_pipeline(
     action_prompts = {
         "simplify": "请精简该节点的内容：减少冗余文字、保留核心知识点，使表述更简洁有力。",
         "expand": "请扩充该节点的内容：在保留现有要点的基础上增加更多细节、案例或讲解。",
-        "rewrite": "请重写该节点的讲稿内容：保持核心知识点不变，用更清晰的方式重新表述。",
+        "rewrite": "请重写该节点幻灯片上可见的正文：保持核心知识点不变，用更清晰的方式重新表述，并落实教师要求的例子。",
         "delete": "",  # delete 在上层处理（从列表移除），不进入重生成
         "add": "",  # add 在上层处理（追加新节点），不进入重生成
         "reorder": "",  # reorder 在上层处理（换位），不进入重生成
@@ -390,15 +393,10 @@ def run_partial_pipeline(
                 if _revision_has_content(new_script):
                     updated.append(apply_page_revision(node, new_script, evidence_ids))
                 else:
-                    # 模型什么都没给（既没讲稿也没正文/要点）。保留原内容，
-                    # 但要留下痕迹 —— 这条日志对应老师看到的「改了看不见」。
-                    logger.warning(
-                        "[partial] 节点 %s 重生成结果为空，保留原内容", node_id
-                    )
-                    updated.append(node)
+                    raise ValueError(f"节点 {node_id} 局部重生成结果为空")
             except Exception as exc:
-                logger.warning("[partial] 节点 %s 重生成失败: %s", node_id, exc)
-                updated.append(node)  # 失败时保留原内容
+                logger.exception("[partial] 节点 %s 重生成失败", node_id)
+                raise RuntimeError(f"节点 {node_id} 局部重生成失败") from exc
         else:
             # 非目标节点：原样保留，内容与引用关系不变
             updated.append(node)

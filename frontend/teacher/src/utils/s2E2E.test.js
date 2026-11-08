@@ -118,6 +118,37 @@ describe('S2 前端链路（mock）', () => {
     expect(sentTexts[204]).toBe(longText)
   })
 
+  it('S2 切片按 ID 索引；勾选只影响预览，删除会缩小下次索引范围', async () => {
+    const store = useMaterialStore()
+    store.materials = [
+      { id: 'parsed-a', chunks: [{ chunkId: 'chunk_a', content: 'A', sessionRegistered: true }] },
+      { id: 'parsed-b', chunks: [{ chunkId: 'chunk_b', content: 'B', sessionRegistered: true }] },
+      { id: 'old-page', chunks: [{ chunkId: 'page_old', content: '旧课件页' }] }
+    ]
+    store.selectedMaterials = ['parsed-a']
+    const upload = vi.spyOn(teacherV1Api.rag, 'knowledgeUpload').mockResolvedValue({
+      data: { status: 'done', chunk_count: 3 }
+    })
+
+    await store.indexKnowledgeBase({ sessionId: 'session-f04' })
+    expect(upload.mock.calls[0][0]).toEqual({
+      sessionId: 'session-f04',
+      files: [],
+      texts: ['旧课件页'],
+      chunkIds: ['chunk_a', 'chunk_b']
+    })
+
+    store.removeMaterial('parsed-b')
+    await store.indexKnowledgeBase({ sessionId: 'session-f04' })
+    expect(upload.mock.calls[1][0].chunkIds).toEqual(['chunk_a'])
+
+    store.removeMaterial('parsed-a')
+    store.removeMaterial('old-page')
+    await store.indexKnowledgeBase({ sessionId: 'session-f04' })
+    expect(upload.mock.calls[2][0].chunkIds).toEqual([])
+    expect(upload.mock.calls[2][0].texts).toEqual([])
+  })
+
   it('证据融合生成 evidence_packet 并入 store', async () => {
     const store = useMaterialStore()
     await store.loadMaterials()

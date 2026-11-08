@@ -249,6 +249,20 @@ func (h *CoursewareHandler) Modify(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": result})
 }
 
+// ModifyTask returns the durable result of an asynchronous S4 revision.
+func (h *CoursewareHandler) ModifyTask(c *gin.Context) {
+	projectID := c.Param("project_id")
+	if !h.requireOwner(c, projectID) {
+		return
+	}
+	result, err := h.svc.ModifyTaskStatus(c.Request.Context(), projectID, c.Param("task_id"))
+	if err != nil {
+		h.mapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "data": result})
+}
+
 // ModifyHistory GET /:project_id/modify-history —— 修改记录列表。
 func (h *CoursewareHandler) ModifyHistory(c *gin.Context) {
 	projectID := c.Param("project_id")
