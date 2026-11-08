@@ -2,7 +2,7 @@
 // 通过 stub window.localStorage + 抛错的 fetch 强制走 mock 回退路径
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { useMaterialStore } from '../stores/materialStore'
+import { useMaterialStore, isEvidencePacketUsable } from '../stores/materialStore'
 import { teacherV1Api } from '../services/v1'
 import { handleMockRequest } from '../services/v1/mockBackend'
 import { requestJson } from '../services/v1/request'
@@ -161,13 +161,20 @@ describe('S2 前端链路（mock）', () => {
   it('证据融合将教师确认的切片 ID 传给后端', async () => {
     const store = useMaterialStore()
     const evidence = vi.spyOn(teacherV1Api.rag, 'evidence').mockResolvedValueOnce({
-      data: { evidence_packet: { relevant_chunks: [{ chunk_id: 'chosen' }], synthesized_context: '依据', citations: [] } }
+      data: { evidence_packet: { relevant_chunks: [{ chunk_id: 'chosen', content: '已选资料内容' }], synthesized_context: '依据', citations: [] } }
     })
 
     const packet = await store.generateEvidence({ query: '排序', selectedChunkIds: ['chosen'] })
 
     expect(packet).toBeTruthy()
     expect(evidence).toHaveBeenCalledWith(expect.objectContaining({ selectedChunkIds: ['chosen'] }))
+  })
+
+  it('只有来源 ID 而没有原文的包不能触发大纲生成', () => {
+    expect(isEvidencePacketUsable({ relevant_chunks: [{ chunk_id: 'c1' }], citations: [] })).toBe(false)
+    expect(isEvidencePacketUsable({ relevant_chunks: [], citations: [
+      { chunk_id: 'c1', text_snippet: '快速排序以枢轴划分序列' },
+    ] })).toBe(true)
   })
 
   it('空证据包不会被当作成功结果持久化', async () => {

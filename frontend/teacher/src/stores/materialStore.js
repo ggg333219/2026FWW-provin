@@ -7,9 +7,12 @@ export const isEvidencePacketUsable = (packet) => {
   if (!packet || typeof packet !== 'object' || Array.isArray(packet)) return false
   const chunks = Array.isArray(packet.relevant_chunks) ? packet.relevant_chunks : []
   const citations = Array.isArray(packet.citations) ? packet.citations : []
-  // Evidence must be traceable. A synthesized sentence without any source
-  // chunk/citation is only a fallback message, not a usable evidence packet.
-  return chunks.length > 0 || citations.length > 0
+  // An ID alone cannot be fused into an outline. Require source text as well
+  // as a traceable reference before releasing the initial outline gate.
+  const hasTextAndSource = (item, text) =>
+    Boolean(String(text || '').trim() && String(item?.chunk_id || item?.source_ref || '').trim())
+  return chunks.some((item) => hasTextAndSource(item, item?.content))
+    || citations.some((item) => hasTextAndSource(item, item?.text_snippet))
 }
 
 const evidenceHandoffKey = (scopeId = '') => scopeId ? `${EVIDENCE_HANDOFF_KEY}:${scopeId}` : EVIDENCE_HANDOFF_KEY

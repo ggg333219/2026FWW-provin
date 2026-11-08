@@ -25,6 +25,12 @@ export function evidenceIds(packet) {
   return [...new Set(values)]
 }
 
+/** A new outline waits for traceable evidence unless intent-only was chosen. */
+export function shouldRequireOutlineEvidence({ generationMode, isVersionFork, outlineId, nodeCount }) {
+  return generationMode !== 'without_evidence'
+    && !isVersionFork && !outlineId && nodeCount === 0
+}
+
 /** 识别旧版空 Markdown 生成的单节点占位大纲，避免其跨项目缓存后继续复用。 */
 export function isPlaceholderOutline(nodes = []) {
   if (!Array.isArray(nodes) || nodes.length !== 1) return false
