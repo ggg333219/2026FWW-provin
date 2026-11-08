@@ -197,10 +197,19 @@ def test_slide_only_revision_reaches_the_slide() -> None:
     assert updated[1]["script"] == _NODE["script"]
 
 
-def test_empty_revision_keeps_the_page_intact() -> None:
+def test_empty_revision_fails_without_replacing_the_page() -> None:
     gen = _SlideAwareGenerator({})
-    updated = _run(gen)
-    assert updated[0] == _NODE
+    with pytest.raises(RuntimeError, match="局部重生成失败"):
+        _run(gen)
+
+
+def test_model_error_is_not_silently_reported_as_success() -> None:
+    class _FailingGenerator:
+        def generate_single(self, node, **kwargs):
+            raise TimeoutError("model timeout")
+
+    with pytest.raises(RuntimeError, match="局部重生成失败"):
+        _run(_FailingGenerator())
 
 
 def test_generator_with_var_keyword_is_treated_as_slide_aware() -> None:
@@ -225,6 +234,17 @@ class _CapturingLLM:
         self.system_prompts.append(system_prompt)
         self.user_prompts.append(user_prompt)
         return self.payload
+
+
+def test_slide_revision_propagates_model_error_but_s3_keeps_fallback() -> None:
+    class _BrokenLLM:
+        def chat_json(self, *args, **kwargs):
+            raise TimeoutError("model timeout")
+
+    generator = NodeGenerator(llm_client=_BrokenLLM())
+    with pytest.raises(TimeoutError, match="model timeout"):
+        generator.generate_single(_NODE, "排序算法", revise_slide=True)
+    assert generator.generate_single(_NODE, "排序算法")["node_id"] == "node_2"
 
 
 def test_revise_slide_prompt_states_the_page_contract() -> None:

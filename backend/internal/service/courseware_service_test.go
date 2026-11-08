@@ -59,6 +59,7 @@ func (f *fakeModifyAI) ContentStatus(_ context.Context, _ string) (*GenContentSt
 }
 
 func TestModifyWaitsForGeneratedNodes(t *testing.T) {
+	shrinkContentPolling(t, time.Millisecond, time.Second)
 	ai := &fakeModifyAI{
 		intent:     &ModifyIntent{TargetType: "node", TargetIDs: []string{"node_2"}, Action: "expand", Confidence: 0.9},
 		genResp:    &GenContentStatusResponse{ContentID: "content_1", Status: "generating"},
@@ -70,12 +71,14 @@ func TestModifyWaitsForGeneratedNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Modify: %v", err)
 	}
+	result = awaitModifyTask(t, svc, p.ProjectID, result.TaskID)
 	if ai.statusCalls != 1 || result.AllNodes[1].Summary != "新增生活案例" {
 		t.Fatalf("应等待完成并应用结果: calls=%d node=%+v", ai.statusCalls, result.AllNodes[1])
 	}
 }
 
 func TestModifyDoesNotSaveEmptyOrFailedGeneration(t *testing.T) {
+	shrinkContentPolling(t, time.Millisecond, time.Second)
 	for _, status := range []string{"done", "failed"} {
 		t.Run(status, func(t *testing.T) {
 			ai := &fakeModifyAI{
@@ -85,8 +88,13 @@ func TestModifyDoesNotSaveEmptyOrFailedGeneration(t *testing.T) {
 			}
 			svc := newCoursewareTestSvc(ai)
 			p := mustCreateProject(t, svc)
-			if _, err := svc.Modify(context.Background(), p.ProjectID, "第二页增加案例", sampleTeachingNodes()); err == nil {
-				t.Fatal("空结果或失败应返回错误")
+			result, err := svc.Modify(context.Background(), p.ProjectID, "第二页增加案例", sampleTeachingNodes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			result = awaitModifyTask(t, svc, p.ProjectID, result.TaskID)
+			if result.Status != "failed" {
+				t.Fatalf("应失败: %+v", result)
 			}
 			versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
 			if len(versions) != 0 {
@@ -600,8 +608,30 @@ func TestContractVersionSnapshotAndRollbackByID(t *testing.T) {
 func shrinkContentPolling(t *testing.T, interval, budget time.Duration) {
 	t.Helper()
 	prevInterval, prevBudget := contentPollInterval, contentPollBudget
+	prevTaskInterval, prevTaskBudget := modifyTaskPollInterval, modifyTaskBudget
 	contentPollInterval, contentPollBudget = interval, budget
-	t.Cleanup(func() { contentPollInterval, contentPollBudget = prevInterval, prevBudget })
+	modifyTaskPollInterval, modifyTaskBudget = interval, budget
+	t.Cleanup(func() {
+		contentPollInterval, contentPollBudget = prevInterval, prevBudget
+		modifyTaskPollInterval, modifyTaskBudget = prevTaskInterval, prevTaskBudget
+	})
+}
+
+func awaitModifyTask(t *testing.T, svc *CoursewareService, projectID, taskID string) *ModifyResult {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err := svc.ModifyTaskStatus(context.Background(), projectID, taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status == "done" || result.Status == "failed" {
+			return result
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("task did not settle")
+	return nil
 }
 
 func asyncIntent(action string) *ModifyIntent {
@@ -640,6 +670,7 @@ func TestModifyWaitsForAsyncContentTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Modify: %v", err)
 	}
+	result = awaitModifyTask(t, svc, p.ProjectID, result.TaskID)
 	if got := result.AllNodes[1].Script; got != "精简后的讲稿" {
 		t.Fatalf("异步结果没被取回，讲稿仍是旧的: %q", got)
 	}
@@ -672,12 +703,13 @@ func TestModifyErrorsWhenTaskFinishesWithoutNodes(t *testing.T) {
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc)
 
-	_, err := svc.Modify(context.Background(), p.ProjectID, "重写第二页", sampleTeachingNodes(), "")
-	if err == nil {
-		t.Fatal("任务完成但无节点时必须报错")
+	started, err := svc.Modify(context.Background(), p.ProjectID, "重写第二页", sampleTeachingNodes(), "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "3 个节点生成失败") {
-		t.Fatalf("错误应带上引擎给的原因, 实际 %v", err)
+	result := awaitModifyTask(t, svc, p.ProjectID, started.TaskID)
+	if result.Status != "failed" || !strings.Contains(result.Error, "3 个节点生成失败") {
+		t.Fatalf("应透传引擎错误: %+v", result)
 	}
 	versions, _ := svc.ModifyHistory(context.Background(), p.ProjectID)
 	if len(versions) != 0 {
@@ -697,9 +729,13 @@ func TestModifyPropagatesEngineFailure(t *testing.T) {
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc)
 
-	_, err := svc.Modify(context.Background(), p.ProjectID, "第二页展开", sampleTeachingNodes(), "")
-	if err == nil || !strings.Contains(err.Error(), "模型调用超时") {
-		t.Fatalf("应透传引擎失败原因, 实际 %v", err)
+	started, err := svc.Modify(context.Background(), p.ProjectID, "第二页展开", sampleTeachingNodes(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := awaitModifyTask(t, svc, p.ProjectID, started.TaskID)
+	if result.Status != "failed" || !strings.Contains(result.Error, "模型调用超时") {
+		t.Fatalf("应透传引擎失败原因: %+v", result)
 	}
 }
 
@@ -746,6 +782,7 @@ func TestModifyToleratesTransientStatusErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("抖动不应导致整体失败: %v", err)
 	}
+	result = awaitModifyTask(t, svc, p.ProjectID, result.TaskID)
 	if result.AllNodes[1].Script != "抖完之后的讲稿" {
 		t.Fatalf("抖动恢复后应取回结果, 实际 %q", result.AllNodes[1].Script)
 	}
@@ -764,9 +801,13 @@ func TestModifyTimesOutWhenTaskNeverFinishes(t *testing.T) {
 	svc := newCoursewareTestSvc(ai)
 	p := mustCreateProject(t, svc)
 
-	_, err := svc.Modify(context.Background(), p.ProjectID, "第二页精简", sampleTeachingNodes(), "")
-	if err == nil || !strings.Contains(err.Error(), "超时") {
-		t.Fatalf("应报超时, 实际 %v", err)
+	started, err := svc.Modify(context.Background(), p.ProjectID, "第二页精简", sampleTeachingNodes(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := awaitModifyTask(t, svc, p.ProjectID, started.TaskID)
+	if result.Status != "failed" || !strings.Contains(result.Error, "超过任务处理期限") {
+		t.Fatalf("应在后台标记超时: %+v", result)
 	}
 }
 

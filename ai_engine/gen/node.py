@@ -442,6 +442,8 @@ class NodeGenerator:
                         output["key_points"] = result.get("key_points")
             return output
         except Exception:
+            if revise_slide:
+                raise
             return fallback
 
     # ── 批量生成 ──

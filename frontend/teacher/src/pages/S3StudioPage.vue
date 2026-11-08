@@ -906,6 +906,7 @@ onMounted(async () => {
             page_order: Number(node.page_order || node.order || index + 1),
             status: node.status || "completed",
           }));
+          modifyStore.syncActiveNode(restoredNodes.map((node) => node.node_id));
           restoredGenerationNodes = restoredNodes.length > 0;
           if (restoredGenerationNodes) currentPhase.value = "pages";
         }

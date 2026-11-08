@@ -393,15 +393,10 @@ def run_partial_pipeline(
                 if _revision_has_content(new_script):
                     updated.append(apply_page_revision(node, new_script, evidence_ids))
                 else:
-                    # 模型什么都没给（既没讲稿也没正文/要点）。保留原内容，
-                    # 但要留下痕迹 —— 这条日志对应老师看到的「改了看不见」。
-                    logger.warning(
-                        "[partial] 节点 %s 重生成结果为空，保留原内容", node_id
-                    )
-                    updated.append(node)
+                    raise ValueError(f"节点 {node_id} 局部重生成结果为空")
             except Exception as exc:
-                logger.warning("[partial] 节点 %s 重生成失败: %s", node_id, exc)
-                updated.append(node)  # 失败时保留原内容
+                logger.exception("[partial] 节点 %s 重生成失败", node_id)
+                raise RuntimeError(f"节点 {node_id} 局部重生成失败") from exc
         else:
             # 非目标节点：原样保留，内容与引用关系不变
             updated.append(node)

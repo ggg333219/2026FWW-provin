@@ -26,6 +26,7 @@ export const useModifyStore = defineStore('modifyPanel', {
     inputText: '',
     /** 修改执行中 */
     modifying: false,
+    pendingTaskId: '',
     /** 最近一次修改返回的完整意图（供追问上下文） */
     lastIntent: null,
     /** 低置信度追问上下文；下一条教师回复会和原指令合并后再次解析。 */
@@ -119,6 +120,7 @@ export const useModifyStore = defineStore('modifyPanel', {
         this.redoStack = []
         this.error = ''
         this.lastFailedInstruction = ''
+        this.pendingTaskId = ''
       }
       if (!this.projectId) {
         this._persist()
@@ -132,6 +134,8 @@ export const useModifyStore = defineStore('modifyPanel', {
           this.currentVersionNo = Number(saved.currentVersionNo || 0)
           this.basedOnVersionNo = Number(saved.basedOnVersionNo || 0)
           this.pendingClarification = saved.pendingClarification || null
+          this.pendingTaskId = saved.pendingTaskId || ''
+          this.activeNodeId = saved.activeNodeId || ''
         }
       } catch {
         // 本地缓存损坏不影响服务端版本链恢复。
@@ -158,6 +162,28 @@ export const useModifyStore = defineStore('modifyPanel', {
         projectModifyApi.latestGenerationContext(targetId),
         this.loadAIMessages(targetId),
       ])
+      if (msgResult.status === 'fulfilled') {
+        const latestMessage = this.messages[this.messages.length - 1]
+        if (!latestMessage?.isClarification) {
+          this.pendingClarification = null
+          this._persist()
+        }
+      }
+      if (this.pendingTaskId) {
+        try {
+          const taskResp = await projectModifyApi.modifyTask(targetId, this.pendingTaskId)
+          const task = taskResp.data || taskResp
+          if (task.status === 'done') {
+            this.pendingTaskId = ''
+            this._pushMessage('ai', '局部修改已完成并保存新版本；请刷新课件以查看最新内容。', { versionNo: task.new_version_no })
+          } else if (task.status === 'failed') {
+            this.pendingTaskId = ''
+            this._pushMessage('ai', `局部修改失败：${task.error || '生成未完成'}`, { isError: true })
+          }
+        } catch (error) {
+          console.warn('[modifyStore] 修改任务状态暂不可用', error)
+        }
+      }
       if (ctxResult.status === 'fulfilled') {
         const data = ctxResult.value?.data || ctxResult.value || {}
         // 当前项目已存在的版本号 → 同步版本链
@@ -207,6 +233,7 @@ export const useModifyStore = defineStore('modifyPanel', {
       this.messages = []
       this.inputText = ''
       this.modifying = false
+      this.pendingTaskId = ''
       this.lastIntent = null
       this.pendingClarification = null
       this.pendingConfirmation = null
@@ -231,6 +258,20 @@ export const useModifyStore = defineStore('modifyPanel', {
     /** 选中某一页（预览页列表 / 面板下拉都可改它）。 */
     setActiveNode(nodeId) {
       this.activeNodeId = nodeId || ''
+      this._persist()
+    },
+
+    /**
+     * 恢复课件节点后校验本地缓存的选中页。
+     * 节点可能因版本回滚或历史草稿恢复而发生变化，失效的选中页不能继续
+     * 作为「这页」传给后端，否则会退回跨页候选并触发无关追问。
+     */
+    syncActiveNode(nodeIds) {
+      const validIds = new Set((Array.isArray(nodeIds) ? nodeIds : []).map((id) => String(id)))
+      if (this.activeNodeId && !validIds.has(String(this.activeNodeId))) {
+        this.activeNodeId = ''
+        this._persist()
+      }
     },
 
     _pushMessage(role, text, extra = {}) {
@@ -345,7 +386,7 @@ export const useModifyStore = defineStore('modifyPanel', {
           activeNodeId: this.activeNodeId,
           confirmed,
         })
-        const data = resp.data || resp
+        let data = resp.data || resp
 
         // 追问分支：AI 置信度低，返回澄清问题，不执行修改
         if (data.clarification) {
@@ -376,6 +417,36 @@ export const useModifyStore = defineStore('modifyPanel', {
 
         this.pendingClarification = null
         this.pendingConfirmation = null
+
+        if (data.status === 'processing' && data.task_id) {
+          const taskProjectId = this.projectId
+          this.pendingTaskId = data.task_id
+          this._persist()
+          const deadline = Date.now() + 5 * 60 * 1000
+          while (Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 2000))
+            if (this.projectId !== taskProjectId) return
+            try {
+              const statusResp = await projectModifyApi.modifyTask(taskProjectId, data.task_id)
+              data = statusResp.data || statusResp
+            } catch (error) {
+              console.warn('[modifyStore] 修改任务状态查询稍后重试', error)
+              continue
+            }
+            if (data.status === 'done' || data.status === 'failed') break
+          }
+          if (data.status === 'failed') {
+            this.pendingTaskId = ''
+            throw new Error(data.error || '局部修改失败')
+          }
+          if (data.status !== 'done') {
+            this._pushMessage('ai', '修改仍在后台执行，完成后会保存新版本。重新打开课件可查询结果。')
+            this._persist()
+            await this._flushPendingMessages()
+            return
+          }
+          this.pendingTaskId = ''
+        }
 
         // 成功分支：解析结果 + 修改摘要 + 版本标签
         const intent = data.intent || {}
@@ -556,6 +627,8 @@ export const useModifyStore = defineStore('modifyPanel', {
               currentVersionNo: this.currentVersionNo,
               basedOnVersionNo: this.basedOnVersionNo,
               pendingClarification: this.pendingClarification,
+              pendingTaskId: this.pendingTaskId,
+              activeNodeId: this.activeNodeId,
               messages: this.messages.slice(-30),
             }),
           )

@@ -145,6 +145,7 @@ func RegisterNewSkillRoutes(
 		projects.PUT("/:project_id/step", coursewareProjectHandler.StepPut)
 		// A6/A7: 修改对话 + 版本快照 + 回滚（追加到同一路由组）
 		projects.POST("/:project_id/modify", coursewareHandler.Modify)
+		projects.GET("/:project_id/modify-tasks/:task_id", coursewareHandler.ModifyTask)
 		projects.GET("/:project_id/modify-history", coursewareHandler.ModifyHistory)
 		projects.GET("/:project_id/versions", coursewareHandler.Versions)
 		projects.POST("/:project_id/versions", coursewareHandler.CreateVersion)
