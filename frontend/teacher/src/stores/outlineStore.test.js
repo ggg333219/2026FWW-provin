@@ -33,6 +33,13 @@ describe('outlineStore 大纲拖拽排序', () => {
     })
   })
 
+  it('绑定整份资料时保留大纲节点已有的精确引用', () => {
+    const store = useOutlineStore()
+    store.nodes = [{ node_id: 'node_001', source_chunk_ids: ['matched-source'] }]
+    store.bindEvidenceRefs(['draft-source'])
+    expect(store.nodes[0].source_chunk_ids).toEqual(['matched-source', 'draft-source'])
+  })
+
   it('AI 成功大纲不显示回退提示，兜底大纲仍可编辑并保存', async () => {
     const save = vi.spyOn(teacherV1Api.outline, 'save').mockResolvedValue({
       data: { outline_version: 2, status: 'draft' },

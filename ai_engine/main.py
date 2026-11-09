@@ -725,6 +725,8 @@ async def generate_outline(req: GenOutlineRequest):
             kwargs = {}
             if "duration_minutes" in inspect.signature(method).parameters:
                 kwargs["duration_minutes"] = builder._intent_duration_minutes(req.intent)
+            if "evidence_packet" in inspect.signature(method).parameters:
+                kwargs["evidence_packet"] = req.evidence_packet
             result = await asyncio.to_thread(
                 method, *args, **kwargs,
             )

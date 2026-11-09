@@ -59,6 +59,14 @@
 
     <div v-if="outlineStore.fallbackNotice" class="fallback-notice" role="status" aria-live="polite">
       {{ outlineStore.fallbackNotice }}
+      <button
+        v-if="outlineStore.canEdit && ready && hasUsableEvidence && generationMode !== 'without_evidence'"
+        class="btn btn-sm"
+        :disabled="outlineStore.loading"
+        @click="handleGenerateOutline"
+      >
+        {{ outlineStore.loading ? '正在重新生成…' : '用当前资料重新生成大纲' }}
+      </button>
     </div>
 
     <!-- 节点编辑器 -->
@@ -265,7 +273,7 @@
           v-if="outlineStore.nodes.length === 0"
           class="btn btn-primary"
           @click="handleGenerateOutline"
-          :disabled="outlineStore.loading"
+          :disabled="outlineStore.loading || !ready"
         >
           {{ outlineStore.loading ? 'AI 生成中...' : '🤖 AI 生成大纲' }}
         </button>
@@ -311,6 +319,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useOutlineStore } from '../../stores/outlineStore'
+import { isEvidencePacketUsable } from '../../stores/materialStore'
 import OutlineRevisionDialog from './OutlineRevisionDialog.vue'
 import { shouldAutoGenerateOutline } from '../../utils/versionOutline'
 
@@ -338,6 +347,7 @@ const emit = defineEmits(['confirm-complete', 'outline-created', 'node-deleted',
 
 const outlineStore = useOutlineStore()
 const route = useRoute()
+const hasUsableEvidence = computed(() => isEvidencePacketUsable(props.evidencePacket))
 
 const showReviseDialog = ref(false)
 const showReviseInput = ref(false)
@@ -390,6 +400,7 @@ watch(
 )
 
 async function handleGenerateOutline() {
+  if (!props.ready) return
   if (!props.sessionId) {
     const message = '缺少 session_id，请先完成 S1 意图理解'
     outlineStore.error = message
@@ -398,9 +409,9 @@ async function handleGenerateOutline() {
   }
   try {
     // 优先使用父级按 S1 意图自动检索的证据包，兼容旧版 S2 localStorage 交接。
-    let evidence = props.evidencePacket || null
+    let evidence = props.generationMode === 'without_evidence' ? null : (props.evidencePacket || null)
     try {
-      if (!evidence) {
+      if (!evidence && props.generationMode !== 'without_evidence') {
         const raw = window.localStorage.getItem(`fuww_s2_evidence_packet:${props.sessionId}`)
         if (raw) evidence = JSON.parse(raw)
       }
@@ -883,6 +894,10 @@ function handleCancelRevision() {
   border-radius: 6px;
   font-size: 13px;
   line-height: 1.5;
+}
+.fallback-notice .btn {
+  display: block;
+  margin-top: 8px;
 }
 .node-delete-btn {
   background: none;

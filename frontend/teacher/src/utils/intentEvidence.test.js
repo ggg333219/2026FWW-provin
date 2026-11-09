@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline } from './intentEvidence'
+import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline, shouldRequireOutlineEvidence } from './intentEvidence'
 
 describe('S1 意图驱动的自动证据检索', () => {
+  it('所有新大纲入口都等待资料，明确选择无资料时才放行', () => {
+    const initial = { generationMode: '', isVersionFork: false, outlineId: '', nodeCount: 0 }
+    expect(shouldRequireOutlineEvidence(initial)).toBe(true)
+    expect(shouldRequireOutlineEvidence({ ...initial, generationMode: 'with_evidence' })).toBe(true)
+    expect(shouldRequireOutlineEvidence({ ...initial, generationMode: 'without_evidence' })).toBe(false)
+    expect(shouldRequireOutlineEvidence({ ...initial, outlineId: 'outline-1', nodeCount: 3 })).toBe(false)
+    expect(shouldRequireOutlineEvidence({ ...initial, isVersionFork: true })).toBe(false)
+  })
+
   it('用主题、知识点、难点和对象组成稳定查询并去重', () => {
     expect(buildIntentEvidenceQuery({
       topic: 'TCP 三次握手',

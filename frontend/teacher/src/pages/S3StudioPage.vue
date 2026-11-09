@@ -133,7 +133,7 @@
           :intent-summary="intentStore.intentSummary"
           :evidence-packet="selectedEvidencePacket"
           :presentation="{ template_id: templateId, palette, layout: layoutMode, font_family: fontFamily, density }"
-          generation-mode="full_pipeline"
+          :generation-mode="generationMode === 'without_evidence' ? 'without_evidence' : 'full_pipeline'"
           :page-generation-mode="generateMode"
           :ready="outlineReady"
           :auto-restore="!isVersionFork"
@@ -624,7 +624,7 @@ import { teacherV1Api } from "../services/v1";
 import { projectModifyApi } from "../services/v1/projectModifyApi";
 import { resolveSavedProjectVersion } from "../utils/coursewareVersion";
 import { API_BASE, AI_API_BASE } from "../config/api";
-import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline } from "../utils/intentEvidence";
+import { buildIntentEvidenceQuery, evidenceIds, isPlaceholderOutline, shouldRequireOutlineEvidence } from "../utils/intentEvidence";
 import { patchPreview, PATCH_MODE } from "../utils/previewPatch";
 import { withGeneratedInteractiveAsset } from "../utils/interactiveExport";
 import { outlineFromVersion } from "../utils/versionOutline";
@@ -697,7 +697,16 @@ const initializing = ref(true);
 const outlineReady = ref(false);
 const evidenceBootstrapState = ref("idle");
 const evidenceBootstrapError = ref("");
-const requiresAutomaticEvidence = computed(() => String(route.query.auto_evidence || "") === "1");
+// Every new outline needs the S2 evidence handoff unless the teacher explicitly
+// chose the intent-only path. Older links do not carry auto_evidence=1.
+const requiresAutomaticEvidence = computed(() =>
+  shouldRequireOutlineEvidence({
+    generationMode: generationMode.value,
+    isVersionFork: isVersionFork.value,
+    outlineId: outlineStore.outline_id,
+    nodeCount: outlineStore.nodes.length,
+  }),
+);
 
 const asyncActivity = computed(() => {
   if (modifyStore.modifying) {
@@ -982,6 +991,12 @@ onMounted(async () => {
   if (route.query.phase === "outline") currentPhase.value = "outline";
   if (isVersionFork.value) {
     // 历史版本分支复用已有大纲与证据，不因进入 S3 重新检索或生成。
+    outlineReady.value = true;
+  } else if (generationMode.value === "without_evidence") {
+    evidencePacket.value = null;
+    selectedEvidenceIds.value = [];
+    evidenceSelectionInitialized.value = true;
+    evidenceBootstrapState.value = "skipped";
     outlineReady.value = true;
   } else {
     const evidenceReady = await ensureAutomaticEvidence();
@@ -1722,11 +1737,15 @@ async function retryAutomaticEvidence() {
 
 function continueWithIntentOnly() {
   generationMode.value = "without_evidence";
+  evidencePacket.value = null;
+  selectedEvidenceIds.value = [];
+  evidenceSelectionInitialized.value = true;
   evidenceBootstrapState.value = "skipped";
   evidenceBootstrapError.value = "";
   // 明确由教师选择无资料生成时，仍只使用结构化 S1 意图，不能读取旧版 S2 Markdown。
   if (typeof window !== "undefined") {
     window.localStorage.removeItem("fuww_s2_markdown");
+    window.localStorage.removeItem(`fuww_s2_evidence_packet:${intentStore.sessionId}`);
     window.localStorage.setItem(`fuww_s2_generation_mode:${intentStore.sessionId}`, generationMode.value);
   }
   discardPlaceholderOutline();

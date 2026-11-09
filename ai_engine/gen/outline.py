@@ -170,8 +170,8 @@ class OutlineBuilder:
         )
         markdown = self._append_intent_context(markdown, intent)
         markdown = self._append_generation_instructions(markdown, generation_instruction_set)
-        fallback = self._fallback_outline(title, key_points, total_duration)
-        return self._generate_checked(markdown, key_points, total_duration, fallback)
+        fallback = self._fallback_outline(title, key_points, total_duration, evidence_packet)
+        return self._generate_checked(markdown, key_points, total_duration, fallback, evidence_packet)
 
     def build_from_markdown(
         self,
@@ -179,6 +179,7 @@ class OutlineBuilder:
         course_name: str | None = None,
         generation_instruction_set: dict[str, Any] | None = None,
         duration_minutes: float | None = None,
+        evidence_packet: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """从已有 Markdown 构建节点树（兼容旧接口）"""
         # 只有 Markdown 明确声明了总课时，才按整堂课要求检查节点数。
@@ -187,13 +188,17 @@ class OutlineBuilder:
             normalize_duration_minutes(duration_minutes)
             or self._markdown_total_duration_minutes(markdown)
         )
-        fallback = self._fallback_outline(course_name or "未命名课程", None, total_duration)
+        fallback = self._fallback_outline(course_name or "未命名课程", None, total_duration, evidence_packet)
         markdown = self._append_generation_instructions(markdown, generation_instruction_set)
-        return self._generate_checked(markdown, [], total_duration, fallback)
+        evidence_text = self._format_evidence(evidence_packet)
+        if evidence_text:
+            markdown += f"\n\n## 参考材料\n{evidence_text}"
+        return self._generate_checked(markdown, [], total_duration, fallback, evidence_packet)
 
     def _generate_checked(
         self, markdown: str, key_points: list[str],
         total_duration: float | None, fallback: dict[str, Any],
+        evidence_packet: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Accept only a usable model outline; retain an explicit fallback signal."""
         try:
@@ -218,6 +223,7 @@ class OutlineBuilder:
                     "fallback_reason": "low_quality_model_response",
                 }
             self._balance_durations(nodes, total_duration)
+            self._bind_model_evidence(nodes, evidence_packet, key_points)
             return {"nodes": self._finalize(nodes, total_duration), "used_fallback": False}
         except Exception as exc:
             return {
@@ -483,32 +489,119 @@ class OutlineBuilder:
         return "\n".join(lines)
 
     @staticmethod
-    def _format_evidence(evidence_packet: dict[str, Any] | None) -> str:
-        if not evidence_packet:
-            return ""
-        # 兼容两种字段名：
-        #   KB 返回: "relevant_chunks" (EvidencePacket.model_dump())
-        #   S3 期望: "chunks" (OutlineBuilder 旧约定)
+    def _evidence_items(evidence_packet: dict[str, Any] | None) -> list[dict[str, str]]:
+        if not isinstance(evidence_packet, dict):
+            return []
+        # A citation-only packet is considered usable by S3. Keep its snippet
+        # available to both the model prompt and the deterministic fallback.
         chunks = evidence_packet.get("chunks") or evidence_packet.get("relevant_chunks") or []
+        citations = evidence_packet.get("citations") or []
+        indexed_ids = {
+            str(chunk.get("chunk_id") or "").strip()
+            for chunk in chunks if isinstance(chunk, dict)
+            and str(chunk.get("content") or "").strip()
+            and str(chunk.get("chunk_id") or "").strip()
+        } if isinstance(chunks, list) else set()
+        items: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for source, is_citation in ((chunks, False), (citations, True)):
+            if not isinstance(source, list):
+                continue
+            for raw in source:
+                if not isinstance(raw, dict):
+                    continue
+                content = str(raw.get("content") or raw.get("text_snippet") or "").strip()
+                chunk_id = str(raw.get("chunk_id") or "").strip()
+                if is_citation and indexed_ids and chunk_id not in indexed_ids:
+                    continue
+                if not content or (chunk_id and chunk_id in seen):
+                    continue
+                if chunk_id:
+                    seen.add(chunk_id)
+                items.append({
+                    "content": content[:300],
+                    "chunk_id": chunk_id,
+                    "source_ref": str(raw.get("source_ref") or "").strip(),
+                })
+                if len(items) >= 10:
+                    return items
+        return items
+
+    @classmethod
+    def _format_evidence(cls, evidence_packet: dict[str, Any] | None) -> str:
         lines = []
-        for c in chunks[:10]:
-            text = str(c.get("content") or "").strip()
-            if text:
-                lines.append(f"- {text[:200]}")
+        for item in cls._evidence_items(evidence_packet):
+            source = item["source_ref"] or item["chunk_id"]
+            label = f"[{source}] " if source else ""
+            lines.append(f"- {label}{item['content'][:200]}")
         return "\n".join(lines)
+
+    @classmethod
+    def _bind_model_evidence(
+        cls,
+        nodes: list[dict[str, Any]],
+        evidence_packet: dict[str, Any] | None,
+        key_points: list[str],
+    ) -> None:
+        """Attach only indexed evidence IDs that support each model node.
+
+        The stage-two model schema intentionally excludes source_chunk_ids, so
+        a successful model response cannot carry citations on its own.
+        """
+        items = [item for item in cls._evidence_items(evidence_packet) if item["chunk_id"]]
+        if not items:
+            return
+        allowed_ids = {item["chunk_id"] for item in items}
+        for node in nodes:
+            node_text = " ".join([
+                str(node.get("title") or ""),
+                str(node.get("summary") or ""),
+                *normalize_text_list(node.get("key_points")),
+            ])
+            terms = [point for point in key_points if len(point.strip()) >= 2 and point in node_text]
+            if not key_points:
+                # Markdown-only requests have no structured intent points.
+                # Require a longer shared phrase to avoid generic one-character matches.
+                terms = [
+                    segment[index:index + 4]
+                    for segment in re.findall(r"[一-鿿]{4,}", node_text)
+                    for index in range(len(segment) - 3)
+                ]
+                terms.extend(re.findall(r"[A-Za-z0-9]{3,}", node_text))
+            matched = [
+                item["chunk_id"] for item in items
+                if any(term.casefold() in item["content"].casefold() for term in terms)
+            ]
+            existing = [
+                str(ref) for ref in (node.get("source_chunk_ids") or [])
+                if str(ref) in allowed_ids
+            ]
+            refs = list(dict.fromkeys([*existing, *matched]))
+            if refs:
+                node["source_chunk_ids"] = refs
 
     def _fallback_outline(
         self,
         title: str,
         key_points: list[str] | None = None,
         total_duration_minutes: float | None = None,
+        evidence_packet: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """LLM 不可用时的兜底大纲。
 
         兜底结果同样要能通过 Go 大纲确认校验，因此显式写入正数时长并按课时分配；
         未提供课时时由 assign_node_durations 补每节点默认时长。
         """
-        points = key_points or ["核心概念", "关键应用", "总结过渡"]
+        evidence_items = self._evidence_items(evidence_packet)
+        evidence_points = []
+        for item in evidence_items:
+            heading = re.split(r"[。！？；;\n]", item["content"], maxsplit=1)[0]
+            heading = re.sub(r"^\s*(?:[-*#]+|\d+[.、])\s*", "", heading).strip()[:30]
+            if heading and heading not in evidence_points:
+                evidence_points.append(heading)
+        points = key_points or evidence_points or [
+            f"{title}核心概念", f"{title}关键应用", f"{title}总结过渡",
+        ]
         if total_duration_minutes and total_duration_minutes >= 40:
             # For a full lesson, a three-node emergency plan is too coarse even
             # when the model is unavailable. Keep every explicit knowledge point.
@@ -517,12 +610,21 @@ class OutlineBuilder:
         nodes = []
         for idx, kp in enumerate(points[:self.config.max_nodes], start=1):
             node_id = f"node_{idx:03d}"
-            nodes.append({
+            node = {
                 "node_id": node_id,
                 "title": kp,
                 "summary": f"围绕「{kp}」进行讲授，结合定义、示例与常见误区。",
                 "node_type": "slide",
                 "source_span": kp,
                 "prerequisites": [f"node_{idx - 1:03d}"] if idx > 1 else [],
-            })
+            }
+            # Only bind a source when its text supports this node. Generic
+            # introduction/practice/summary nodes must not invent citations.
+            match = next((item for item in evidence_items if kp in item["content"]), None)
+            if match:
+                node["summary"] = match["content"][:100]
+                node["key_points"] = [match["content"][:100]]
+                if match["chunk_id"]:
+                    node["source_chunk_ids"] = [match["chunk_id"]]
+            nodes.append(node)
         return {"nodes": normalize_stage2_nodes(nodes, total_duration_minutes)}

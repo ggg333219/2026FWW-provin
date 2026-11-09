@@ -350,6 +350,11 @@ def normalize_stage2_nodes(
                 "title": str((item or {}).get("title") or f"知识节点{idx}").strip() or f"知识节点{idx}",
                 "summary": str((item or {}).get("summary") or "").strip(),
                 "source_span": str((item or {}).get("source_span") or "").strip(),
+                "source_chunk_ids": [
+                    str(value).strip()
+                    for value in ((item or {}).get("source_chunk_ids") or [])
+                    if str(value).strip()
+                ] if isinstance((item or {}).get("source_chunk_ids"), list) else [],
                 "node_type": sanitize_node_type(raw_type),
                 "type": sanitize_node_type(raw_type),
                 "prerequisites": [

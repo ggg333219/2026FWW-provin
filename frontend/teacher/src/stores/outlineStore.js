@@ -543,7 +543,12 @@ export const useOutlineStore = defineStore('outline', {
 
     bindEvidenceRefs(ids = []) {
       const refs = [...new Set((Array.isArray(ids) ? ids : []).filter(Boolean))]
-      this.nodes = this.nodes.map((node) => ({ ...node, source_chunk_ids: refs }))
+      this.nodes = this.nodes.map((node) => ({
+        ...node,
+        source_chunk_ids: [...new Set([
+          ...(Array.isArray(node.source_chunk_ids) ? node.source_chunk_ids : []), ...refs,
+        ])],
+      }))
       this._persist()
     },
 
