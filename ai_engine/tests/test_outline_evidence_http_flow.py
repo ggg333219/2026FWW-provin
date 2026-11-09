@@ -33,11 +33,11 @@ def test_indexed_material_flows_into_initial_outline_fallback(monkeypatch):
 
     def embed_locally(chunks):
         for chunk in chunks:
-            chunk.embedding = [1.0, 0.0]
+            chunk.embedding = [0.0, 0.0]
         return chunks
 
     monkeypatch.setattr(rag_module._embed_service, "embed_chunks", embed_locally)
-    monkeypatch.setattr(rag_module._embed_service, "embed_text", lambda _text: [1.0, 0.0])
+    monkeypatch.setattr(rag_module._embed_service, "embed_text", lambda _text: [0.0, 0.0])
     monkeypatch.setattr(main_module, "OutlineBuilder", FallbackBuilder)
     client = TestClient(main_module.app)
 
@@ -56,6 +56,10 @@ def test_indexed_material_flows_into_initial_outline_fallback(monkeypatch):
     packet = evidence.json()["evidence_packet"]
     assert packet["relevant_chunks"][0]["content"]
     assert packet["relevant_chunks"][0]["chunk_id"] in chunk_ids
+
+    unrelated = client.post("/api/v1/rag/evidence", json={"query": "牛顿第二定律 力与加速度 质量"})
+    assert unrelated.status_code == 200, unrelated.text
+    assert unrelated.json()["evidence_packet"]["relevant_chunks"] == []
 
     outline = client.post("/gen/outline", json={
         "intent": {

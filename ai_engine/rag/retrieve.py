@@ -373,6 +373,13 @@ class HybridRetriever:
             indexed = self.store.get_chunk(cid)
             if indexed is None:
                 continue
+            # BM25 scores are normalized relative to the best hit. With one
+            # document, even a single shared Chinese character becomes 1.0
+            # (e.g. "加速度" matching "快速排序" through "速"). Require a
+            # phrase match or substantial character overlap before treating
+            # an offline embedding fallback as usable teaching evidence.
+            if not self._has_meaningful_lexical_overlap(query, indexed.content):
+                continue
             if source_type is not None and indexed.source_type != source_type:
                 continue
             if not self._matches_scope(indexed, scope, node_id, page_id):
@@ -395,6 +402,22 @@ class HybridRetriever:
                 },
             ))
         return results
+
+    @staticmethod
+    def _has_meaningful_lexical_overlap(query: str, content: str) -> bool:
+        query_tokens = set(BM25Scorer.tokenize(query))
+        content_tokens = set(BM25Scorer.tokenize(content))
+        if not query_tokens or not content_tokens:
+            return False
+        if len(query_tokens) == 1:
+            return bool(query_tokens & content_tokens)
+        # A full word or adjacent Chinese pair is much more reliable than an
+        # isolated character in a longer query.
+        if any(len(token) >= 2 for token in query_tokens & content_tokens):
+            return True
+        query_chars = {token for token in query_tokens if len(token) == 1}
+        matched_chars = query_chars & content_tokens
+        return bool(query_chars) and len(matched_chars) >= 2 and len(matched_chars) / len(query_chars) >= 0.5
 
     @staticmethod
     def _matches_scope(indexed, scope: str, node_id: Optional[str], page_id: Optional[str]) -> bool:
