@@ -4,10 +4,12 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DEFAULT_TIMEOUT=120 \
     PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
-    PYTHONPATH=/app:/app/ai_engine
+    PYTHONPATH=/app:/app/ai_engine \
+    HF_HOME=/opt/huggingface
 COPY ai_engine/requirements.txt ./requirements.txt
 COPY deploy/constraints-ai.txt ./constraints-ai.txt
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 \
     && pip install --no-cache-dir -c constraints-ai.txt -r requirements.txt
 COPY ai_engine/ ./ai_engine/
 WORKDIR /app/ai_engine

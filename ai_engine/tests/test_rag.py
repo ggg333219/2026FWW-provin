@@ -154,7 +154,7 @@ class TestEmbeddingService(unittest.TestCase):
         """Mock 模式返回零向量。"""
         svc = self.EmbeddingService()
         vec = svc.embed_text("hello")
-        self.assertEqual(len(vec), 1024)
+        self.assertEqual(len(vec), 512)
         self.assertTrue(all(v == 0.0 for v in vec))
 
     def test_embed_batch_mock(self):
@@ -164,7 +164,7 @@ class TestEmbeddingService(unittest.TestCase):
         vectors = svc.embed_batch(texts)
         self.assertEqual(len(vectors), 5)
         for v in vectors:
-            self.assertEqual(len(v), 1024)
+            self.assertEqual(len(v), 512)
 
     def test_embed_chunks(self):
         """Chunk 列表批量嵌入。"""
@@ -175,7 +175,7 @@ class TestEmbeddingService(unittest.TestCase):
         ]
         result = svc.embed_chunks(chunks)
         self.assertEqual(len(result), 2)
-        self.assertEqual(len(result[0].embedding), 1024)
+        self.assertEqual(len(result[0].embedding), 512)
 
     def test_empty_batch(self):
         """空列表不崩溃。"""

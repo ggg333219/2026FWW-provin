@@ -25,6 +25,7 @@
 
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -579,7 +580,7 @@ class LLMClient:
         Embedding 向量化调用。
 
         用于 KB 知识库 RAG 的文本向量化。
-        调用 OpenAI 兼容的 Embedding API。
+        非 Mock 模式使用本地 BGE 模型，不在运行时下载模型。
 
         Args:
             texts: 待向量化的文本列表。
@@ -593,6 +594,7 @@ class LLMClient:
         import logging
         logger = logging.getLogger(__name__)
         embedding_model = model or (os.getenv("AI_EMBEDDING_MODEL") or "local-bge-small-zh").strip()
+        embedding_model_path = (os.getenv("AI_EMBEDDING_MODEL_PATH") or "").strip()
         default_dim = 512
         try:
             default_dim = int(os.getenv("AI_EMBEDDING_DIM", "512"))
@@ -611,13 +613,38 @@ class LLMClient:
             if '_local_embedder' not in globals():
                 from sentence_transformers import SentenceTransformer
                 logger.info("加载本地嵌入模型 BGE-small-zh...")
-                _local_embedder = SentenceTransformer("BAAI/bge-small-zh-v1.5", device="cpu")
+                if embedding_model_path and not os.path.isdir(embedding_model_path):
+                    raise FileNotFoundError(f"本地Embedding模型目录不存在: {embedding_model_path}")
+                model_source = embedding_model_path or embedding_model
+                _local_embedder = SentenceTransformer(
+                    model_source,
+                    device="cpu",
+                    local_files_only=True,
+                )
                 logger.info("本地嵌入模型加载完成")
             vecs = _local_embedder.encode(texts, normalize_embeddings=True)
-            return [list(v) for v in vecs]
+            vectors = [list(v) for v in vecs]
+            if len(vectors) != len(texts):
+                raise RuntimeError(
+                    f"Embedding返回数量错误: expected={len(texts)}, actual={len(vectors)}"
+                )
+            for index, vector in enumerate(vectors):
+                if len(vector) != embedding_dim:
+                    raise RuntimeError(
+                        f"Embedding维度错误: index={index}, expected={embedding_dim}, actual={len(vector)}"
+                    )
+                values = [float(value) for value in vector]
+                if not all(math.isfinite(value) for value in values):
+                    raise RuntimeError(f"Embedding包含非有限数值: index={index}")
+                norm = math.hypot(*values)
+                if not math.isfinite(norm):
+                    raise RuntimeError(f"Embedding向量范数无效: index={index}")
+                if norm <= 0.0:
+                    raise RuntimeError(f"Embedding返回零向量: index={index}")
+            return vectors
         except Exception as e:
             logger.error(f"本地嵌入失败: {e}")
-            return [[0.0] * embedding_dim for _ in range(len(texts))]
+            raise RuntimeError(f"本地Embedding失败: {e}") from e
 
     # ---- 内部实现 ----
 
