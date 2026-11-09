@@ -275,6 +275,7 @@ class NodeGenerator:
             for node in nodes:
                 scripts.append(self.generate_single(
                     node, course_name, max_attempts=1,
+                    context_markdown=context_markdown,
                     teaching_plan=plans.get(str(node.get("node_id") or "")),
                     generation_instruction_context=instruction_context,
                 ))
@@ -285,18 +286,32 @@ class NodeGenerator:
                           context_markdown: str = "",
                           course_name: str | None = None,
                           plans: Optional[dict[str, Any]] = None,
-                          generation_instruction_set: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                          generation_instruction_set: Optional[dict[str, Any]] = None,
+                          context_is_preformatted: bool = False) -> dict[str, Any]:
         """增强版生成：带 segment_type / estimated_seconds / interaction_hint / knowledge_card。
         整批失败时按节点降级重试，避免整批退兜底。
 
         plans 同 :meth:`generate_all`。
+        context_is_preformatted 仅供首次全量讲稿使用：上下文已分别标明资料与意图。
         """
         fallback = self._enhanced_fallback(nodes, course_name)
         node_ids = {n["node_id"] for n in nodes}
         plans = plans if isinstance(plans, dict) else {}
         instruction_context = self._generation_instruction_context(generation_instruction_set)
+        fallback_context = (
+            {"context_markdown": context_markdown, "context_is_preformatted": True}
+            if context_is_preformatted else {"context_markdown": context_markdown}
+        )
         try:
-            scripts = self._run_enhanced_batch(context_markdown, nodes, course_name, plans, instruction_context)
+            if context_is_preformatted:
+                scripts = self._run_enhanced_batch(
+                    context_markdown, nodes, course_name, plans, instruction_context,
+                    context_is_preformatted=True,
+                )
+            else:
+                scripts = self._run_enhanced_batch(
+                    context_markdown, nodes, course_name, plans, instruction_context,
+                )
             if not scripts:
                 scripts = fallback["scripts"]
             scripts = self._normalize_enhanced_scripts(scripts, node_ids)
@@ -308,6 +323,7 @@ class NodeGenerator:
             for node in nodes:
                 scripts.append(self.generate_single(
                     node, course_name, max_attempts=1,
+                    **fallback_context,
                     teaching_plan=plans.get(str(node.get("node_id") or "")),
                     generation_instruction_context=instruction_context,
                 ))
@@ -320,7 +336,8 @@ class NodeGenerator:
                         context_markdown: str = "",
                         teaching_plan: Optional[dict[str, Any]] = None,
                         revise_slide: bool = False,
-                        generation_instruction_context: str = "") -> dict[str, Any]:
+                        generation_instruction_context: str = "",
+                        context_is_preformatted: bool = False) -> dict[str, Any]:
         """生成单个节点的讲稿（供 S4 修补时部分重生成使用）
 
         max_attempts: 收紧 LLM 重试次数（1 = 不重试），None 时按环境变量/默认值。
@@ -329,6 +346,8 @@ class NodeGenerator:
         context_markdown: 检索到的参考材料（知识库证据）。非空时作为「参考材料」块
                           追加到 user_prompt，格式与 outline.py 的 _format_evidence 一致。
                           不传则 prompt 与之前逐字相同（向后兼容）。
+        context_is_preformatted: 已带准确标题的首次讲稿上下文；为 False 时保留原有
+                                 资料包装方式（包括 S4 局部修改）。
         teaching_plan: 教学表达规划器对**这一页**的决策。非空时作为**约束**注入
                       （见 _plan_constraint），不传则 prompt 与之前逐字相同。
         revise_slide: 局部修改时置 True —— 把任务框成「改写这一页幻灯片上的表达」，
@@ -386,12 +405,15 @@ class NodeGenerator:
             if extra_instruction:
                 user_prompt += f"\n【修改要求】\n{extra_instruction}\n"
             if context_markdown:
-                user_prompt += (
-                    "\n【参考材料】\n"
-                    "以下是从知识库检索到的相关资料，生成讲稿时须以其为准，"
-                    "不得编造材料中不存在的知识点：\n"
-                    f"{context_markdown}\n"
-                )
+                if context_is_preformatted:
+                    user_prompt += f"\n\n{context_markdown}\n"
+                else:
+                    user_prompt += (
+                        "\n【参考材料】\n"
+                        "以下是从知识库检索到的相关资料，生成讲稿时须以其为准，"
+                        "不得编造材料中不存在的知识点：\n"
+                        f"{context_markdown}\n"
+                    )
             result = self._get_llm(max_attempts).chat_json(system_prompt, user_prompt,
                                                            temperature=self.config.temperature)
             if revise_slide and "正文" in extra_instruction:
@@ -486,7 +508,8 @@ class NodeGenerator:
     def _run_enhanced_batch(self, markdown: str,
                             nodes: list[dict], course_name: str | None,
                             plans: Optional[dict[str, Any]] = None,
-                            generation_instruction_context: str = "") -> list[dict]:
+                            generation_instruction_context: str = "",
+                            context_is_preformatted: bool = False) -> list[dict]:
         system_prompt = (
             "你是课堂讲稿生成助手（增强版），负责为每个教学节点生成分段讲授脚本。\n"
             "【强制约束】\n"
@@ -502,7 +525,8 @@ class NodeGenerator:
             "9. 输出严格遵循 JSON Schema，additionalProperties=False。"
         )
         user_prompt = (
-            f"课程名: {course_name or '未命名课程'}\n原始MD:\n{markdown}\n\n"
+            f"课程名: {course_name or '未命名课程'}\n"
+            f"{'生成上下文' if context_is_preformatted else '原始MD'}:\n{markdown}\n\n"
             f"节点树:\n{json.dumps(nodes, ensure_ascii=False)}\n\n"
             "每个节点生成 2-4 个分段讲授 segments，node_id 必须来自节点树。"
         )

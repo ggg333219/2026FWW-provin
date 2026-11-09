@@ -51,12 +51,20 @@ function clearMockMode() {
   }
 }
 
-// S3 生成链路必须使用真实 Go → AI Engine 服务，不能用离线 Mock 伪造任务状态。
+// 生成、版本落盘、局部修改与导出必须使用真实 Go → AI Engine 服务，不能用离线
+// Mock 伪造任务状态，更不能伪造「保存成功 / 导出成功」。
 function isStrictS3Path(path = '') {
-  return path === '/api/v1/gen/create' ||
+  if (path === '/api/v1/gen/create' ||
     path === '/api/v1/gen/preview' ||
+    path === '/api/v1/gen/finalize' ||
+    path === '/api/v1/gen/modify' ||
     path.startsWith('/api/v1/gen/status/') ||
-    path.startsWith('/api/v1/gen/content')
+    path.startsWith('/api/v1/gen/content')) return true
+  // 导出主路径是 /api/v1/exp/{genId}，/export 与 /exports 是兼容别名；
+  // 创建与状态查询都不能用假数据，否则教师会拿到一个并不存在的下载链接。
+  return path.startsWith('/api/v1/exp/') ||
+    path.startsWith('/api/v1/export/') ||
+    path.startsWith('/api/v1/exports/')
 }
 
 /**
@@ -100,7 +108,7 @@ export async function requestJson(path, options = {}) {
       clearMockMode()
     } else {
       if (isStrictS3Path(path)) {
-        throw new Error('S3 真实后端不可用，已阻止 Mock 回退')
+        throw new Error(`S3 真实后端不可用，已阻止 Mock 回退: ${path}`)
       }
       const mockPayload = handleMockRequest(path, options, new Error('mock mode'))
       if (mockPayload) return mockPayload
@@ -163,7 +171,12 @@ export async function requestJson(path, options = {}) {
     // 尤其是 PPT/DOCX 导出：版本不存在或导出失败不能被伪装成 Mock 文件。
     if (error?.httpStatus) throw error
 
-    // 仅网络层不可达时允许 Mock 回退
+    // 仅网络层不可达时允许 Mock 回退。严格链路必须在这里也拦一次：
+    // 此前只有「已进入 mock 模式」的分支做了检查，首次断网时 finalize / modify /
+    // export 会直接拿到假响应，出现「生成报错，但保存与导出显示成功」的混合状态。
+    if (isStrictS3Path(path)) {
+      throw new Error(`S3 真实后端不可用，已阻止 Mock 回退: ${path}`)
+    }
     const mockPayload = handleMockRequest(path, options, error)
     if (mockPayload) {
       setMockMode()

@@ -23,6 +23,8 @@ if str(_ROOT) not in sys.path:
 
 from ai_engine import main as main_module  # noqa: E402
 from ai_engine.gen import teaching_plan as tp  # noqa: E402
+from ai_engine.gen.node import NodeGenerator  # noqa: E402
+from ai_engine.core.llm import LLMClient  # noqa: E402
 from ai_engine.main import (  # noqa: E402
     GenContentRequest,
     _attach_teaching_plan,
@@ -134,7 +136,7 @@ class _FakeGenerator:
         self.enhanced_calls = 0
         self.single_calls: list[str] = []
 
-    def generate_enhanced(self, nodes, markdown="", course_name=None):
+    def generate_enhanced(self, nodes, markdown="", course_name=None, **kwargs):
         self.enhanced_calls += 1
         return {"scripts": [
             {"node_id": "n1", "title": "第一页", "script": "批量-n1", "segments": []},
@@ -152,7 +154,16 @@ class _FakeGenerator:
 def _run(req: GenContentRequest, monkeypatch,
          generator_cls: type = _FakeGenerator) -> tuple[dict, _FakeGenerator]:
     fake = generator_cls()
-    monkeypatch.setattr(main_module, "NodeGenerator", lambda *a, **k: fake)
+
+    # 管道会调 NodeGenerator._generation_instruction_context(...)；桩必须保留这个
+    # 类方法，否则每个节点都会以 AttributeError 失败（测试桩与实现脱节）。
+    class _StubNodeGenerator:
+        _generation_instruction_context = staticmethod(lambda instruction: {})
+
+        def __new__(cls, *a, **k):
+            return fake
+
+    monkeypatch.setattr(main_module, "NodeGenerator", _StubNodeGenerator)
     content_id = "content_test"
     main_module._content_tasks[content_id] = {
         "content_id": content_id, "status": "generating", "progress_pct": 0.0,
@@ -190,7 +201,7 @@ def test_enhanced_pipeline_keeps_each_page_own_script(monkeypatch):
 class _ExplodingEnhancedGenerator(_FakeGenerator):
     """批量接口整体失败（限流 / 502 / 超时）。"""
 
-    def generate_enhanced(self, nodes, markdown="", course_name=None):
+    def generate_enhanced(self, nodes, markdown="", course_name=None, **kwargs):
         self.enhanced_calls += 1
         raise RuntimeError("批量接口 502")
 
@@ -237,3 +248,184 @@ def test_pipeline_still_works_when_the_planner_dies(monkeypatch):
     assert len(task["nodes"]) == 3
     assert task["status"] == "done"
     assert all("teaching_plan" not in n for n in task["nodes"])
+
+
+# =============================================================================
+# 4. 已确认资料必须真的进入讲稿 Prompt（/gen/content 首次全量生成）
+# =============================================================================
+
+def test_content_evidence_context_reads_confirmed_evidence_and_intent():
+    """前端不传 context_markdown / intent，资料与意图都在 instruction_set 里。"""
+    req = GenContentRequest(
+        nodes=[{"node_id": "n1", "title": "队列"}],
+        generation_instruction_set={
+            "confirmed_evidence": {"synthesized_context": "队列是先进先出的线性结构"},
+            "intent": {"topic": "图搜索", "target_student": "高一"},
+        },
+    )
+    assert req.context_markdown == ""
+    assert req.intent == {}
+
+    ctx = main_module._content_evidence_context(req)
+    assert "队列是先进先出的线性结构" in ctx
+    assert "图搜索" in ctx
+    assert "高一" in ctx
+
+
+def test_content_evidence_context_stays_empty_without_evidence():
+    """没有已确认资料时不能凭空造出「参考资料」，无资料模式仍是空上下文。"""
+    req = GenContentRequest(
+        nodes=[{"node_id": "n1"}],
+        generation_instruction_set={"confirmed_evidence": None, "intent": {}},
+    )
+    assert main_module._content_evidence_context(req) == ""
+
+
+@pytest.mark.parametrize(
+    ("evidence", "intent", "has_source"),
+    [
+        ({"synthesized_context": "专属资料正文", "relevant_chunks": [
+            {"chunk_id": "c1", "source_ref": "合成教材.docx", "content": "专属资料正文"},
+        ]}, {"topic": "排序算法"}, True),
+        (None, {}, False),
+        (None, {"topic": "排序算法"}, False),
+    ],
+)
+def test_first_script_prompt_labels_only_real_material_as_reference(
+    monkeypatch, evidence, intent, has_source,
+):
+    """模型桩直接记录逐节点 Prompt，分别检查资料、空输入和仅意图。"""
+    prompts = []
+
+    def fake_chat_json(self, system, user, **kwargs):
+        prompts.append(user)
+        return {"script": "测试讲稿", "segments": [], "point_details": []}
+
+    monkeypatch.setattr(LLMClient, "chat_json", fake_chat_json)
+    req = GenContentRequest(
+        nodes=[{"node_id": "n1", "title": "排序算法", "type": "content"}],
+        generation_instruction_set={"confirmed_evidence": evidence, "intent": intent},
+    )
+    context = main_module._content_evidence_context(req)
+    NodeGenerator().generate_single(req.nodes[0], context_markdown=context,
+                                    context_is_preformatted=True)
+    assert len(prompts) == 1
+    prompt = prompts[0]
+    assert ("【已确认的参考资料】" in prompt) is has_source
+    assert ("专属资料正文" in prompt) is has_source
+    assert ("合成教材.docx" in prompt) is has_source
+    assert ("【教学意图】" in prompt) is bool(intent)
+    if not has_source:
+        assert "【参考材料】" not in prompt
+        assert "从知识库检索到的相关资料" not in prompt
+
+
+@pytest.mark.parametrize("has_source", [False, True])
+def test_enhanced_prompt_keeps_sections_without_false_reference(monkeypatch, has_source):
+    """增强批量写稿对有资料和仅意图两种输入使用准确标题。"""
+    prompts = []
+
+    def fake_chat_with_schema(self, system, user, schema, **kwargs):
+        prompts.append(user)
+        return {"scripts": [{"node_id": "n1", "title": "排序算法",
+                             "script": "测试讲稿", "segments": [], "point_details": []}]}
+
+    monkeypatch.setattr(LLMClient, "chat_with_schema", fake_chat_with_schema)
+    req = GenContentRequest(
+        nodes=[{"node_id": "n1", "title": "排序算法", "type": "content"}],
+        generation_instruction_set={"confirmed_evidence": {
+            "synthesized_context": "专属资料正文",
+            "relevant_chunks": [{"chunk_id": "c1", "source_ref": "合成教材.docx"}],
+        } if has_source else None,
+                                    "intent": {"topic": "排序算法"}},
+    )
+    result = NodeGenerator().generate_enhanced(
+        req.nodes, main_module._content_evidence_context(req),
+        context_is_preformatted=True,
+    )
+    assert not result["used_fallback"]
+    assert len(prompts) == 1
+    assert "生成上下文" in prompts[0]
+    assert "【教学意图】" in prompts[0]
+    assert ("【已确认的参考资料】" in prompts[0]) is has_source
+    assert ("专属资料正文" in prompts[0]) is has_source
+    assert ("合成教材.docx" in prompts[0]) is has_source
+    assert "【参考材料】" not in prompts[0]
+    assert "从知识库检索到的相关资料" not in prompts[0]
+
+
+def test_enhanced_batch_failure_keeps_first_script_context(monkeypatch):
+    """批量失败后的逐节点补生成仍收到资料、来源与教学意图。"""
+    prompts = []
+
+    def failed_batch(self, *args, **kwargs):
+        raise RuntimeError("synthetic batch failure")
+
+    def fake_chat_json(self, system, user, **kwargs):
+        prompts.append(user)
+        return {"script": "测试讲稿", "segments": [], "point_details": []}
+
+    monkeypatch.setattr(NodeGenerator, "_run_enhanced_batch", failed_batch)
+    monkeypatch.setattr(LLMClient, "chat_json", fake_chat_json)
+    req = GenContentRequest(
+        nodes=[{"node_id": "n1", "title": "排序算法", "type": "content"}],
+        generation_instruction_set={
+            "confirmed_evidence": {"synthesized_context": "专属资料正文",
+                                   "relevant_chunks": [{"chunk_id": "c1",
+                                                        "source_ref": "合成教材.docx"}]},
+            "intent": {"topic": "排序算法"},
+        },
+    )
+    result = NodeGenerator().generate_enhanced(
+        req.nodes, main_module._content_evidence_context(req),
+        context_is_preformatted=True,
+    )
+    assert result["used_fallback"]
+    assert len(prompts) == 1
+    assert "【已确认的参考资料】" in prompts[0]
+    assert "专属资料正文" in prompts[0]
+    assert "合成教材.docx" in prompts[0]
+    assert "【教学意图】" in prompts[0]
+
+
+def test_full_pipeline_feeds_evidence_into_script_prompt(monkeypatch):
+    """管道级：generate_single 拿到的 context_markdown 必须含资料正文。
+
+    改动前这里恒为空串，讲稿凭空生成，页面却仍挂 citation_refs。
+    """
+    class _CapturingNodeGenerator:
+        contexts: list = []
+        _generation_instruction_context = staticmethod(lambda instruction: {})
+
+        def generate_single(self, node, course_name=None, **kwargs):
+            _CapturingNodeGenerator.contexts.append(kwargs.get("context_markdown", ""))
+            return {"node_id": node["node_id"], "title": node.get("title", ""),
+                    "script": "讲稿", "segments": []}
+
+        def generate_enhanced(self, nodes, markdown="", course_name=None, **kwargs):
+            _CapturingNodeGenerator.contexts.append(markdown)
+            return {"scripts": []}
+
+    monkeypatch.setattr(main_module, "NodeGenerator", _CapturingNodeGenerator)
+    _CapturingNodeGenerator.contexts.clear()
+
+    req = GenContentRequest(
+        nodes=[{"node_id": "n1", "type": "content", "title": "队列", "summary": "先进先出"}],
+        generation_instruction_set={
+            "confirmed_evidence": {"synthesized_context": "队列是先进先出的线性结构"},
+            "intent": {"topic": "图搜索"},
+        },
+    )
+    content_id = "content_evidence_test"
+    main_module._content_tasks[content_id] = {
+        "content_id": content_id, "status": "generating", "progress_pct": 0.0,
+        "current_node_id": "", "total_nodes": 1, "completed_nodes": 0,
+        "nodes": [], "error": None,
+    }
+    try:
+        _run_content_pipeline(content_id, req)
+        assert _CapturingNodeGenerator.contexts
+        assert all("队列是先进先出的线性结构" in ctx
+                   for ctx in _CapturingNodeGenerator.contexts)
+    finally:
+        main_module._content_tasks.pop(content_id, None)
