@@ -7,15 +7,15 @@ LLM 调用统一走 core/llm.py → LLMClient.embed()，
 不直接 import openai，遵循开发规范 §2 原则 2。
 
 支持：
-  - OpenAI / DashScope 等兼容 API
+  - 本地 BGE 模型（由 LLMClient 统一加载）
   - 自动批量处理（减少 API 调用次数）
   - Mock 模式回退（零向量）
-  - 多维度支持（默认 1024 维）
+  - 多维度支持（默认 512 维）
 
 使用方式：
     from ai_engine.rag.embed import EmbeddingService
 
-    svc = EmbeddingService(model="text-embedding-v3")
+    svc = EmbeddingService(model="BAAI/bge-small-zh-v1.5")
     chunks = svc.embed_chunks(chunks)
     # 每个 chunk.embedding 现在已填充
 """
@@ -31,8 +31,8 @@ from ai_engine.core.schema import Chunk
 
 # ---- 默认值 ----
 
-_DEFAULT_EMBEDDING_MODEL = "text-embedding-v3"
-_DEFAULT_EMBEDDING_DIM = 1024
+_DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"
+_DEFAULT_EMBEDDING_DIM = 512
 _DEFAULT_BATCH_SIZE = 20
 
 
@@ -85,7 +85,7 @@ class EmbeddingService:
         """
         Args:
             model: 嵌入模型名（默认从 AI_EMBEDDING_MODEL 环境变量读取）。
-            dim: 输出向量维度（默认 1024）。
+            dim: 输出向量维度（默认 512）。
             batch_size: API 每批最大文本数。
         """
         self.model = model or _env_embedding_model()

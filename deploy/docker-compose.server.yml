@@ -66,6 +66,12 @@ services:
       AI_BASE_URL: ${AI_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       AI_MODEL: ${AI_MODEL:-qwen-turbo}
       AI_GEN_MODE: ${AI_GEN_MODE:-mock}
+      AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
+      # Set this to a snapshot directory inside the pre-populated bge-model-cache volume.
+      AI_EMBEDDING_MODEL_PATH: ${AI_EMBEDDING_MODEL_PATH:-}
+      AI_EMBEDDING_DIM: ${AI_EMBEDDING_DIM:-512}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
       REDIS_HOST: redis
       REDIS_PORT: 6379
       DB_HOST: postgres
@@ -92,6 +98,7 @@ services:
     networks: [fuwu]
     volumes:
       - s2-parse-data:/tmp/fuww_s2_parse
+      - bge-model-cache:/opt/huggingface
 
   postgres:
     image: pgvector/pgvector:pg15
@@ -140,6 +147,7 @@ volumes:
   redis-data:
   minio-data:
   s2-parse-data:
+  bge-model-cache:
 
 networks:
   fuwu:

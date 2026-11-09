@@ -82,11 +82,11 @@ class PGVectorStore(VectorStore):
         """
         self.conn_string = conn_string or _DEFAULT_CONN_STRING
         self.table_prefix = table_prefix
-        configured_dim = os.getenv("AI_EMBEDDING_DIM", "1024")
+        configured_dim = os.getenv("AI_EMBEDDING_DIM", "512")
         try:
             configured_dim = int(configured_dim)
         except (TypeError, ValueError):
-            configured_dim = 1024
+            configured_dim = 512
         self.embedding_dim = embedding_dim or configured_dim
         self.pool_size = pool_size
         self._conn = None
