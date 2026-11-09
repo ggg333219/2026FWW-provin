@@ -275,6 +275,58 @@ describe('S2 前端链路（mock）', () => {
     expect(store.chunks).toHaveLength(1)
   })
 
+  it('返回S2时保留同会话解析素材，切换会话时不复用素材', async () => {
+    vi.spyOn(teacherV1Api.material, 'search').mockResolvedValue({ data: [] })
+    const store = useMaterialStore()
+    store.activeSessionId = 'sess_switch_a'
+    store.addMaterial({
+      id: 'mat_session_a',
+      sessionId: 'sess_switch_a',
+      title: '会话A资料.txt',
+      chunks: [{
+        chunkId: 'chunk_session_a',
+        source_ref: '会话A资料.txt',
+        content: '会话A真实切片',
+        sessionRegistered: true
+      }]
+    })
+
+    await store.loadMaterials({
+      sessionId: 'sess_switch_a',
+      preserveSessionMaterials: true
+    })
+    expect(store.allChunks).toEqual([expect.objectContaining({
+      chunkId: 'chunk_session_a',
+      source_ref: '会话A资料.txt',
+      sessionRegistered: true
+    })])
+
+    await store.loadMaterials({
+      sessionId: 'sess_switch_b',
+      preserveSessionMaterials: true
+    })
+    expect(store.materials).toHaveLength(0)
+    expect(store.allChunks).toHaveLength(0)
+  })
+
+  it('chunk_count为零时索引失败，不报告成功', async () => {
+    const store = useMaterialStore()
+    const upload = vi.spyOn(teacherV1Api.rag, 'knowledgeUpload').mockResolvedValueOnce({
+      data: { task_id: 'kb_empty', status: 'done', chunk_count: 0 }
+    })
+
+    const result = await store.indexKnowledgeBase({ sessionId: 'sess_empty_index' })
+
+    expect(upload).toHaveBeenCalledWith({
+      sessionId: 'sess_empty_index',
+      files: [],
+      texts: [],
+      chunkIds: []
+    })
+    expect(result).toBe(null)
+    expect(store.error).toContain('未写入任何切片')
+  })
+
   it('PDF/二进制文件不产生乱码切片（%PDF 应回退为种子内容）', async () => {
     const store = useMaterialStore()
     await store.loadMaterials()

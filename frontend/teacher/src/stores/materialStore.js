@@ -260,7 +260,11 @@ export const useMaterialStore = defineStore('material', {
           texts,
           chunkIds
         })
-        return resp?.data || null
+        const result = resp?.data || null
+        if (!result || Number(result.chunk_count) <= 0) {
+          throw new Error('知识库索引未写入任何切片')
+        }
+        return result
       } catch (err) {
         console.warn('知识库索引失败', err)
         this.error = String(err?.message || err)

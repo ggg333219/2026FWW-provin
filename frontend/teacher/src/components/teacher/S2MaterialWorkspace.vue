@@ -263,7 +263,10 @@ const persistSelection = () => {
 }
 
 onMounted(async () => {
-  await materialStore.loadMaterials({ sessionId: sessionId.value })
+  await materialStore.loadMaterials({
+    sessionId: sessionId.value,
+    preserveSessionMaterials: true
+  })
 
   // 恢复当前节点引用（优先级：路由 query > localStorage）
   if (typeof window !== 'undefined') {
