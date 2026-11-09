@@ -609,6 +609,26 @@ class TestEvidenceSynthesizer(unittest.TestCase):
         self.assertEqual(len(packet.relevant_chunks), 2)
         self.assertEqual(packet.query, "排序算法复杂度对比")
 
+    def test_model_citations_must_reference_indexed_chunks(self):
+        class FakeLLM:
+            def chat_json(self, **_kwargs):
+                return {
+                    "synthesized_context": "冒泡排序要比较相邻元素。",
+                    "citations": [
+                        {"chunk_id": "manual_0", "text_snippet": "虚构片段"},
+                        {"chunk_id": "c1", "text_snippet": "虚构片段", "source_ref": "虚构文件"},
+                    ],
+                }
+
+        packet = self.EvidenceSynthesizer(llm_client=FakeLLM()).synthesize([
+            SearchResult(chunk_id="c1", content="冒泡排序比较相邻元素。", score=0.9,
+                         source={"file_name": "教材.pdf"}),
+        ], query="冒泡排序")
+        self.assertEqual(len(packet.citations), 1)
+        self.assertEqual(packet.citations[0].chunk_id, "c1")
+        self.assertEqual(packet.citations[0].text_snippet, "冒泡排序比较相邻元素。")
+        self.assertEqual(packet.citations[0].source_ref, "教材.pdf")
+
     def test_default_llm_is_bounded_for_latency_sensitive_evidence(self):
         """默认证据合成客户端不重试，且不会继承过长的全局超时。"""
         synth = self.EvidenceSynthesizer()

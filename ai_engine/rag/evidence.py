@@ -214,16 +214,23 @@ class EvidenceSynthesizer:
 
         synthesized = result.get("synthesized_context", "")
         raw_citations = result.get("citations", [])
-
-        citations = [
-            Citation(
-                chunk_id=c.get("chunk_id", ""),
-                text_snippet=c.get("text_snippet", ""),
-                source_ref=c.get("source_ref", ""),
-            )
-            for c in raw_citations
-            if isinstance(c, dict)
-        ]
+        indexed = {item.chunk_id: item for item in results}
+        citations = []
+        for raw in (raw_citations if isinstance(raw_citations, list) else []):
+            if not isinstance(raw, dict):
+                continue
+            chunk_id = str(raw.get("chunk_id") or "").strip()
+            source = indexed.get(chunk_id)
+            if source is None:
+                continue
+            snippet = str(raw.get("text_snippet") or "").strip()
+            if not snippet or snippet not in source.content:
+                snippet = source.content[:100]
+            citations.append(Citation(
+                chunk_id=chunk_id,
+                text_snippet=snippet,
+                source_ref=(source.source or {}).get("file_name", ""),
+            ))
 
         return synthesized, citations
 

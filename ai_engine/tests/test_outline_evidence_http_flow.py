@@ -23,6 +23,36 @@ class FallbackBuilder(OutlineBuilder):
         super().__init__(llm_client=FailingLLM())
 
 
+def test_successful_model_outline_binds_only_matching_evidence_ids():
+    class SuccessfulLLM:
+        def chat_with_schema(self, *_args, **_kwargs):
+            titles = ["排序算法导入", "冒泡排序原理", "快速排序原理", "课堂练习", "总结"]
+            return {"nodes": [
+                {"node_id": f"node_{index:03d}", "title": title,
+                 "summary": title, "node_type": "slide",
+                 "key_points": [title], "estimated_duration_minutes": 9}
+                for index, title in enumerate(titles, start=1)
+            ]}
+
+    result = OutlineBuilder(llm_client=SuccessfulLLM()).build(
+        intent={"topic": "排序算法", "duration_minutes": 45,
+                "knowledge_points": ["冒泡排序", "快速排序"]},
+        evidence_packet={"relevant_chunks": [
+            {"chunk_id": "bubble_ref", "content": "冒泡排序比较并交换相邻元素。"},
+            {"chunk_id": "quick_ref", "content": "快速排序通过枢轴划分序列。"},
+        ], "citations": [
+            {"chunk_id": "invented_ref", "text_snippet": "冒泡排序比较并交换相邻元素。"},
+        ]},
+    )
+    assert result["used_fallback"] is False
+    by_title = {node["title"]: node["source_chunk_ids"] for node in result["nodes"]}
+    assert by_title["冒泡排序原理"] == ["bubble_ref"]
+    assert by_title["快速排序原理"] == ["quick_ref"]
+    assert by_title["排序算法导入"] == []
+    assert by_title["课堂练习"] == []
+    assert all("invented_ref" not in refs for refs in by_title.values())
+
+
 def test_indexed_material_flows_into_initial_outline_fallback(monkeypatch):
     store = InMemoryVectorStore()
     monkeypatch.setattr(rag_module, "_store", store)

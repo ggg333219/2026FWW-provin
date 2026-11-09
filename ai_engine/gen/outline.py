@@ -171,7 +171,7 @@ class OutlineBuilder:
         markdown = self._append_intent_context(markdown, intent)
         markdown = self._append_generation_instructions(markdown, generation_instruction_set)
         fallback = self._fallback_outline(title, key_points, total_duration, evidence_packet)
-        return self._generate_checked(markdown, key_points, total_duration, fallback)
+        return self._generate_checked(markdown, key_points, total_duration, fallback, evidence_packet)
 
     def build_from_markdown(
         self,
@@ -193,11 +193,12 @@ class OutlineBuilder:
         evidence_text = self._format_evidence(evidence_packet)
         if evidence_text:
             markdown += f"\n\n## 参考材料\n{evidence_text}"
-        return self._generate_checked(markdown, [], total_duration, fallback)
+        return self._generate_checked(markdown, [], total_duration, fallback, evidence_packet)
 
     def _generate_checked(
         self, markdown: str, key_points: list[str],
         total_duration: float | None, fallback: dict[str, Any],
+        evidence_packet: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Accept only a usable model outline; retain an explicit fallback signal."""
         try:
@@ -222,6 +223,7 @@ class OutlineBuilder:
                     "fallback_reason": "low_quality_model_response",
                 }
             self._balance_durations(nodes, total_duration)
+            self._bind_model_evidence(nodes, evidence_packet, key_points)
             return {"nodes": self._finalize(nodes, total_duration), "used_fallback": False}
         except Exception as exc:
             return {
@@ -494,9 +496,15 @@ class OutlineBuilder:
         # available to both the model prompt and the deterministic fallback.
         chunks = evidence_packet.get("chunks") or evidence_packet.get("relevant_chunks") or []
         citations = evidence_packet.get("citations") or []
+        indexed_ids = {
+            str(chunk.get("chunk_id") or "").strip()
+            for chunk in chunks if isinstance(chunk, dict)
+            and str(chunk.get("content") or "").strip()
+            and str(chunk.get("chunk_id") or "").strip()
+        } if isinstance(chunks, list) else set()
         items: list[dict[str, str]] = []
         seen: set[str] = set()
-        for source in (chunks, citations):
+        for source, is_citation in ((chunks, False), (citations, True)):
             if not isinstance(source, list):
                 continue
             for raw in source:
@@ -504,6 +512,8 @@ class OutlineBuilder:
                     continue
                 content = str(raw.get("content") or raw.get("text_snippet") or "").strip()
                 chunk_id = str(raw.get("chunk_id") or "").strip()
+                if is_citation and indexed_ids and chunk_id not in indexed_ids:
+                    continue
                 if not content or (chunk_id and chunk_id in seen):
                     continue
                 if chunk_id:
@@ -525,6 +535,50 @@ class OutlineBuilder:
             label = f"[{source}] " if source else ""
             lines.append(f"- {label}{item['content'][:200]}")
         return "\n".join(lines)
+
+    @classmethod
+    def _bind_model_evidence(
+        cls,
+        nodes: list[dict[str, Any]],
+        evidence_packet: dict[str, Any] | None,
+        key_points: list[str],
+    ) -> None:
+        """Attach only indexed evidence IDs that support each model node.
+
+        The stage-two model schema intentionally excludes source_chunk_ids, so
+        a successful model response cannot carry citations on its own.
+        """
+        items = [item for item in cls._evidence_items(evidence_packet) if item["chunk_id"]]
+        if not items:
+            return
+        allowed_ids = {item["chunk_id"] for item in items}
+        for node in nodes:
+            node_text = " ".join([
+                str(node.get("title") or ""),
+                str(node.get("summary") or ""),
+                *normalize_text_list(node.get("key_points")),
+            ])
+            terms = [point for point in key_points if len(point.strip()) >= 2 and point in node_text]
+            if not key_points:
+                # Markdown-only requests have no structured intent points.
+                # Require a longer shared phrase to avoid generic one-character matches.
+                terms = [
+                    segment[index:index + 4]
+                    for segment in re.findall(r"[一-鿿]{4,}", node_text)
+                    for index in range(len(segment) - 3)
+                ]
+                terms.extend(re.findall(r"[A-Za-z0-9]{3,}", node_text))
+            matched = [
+                item["chunk_id"] for item in items
+                if any(term.casefold() in item["content"].casefold() for term in terms)
+            ]
+            existing = [
+                str(ref) for ref in (node.get("source_chunk_ids") or [])
+                if str(ref) in allowed_ids
+            ]
+            refs = list(dict.fromkeys([*existing, *matched]))
+            if refs:
+                node["source_chunk_ids"] = refs
 
     def _fallback_outline(
         self,
