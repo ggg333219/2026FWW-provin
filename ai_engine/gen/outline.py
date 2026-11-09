@@ -33,9 +33,17 @@ from ..core.llm import LLMClient, resolve_llm_timeout
 _KNOWLEDGE_ALIASES = {
     "冒泡排序": ("冒泡排序", "冒泡法", "bubble sort", "bubblesort"),
     "快速排序": ("快速排序", "快排", "quick sort", "quicksort"),
+    "相邻比较": ("相邻比较", "比较相邻", "逐对比较相邻"),
+    "交换": ("交换", "互换", "调换"),
+    "每轮": ("每轮", "每一轮", "一轮结束后", "一轮比较交换后"),
+    "最大值": ("最大值", "最大元素"),
+    "归位": ("归位", "位于末尾", "固定到末尾", "移动到末尾"),
     "时间复杂度": ("时间复杂度", "运行时间复杂度", "时间开销", "运行耗时", "执行耗时"),
     "空间复杂度": ("空间复杂度", "内存复杂度", "空间开销", "内存开销"),
     "稳定性": ("稳定性", "排序稳定", "是否稳定", "稳定排序", "相等元素的相对顺序", "相同元素的相对顺序"),
+    "数组示例": ("数组示例", "具体数组", "给定数组", "数组演示"),
+    "演示": ("演示", "展示", "手工走", "逐步走"),
+    "课堂练习": ("设计课堂练习", "课堂练习", "练习题", "课堂小测"),
     "复杂度": ("复杂度", "时间开销", "空间开销", "运行耗时", "内存开销"),
     "对比": ("对比", "比较", "对照", "差异", "优劣", "区别"),
 }
@@ -55,20 +63,48 @@ def _covers_component(component: str, node_text: str) -> bool:
     for name, aliases in _KNOWLEDGE_ALIASES.items():
         if required == _coverage_text(name) or required in {_coverage_text(alias) for alias in aliases}:
             return any(_coverage_text(alias) in node_text for alias in aliases)
-    # “复杂度对比” is a relationship: both concepts must occur in one teaching
-    # node. Mentioning complexity in one node and an unrelated comparison in
-    # another does not teach that comparison.
-    if required in {"复杂度对比", "复杂度比较", "对比复杂度", "比较复杂度"}:
-        return (
-            _covers_component("复杂度", node_text)
-            and _covers_component("对比", node_text)
-        )
     return False
 
 
 def _knowledge_point_covered(point: str, node_texts: list[str]) -> bool:
-    # Conjoined requirements are independent: “时间复杂度与稳定性” needs both,
-    # while each may be taught in a different node.
+    required = _coverage_text(point)
+    if not required:
+        return False
+    if any(required in node_text for node_text in node_texts):
+        return True
+
+    # A teacher may state several requirements in one sentence. Consume only
+    # known concepts; any meaningful remainder still needs literal coverage.
+    # This avoids accepting “冒泡排序的相邻比较与交换” for a node that merely says
+    # “冒泡排序”, while allowing its three concepts to span teaching nodes.
+    remainder = required
+    facets: list[str] = []
+    groups = sorted(
+        _KNOWLEDGE_ALIASES.items(),
+        key=lambda group: max(len(_coverage_text(alias)) for alias in group[1]),
+        reverse=True,
+    )
+    for name, aliases in groups:
+        for alias in sorted(aliases, key=lambda value: len(_coverage_text(value)), reverse=True):
+            normalized_alias = _coverage_text(alias)
+            if normalized_alias in remainder:
+                facets.append(name)
+                remainder = remainder.replace(normalized_alias, "", 1)
+                break
+
+    if facets:
+        if remainder and not re.fullmatch(r"[的与和及用并以、，,/；;]+", remainder):
+            facets.append(remainder)
+        if required in {"复杂度对比", "复杂度比较", "对比复杂度", "比较复杂度"}:
+            return any(
+                all(_covers_component(facet, node_text) for facet in facets)
+                for node_text in node_texts
+            )
+        return all(
+            any(_covers_component(facet, node_text) for node_text in node_texts)
+            for facet in facets
+        )
+
     parts = [part.strip() for part in re.split(r"(?:以及|与|及|和|、|[，,/；;])", str(point)) if part.strip()]
     return bool(parts) and all(
         any(_covers_component(part, node_text) for node_text in node_texts)

@@ -1,5 +1,8 @@
 """F03: a 45-minute outline must be teachable before it is marked model-successful."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from ai_engine.gen.outline import OutlineBuilder
@@ -206,3 +209,48 @@ def test_persistently_missing_one_composite_component_keeps_fallback():
     assert result["used_fallback"] is True
     assert result["fallback_reason"] == "low_quality_model_response"
     assert "时间复杂度与稳定性" in llm.calls[1][1]
+
+
+_DIAGNOSTIC = json.loads(
+    (Path(__file__).parent / "fixtures" / "pr16_outline_diagnostic_replay.json").read_text(encoding="utf-8")
+)
+
+
+@pytest.mark.parametrize("attempt_index", [0, 1])
+def test_pr16_real_model_outline_replay_is_accepted_without_retry(attempt_index):
+    attempt = _DIAGNOSTIC["generation_attempts"][attempt_index]
+    llm = SequenceLLM({"nodes": attempt["nodes"]})
+    intent = {
+        "topic": "冒泡排序",
+        "duration_minutes": 45,
+        "knowledge_points": _DIAGNOSTIC["requested_knowledge_points"],
+    }
+
+    result = OutlineBuilder(llm_client=llm).build(intent)
+
+    assert result["used_fallback"] is False
+    assert len(result["nodes"]) == len(attempt["nodes"])
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.parametrize("before, after, missing", [
+    ("相邻", "远距离", "冒泡排序的相邻比较与交换"),
+    ("稳定", "平稳", "冒泡排序的时间复杂度与稳定性"),
+    ("最大值", "当前值", "冒泡排序每轮最大值归位"),
+    ("课堂练习", "课堂讲授", "用数组示例演示并设计课堂练习"),
+])
+def test_pr16_replay_rejects_missing_required_facet(before, after, missing):
+    attempt = _DIAGNOSTIC["generation_attempts"][0]
+    nodes = [
+        {
+            **node,
+            "title": node["title"].replace(before, after),
+            "summary": node["summary"].replace(before, after),
+            "key_points": [value.replace(before, after) for value in node["key_points"]],
+        }
+        for node in attempt["nodes"]
+    ]
+
+    issues = OutlineBuilder()._quality_issues(nodes, [missing], 45)
+
+    assert "缺少明确知识点：" + missing in issues
