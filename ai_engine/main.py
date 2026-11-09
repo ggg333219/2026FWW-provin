@@ -1060,15 +1060,27 @@ def _content_evidence_context(req: "GenContentRequest") -> str:
     if not isinstance(instruction, dict):
         instruction = {}
     parts: list[str] = []
-
     explicit = str(req.context_markdown or "").strip()
     if explicit:
-        parts.append(explicit)
+        parts.append(
+            "【参考材料】\n以下是从知识库检索到的相关资料，生成讲稿时须以其为准，"
+            "不得编造材料中不存在的知识点：\n" + explicit
+        )
 
     evidence_text = _evidence_brief(instruction.get("confirmed_evidence"))
     if evidence_text:
+        evidence = instruction.get("confirmed_evidence") or {}
+        source_refs = []
+        if isinstance(evidence, dict):
+            for chunk in evidence.get("relevant_chunks") or []:
+                if isinstance(chunk, dict):
+                    source = str(chunk.get("source_ref") or "").strip()
+                    if source and source not in source_refs:
+                        source_refs.append(source)
         parts.append(
-            "已确认的参考资料（讲稿需据此展开，不得引入资料之外的事实）：\n" + evidence_text
+            "【已确认的参考资料】\n讲稿需据此展开，不得引入资料之外的事实。\n"
+            + evidence_text
+            + ("\n来源：" + "、".join(source_refs) if source_refs else "")
         )
 
     intent = req.intent or instruction.get("intent") or {}
@@ -1082,8 +1094,23 @@ def _content_evidence_context(req: "GenContentRequest") -> str:
             if isinstance(value, (str, int, float, bool)):
                 bits.append(f"{key}: {value}")
         if bits:
-            parts.append("教学意图：" + "；".join(bits))
+            parts.append("【教学意图】\n" + "；".join(bits))
 
+    return "\n\n".join(parts)
+
+
+def _content_reference_context(req: "GenContentRequest") -> str:
+    """提取首次讲稿生成请求中的真实资料，不混入教学意图。"""
+    instruction = req.generation_instruction_set or {}
+    if not isinstance(instruction, dict):
+        instruction = {}
+    parts = []
+    explicit = str(req.context_markdown or "").strip()
+    if explicit:
+        parts.append(explicit)
+    evidence_text = _evidence_brief(instruction.get("confirmed_evidence"))
+    if evidence_text:
+        parts.append(evidence_text)
     return "\n\n".join(parts)
 
 
@@ -1163,7 +1190,10 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         # 规划失败不阻断生成 —— 见 _plan_deck_safe。
         bound_evidence, _bound_used = _load_page_evidence(req.evidence_refs)
         plan_evidence = "\n\n".join(
-            part for part in (bound_evidence.strip(), content_context.strip()) if part
+            part for part in (
+                bound_evidence.strip(),
+                _content_reference_context(req).strip(),
+            ) if part
         )
         plans = _plan_deck_safe(
             effective_intent, nodes, plan_evidence, req.generation_instruction_set
@@ -1178,6 +1208,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                 enhanced_scripts = generator.generate_enhanced(
                     nodes, content_context, req.course_name,
                     generation_instruction_set=req.generation_instruction_set,
+                    context_is_preformatted=True,
                 ).get("scripts", []) or []
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger(__name__).warning(
@@ -1218,6 +1249,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                         script_data = generator.generate_single(
                             node, req.course_name,
                             context_markdown=content_context,
+                            context_is_preformatted=True,
                             teaching_plan=plans.get(str(node.get("node_id") or "")),
                             generation_instruction_context=NodeGenerator._generation_instruction_context(req.generation_instruction_set),
                         )
@@ -1226,6 +1258,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                     script_data = generator.generate_single(
                         node, req.course_name,
                         context_markdown=content_context,
+                        context_is_preformatted=True,
                         teaching_plan=plans.get(str(node.get("node_id") or "")),
                         generation_instruction_context=NodeGenerator._generation_instruction_context(req.generation_instruction_set),
                     )
