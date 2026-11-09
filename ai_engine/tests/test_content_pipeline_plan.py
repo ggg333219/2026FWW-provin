@@ -134,7 +134,7 @@ class _FakeGenerator:
         self.enhanced_calls = 0
         self.single_calls: list[str] = []
 
-    def generate_enhanced(self, nodes, markdown="", course_name=None):
+    def generate_enhanced(self, nodes, markdown="", course_name=None, **kwargs):
         self.enhanced_calls += 1
         return {"scripts": [
             {"node_id": "n1", "title": "第一页", "script": "批量-n1", "segments": []},
@@ -152,7 +152,16 @@ class _FakeGenerator:
 def _run(req: GenContentRequest, monkeypatch,
          generator_cls: type = _FakeGenerator) -> tuple[dict, _FakeGenerator]:
     fake = generator_cls()
-    monkeypatch.setattr(main_module, "NodeGenerator", lambda *a, **k: fake)
+
+    # 管道会调 NodeGenerator._generation_instruction_context(...)；桩必须保留这个
+    # 类方法，否则每个节点都会以 AttributeError 失败（测试桩与实现脱节）。
+    class _StubNodeGenerator:
+        _generation_instruction_context = staticmethod(lambda instruction: {})
+
+        def __new__(cls, *a, **k):
+            return fake
+
+    monkeypatch.setattr(main_module, "NodeGenerator", _StubNodeGenerator)
     content_id = "content_test"
     main_module._content_tasks[content_id] = {
         "content_id": content_id, "status": "generating", "progress_pct": 0.0,
@@ -190,7 +199,7 @@ def test_enhanced_pipeline_keeps_each_page_own_script(monkeypatch):
 class _ExplodingEnhancedGenerator(_FakeGenerator):
     """批量接口整体失败（限流 / 502 / 超时）。"""
 
-    def generate_enhanced(self, nodes, markdown="", course_name=None):
+    def generate_enhanced(self, nodes, markdown="", course_name=None, **kwargs):
         self.enhanced_calls += 1
         raise RuntimeError("批量接口 502")
 
@@ -237,3 +246,77 @@ def test_pipeline_still_works_when_the_planner_dies(monkeypatch):
     assert len(task["nodes"]) == 3
     assert task["status"] == "done"
     assert all("teaching_plan" not in n for n in task["nodes"])
+
+
+# =============================================================================
+# 4. 已确认资料必须真的进入讲稿 Prompt（/gen/content 首次全量生成）
+# =============================================================================
+
+def test_content_evidence_context_reads_confirmed_evidence_and_intent():
+    """前端不传 context_markdown / intent，资料与意图都在 instruction_set 里。"""
+    req = GenContentRequest(
+        nodes=[{"node_id": "n1", "title": "队列"}],
+        generation_instruction_set={
+            "confirmed_evidence": {"synthesized_context": "队列是先进先出的线性结构"},
+            "intent": {"topic": "图搜索", "target_student": "高一"},
+        },
+    )
+    assert req.context_markdown == ""
+    assert req.intent == {}
+
+    ctx = main_module._content_evidence_context(req)
+    assert "队列是先进先出的线性结构" in ctx
+    assert "图搜索" in ctx
+    assert "高一" in ctx
+
+
+def test_content_evidence_context_stays_empty_without_evidence():
+    """没有已确认资料时不能凭空造出「参考资料」，无资料模式仍是空上下文。"""
+    req = GenContentRequest(
+        nodes=[{"node_id": "n1"}],
+        generation_instruction_set={"confirmed_evidence": None, "intent": {}},
+    )
+    assert main_module._content_evidence_context(req) == ""
+
+
+def test_full_pipeline_feeds_evidence_into_script_prompt(monkeypatch):
+    """管道级：generate_single 拿到的 context_markdown 必须含资料正文。
+
+    改动前这里恒为空串，讲稿凭空生成，页面却仍挂 citation_refs。
+    """
+    class _CapturingNodeGenerator:
+        contexts: list = []
+        _generation_instruction_context = staticmethod(lambda instruction: {})
+
+        def generate_single(self, node, course_name=None, **kwargs):
+            _CapturingNodeGenerator.contexts.append(kwargs.get("context_markdown", ""))
+            return {"node_id": node["node_id"], "title": node.get("title", ""),
+                    "script": "讲稿", "segments": []}
+
+        def generate_enhanced(self, nodes, markdown="", course_name=None, **kwargs):
+            _CapturingNodeGenerator.contexts.append(markdown)
+            return {"scripts": []}
+
+    monkeypatch.setattr(main_module, "NodeGenerator", _CapturingNodeGenerator)
+    _CapturingNodeGenerator.contexts.clear()
+
+    req = GenContentRequest(
+        nodes=[{"node_id": "n1", "type": "content", "title": "队列", "summary": "先进先出"}],
+        generation_instruction_set={
+            "confirmed_evidence": {"synthesized_context": "队列是先进先出的线性结构"},
+            "intent": {"topic": "图搜索"},
+        },
+    )
+    content_id = "content_evidence_test"
+    main_module._content_tasks[content_id] = {
+        "content_id": content_id, "status": "generating", "progress_pct": 0.0,
+        "current_node_id": "", "total_nodes": 1, "completed_nodes": 0,
+        "nodes": [], "error": None,
+    }
+    try:
+        _run_content_pipeline(content_id, req)
+        assert _CapturingNodeGenerator.contexts
+        assert all("队列是先进先出的线性结构" in ctx
+                   for ctx in _CapturingNodeGenerator.contexts)
+    finally:
+        main_module._content_tasks.pop(content_id, None)

@@ -2,6 +2,12 @@
 
 > 基于 Phase 2 工作流分析结果编写
 > 最后更新: 2026-07-15
+>
+> **状态提示（2026-11-08）**：本文是早期设计稿，接口端点与证据获取方式已与实现不符。
+> 实际端点为 `POST /api/v1/gen/create` / `GET /api/v1/gen/status/:task_id`；
+> `EVIDENCE_GATHERING` 阶段只读取请求体里的 `evidence_packet`，**没有自动 RAG 检索**。
+> 下文 §3 的 `/api/v1/generation/*` 为历史命名，当前实现以
+> `docs/S3生成链路-调查结论.md` 中的契约对照为准。
 
 ## 1. 概述
 
@@ -17,7 +23,7 @@ Skill 3 是核心生成管道：接收确认后的教学意图 + 知识库证据
 ```
 [INTENT_LOCKED] 
     ↓
-[EVIDENCE_GATHERING] ← 从 RAG 获取证据包
+[EVIDENCE_GATHERING] ← 读取请求体 evidence_packet（当前无自动 RAG 检索）
     ↓
 [STRUCTURING]   ← 构建大纲/目录 (outline_builder)
     ↓
@@ -32,23 +38,31 @@ Skill 3 是核心生成管道：接收确认后的教学意图 + 知识库证据
 
 ## 3. 接口契约
 
-### POST /api/v1/generation/create
+### POST /api/v1/gen/create
+
+> 订正（2026-11-08）：原文端点为 `/api/v1/generation/create`，实际实现在
+> `ai_engine/main.py` 的 `/api/v1/gen/create`；响应模型是 `GenerationCreateResponse`，
+> 字段为 `task_id / generation_id / status / generation_type / outline_id / outline_version`。
+> `evidence_packet` 来自前端 S2 已确认的资料，**不是**后端按 session_id 自动从 RAG 拉取。
 
 ```json
 {
   "session_id": "uuid",
   "intent": { /* 来自 S1 */ },
-  "evidence_packet": { /* 来自 RAG */ },
+  "evidence_packet": { /* 前端 S2 已确认的资料 */ },
   "template_id": "default|compact|creative"
 }
 → {
   "task_id": "uuid",
+  "generation_id": "uuid",
   "status": "generating",
-  "generation_type": "ppt|doc|interactive"
+  "generation_type": "ppt|doc|interactive",
+  "outline_id": "uuid",
+  "outline_version": 1
 }
 ```
 
-### GET /api/v1/generation/status/:task_id
+### GET /api/v1/gen/status/:task_id
 
 ```json
 → {

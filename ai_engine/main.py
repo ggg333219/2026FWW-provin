@@ -1043,6 +1043,50 @@ def _evidence_brief(evidence: Any) -> str:
     return "\n\n".join(parts)[:_PLAN_EVIDENCE_LIMIT]
 
 
+def _content_evidence_context(req: "GenContentRequest") -> str:
+    """把 /gen/content 请求里的已确认资料整理成讲稿可用的参考材料。
+
+    教师点「生成全部节点讲稿」时，前端不传 ``context_markdown``，而是把整份 S2
+    证据包放在 ``generation_instruction_set.confirmed_evidence``，S1 意图放在
+    ``generation_instruction_set.intent``（见前端 buildGenerationInstructionSet）。
+    此前管道只读 ``req.context_markdown``（空串），于是讲稿凭空生成、页面却仍挂
+    ``citation_refs``，看起来像引用过资料。这里显式把两者读出来，让讲稿与引用
+    角标有同一份依据。
+
+    局部重生成（mode=partial）**不走这里**：那一支由 _load_page_evidence 按
+    evidence_refs 精确取用页面绑定证据，语义是「只允许引用这些 chunk」。
+    """
+    instruction = req.generation_instruction_set or {}
+    if not isinstance(instruction, dict):
+        instruction = {}
+    parts: list[str] = []
+
+    explicit = str(req.context_markdown or "").strip()
+    if explicit:
+        parts.append(explicit)
+
+    evidence_text = _evidence_brief(instruction.get("confirmed_evidence"))
+    if evidence_text:
+        parts.append(
+            "已确认的参考资料（讲稿需据此展开，不得引入资料之外的事实）：\n" + evidence_text
+        )
+
+    intent = req.intent or instruction.get("intent") or {}
+    if isinstance(intent, dict):
+        bits: list[str] = []
+        for key, value in intent.items():
+            if value is None or value == "" or value == [] or value == {}:
+                continue
+            if isinstance(value, (list, tuple)):
+                value = "、".join(str(item) for item in value)
+            if isinstance(value, (str, int, float, bool)):
+                bits.append(f"{key}: {value}")
+        if bits:
+            parts.append("教学意图：" + "；".join(bits))
+
+    return "\n\n".join(parts)
+
+
 def _run_content_pipeline(content_id: str, req: GenContentRequest):
     """后台内容生成管道：逐节点生成讲稿（同步，daemon 线程）
 
@@ -1105,6 +1149,11 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         generator = NodeGenerator()
         nodes = req.nodes
         target_ids = set(req.target_node_ids)
+
+        # 首次全量讲稿：前端把资料与意图放在 generation_instruction_set 里，
+        # 而不是 context_markdown / intent。显式读出后，讲稿 Prompt 才拿得到资料。
+        content_context = _content_evidence_context(req)
+        effective_intent = req.intent or (req.generation_instruction_set or {}).get("intent") or {}
         total = len(nodes)
         completed = []
         errors = []
@@ -1114,10 +1163,10 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         # 规划失败不阻断生成 —— 见 _plan_deck_safe。
         bound_evidence, _bound_used = _load_page_evidence(req.evidence_refs)
         plan_evidence = "\n\n".join(
-            part for part in (bound_evidence.strip(), (req.context_markdown or "").strip()) if part
+            part for part in (bound_evidence.strip(), content_context.strip()) if part
         )
         plans = _plan_deck_safe(
-            req.intent, nodes, plan_evidence, req.generation_instruction_set
+            effective_intent, nodes, plan_evidence, req.generation_instruction_set
         )
 
         # 增强批量生成原本写在循环体内：对 N 个节点会把**整批**讲稿生成 N 次，
@@ -1127,7 +1176,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
         if req.enhanced:
             try:
                 enhanced_scripts = generator.generate_enhanced(
-                    nodes, req.context_markdown, req.course_name,
+                    nodes, content_context, req.course_name,
                     generation_instruction_set=req.generation_instruction_set,
                 ).get("scripts", []) or []
             except Exception as exc:  # noqa: BLE001
@@ -1168,7 +1217,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                     if script_data is None:
                         script_data = generator.generate_single(
                             node, req.course_name,
-                            context_markdown=req.context_markdown,
+                            context_markdown=content_context,
                             teaching_plan=plans.get(str(node.get("node_id") or "")),
                             generation_instruction_context=NodeGenerator._generation_instruction_context(req.generation_instruction_set),
                         )
@@ -1176,7 +1225,7 @@ def _run_content_pipeline(content_id: str, req: GenContentRequest):
                 else:
                     script_data = generator.generate_single(
                         node, req.course_name,
-                        context_markdown=req.context_markdown,
+                        context_markdown=content_context,
                         teaching_plan=plans.get(str(node.get("node_id") or "")),
                         generation_instruction_context=NodeGenerator._generation_instruction_context(req.generation_instruction_set),
                     )
@@ -2002,8 +2051,8 @@ def _run_generation_pipeline(task_id: str, req: GenerationCreateRequest):
         _persist_task_sync(task)
 
         # Stage 2: 收集证据（如有）
-        # ★ P1修复：如果前端未传 evidence_packet，但有 session_id，
-        #   自动从 RAG 知识库获取证据，实现 S2→KB→S3 自动链路。
+        # 证据只取自请求的 evidence_packet，当前未实现「按 session_id 自动 RAG 补齐」。
+        # 未传时 evidence_dict 为 None；S2 已确认的资料须由前端显式放进请求体。
         task.stage = GenerationStage.EVIDENCE_GATHERING
         task.progress_pct = 20.0
         _persist_task_sync(task)

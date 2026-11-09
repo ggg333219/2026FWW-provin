@@ -195,6 +195,12 @@ export const teacherGenerationApi = {
   // 与 gen API 的区别：
   //   gen API = 全流程（outline → nodes → PPT）
   //   content API = 仅生成节点讲稿内容（outline → content），供教师确认后再生成 PPT
+  //   ⚠ 证据注入方式不同，不能只理解成「全流程 vs 仅讲稿」：
+  //     content API 不传 evidence_packet / intent / context_markdown，资料在
+  //     generation_instruction_set.confirmed_evidence 里，由 AI Engine 的
+  //     _content_evidence_context() 读进讲稿 Prompt；gen/create 直接用 evidence_packet。
+  //   ⚠ outline_nodes 虽在下方请求体里发出，但 Go / Python 的 GenContentRequest
+  //     均未声明该字段，会被静默丢弃；大纲节点实际随 nodes 传递。
   // ================================================================
 
   /** POST /api/v1/gen/content — 为已确认大纲的节点生成讲稿内容 */

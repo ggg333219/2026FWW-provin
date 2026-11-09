@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useVersionStore } from './versionStore'
 import { teacherV1Api } from '../services/v1'
 import { projectModifyApi } from '../services/v1/projectModifyApi'
+import { handleMockRequest } from '../services/v1/mockBackend'
 
 function createStorage() {
   const values = new Map()
@@ -19,12 +20,25 @@ beforeEach(() => {
   vi.restoreAllMocks()
   const localStorage = createStorage()
   globalThis.window = { localStorage }
-  // 后端不可达 → requestJson 回退 Mock（契约路径 /api/v1/exp）
-  globalThis.fetch = () => Promise.reject(new Error('backend unreachable'))
+  // 显式模拟「后端可达」的响应。导出 / 版本链路现在禁止靠网络失败静默回退 Mock，
+  // 因此测试改走真实 requestJson 路径，由 mockBackend 提供与 Go 一致的响应体；
+  // 原本断言的 job_id、Blob 下载、导出契约字段全部保留。
+  globalThis.fetch = vi.fn(async (url, options = {}) => {
+    const parsed = new URL(String(url), 'http://localhost')
+    const payload = handleMockRequest(
+      parsed.pathname + parsed.search,
+      options,
+      new Error('explicit backend stub'),
+    )
+    if (!payload) {
+      return { ok: false, status: 404, json: async () => ({ code: 404, message: `未匹配路由: ${parsed.pathname}` }) }
+    }
+    return { ok: true, status: 200, json: async () => payload }
+  })
   setActivePinia(createPinia())
 })
 
-describe('versionStore S4 导出闭环（Mock）', () => {
+describe('versionStore S4 导出闭环（后端桩）', () => {
   it('项目版本按最新版本显示，即使后端按版本号升序返回', async () => {
     vi.spyOn(projectModifyApi, 'versions').mockResolvedValue({ data: { items: [
       { version_id: 'ver_1', version_no: 1 },
