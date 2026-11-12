@@ -4,15 +4,15 @@
     <section class="kb-card">
       <div class="card-head">
         <div>
-          <h3>知识库 RAG 检索</h3>
-          <span class="card-desc">向量 + BM25 混合检索，返回切片与命中分数</span>
+          <h3>手动查找参考内容</h3>
+          <span class="card-desc">可调整关键词和返回数量，再手选片段供课件生成参考。</span>
         </div>
         <button
           class="primary-btn ghost"
           :disabled="materialStore.indexing"
           @click="handleIndexKnowledge"
         >
-          {{ materialStore.indexing ? '索引中…' : '索引知识库' }}
+          {{ materialStore.indexing ? '正在发送索引请求…' : '重新索引资料' }}
         </button>
       </div>
 
@@ -33,9 +33,7 @@
           {{ materialStore.searching ? '检索中…' : '检索' }}
         </button>
       </div>
-      <p v-if="materialStore.error && materialStore.error.startsWith('RAG')" class="inline-error">
-        {{ materialStore.error }}
-      </p>
+      <ErrorState v-if="searchError" title="检索服务异常" :description="searchError" retry-text="重试检索" inline @retry="handleSearch" />
     </section>
 
     <!-- ============ 检索结果 ============ -->
@@ -45,16 +43,14 @@
           <h3>检索结果</h3>
           <span class="card-desc">共 {{ totalResults }} 条命中，按相似度降序</span>
         </div>
-        <span v-if="totalChunks > 0" class="stat-badge">知识库 {{ totalChunks }} chunks</span>
+        <span v-if="totalChunks > 0" class="stat-badge">当前资料已提取 {{ totalChunks }} 段</span>
       </div>
 
       <div v-if="materialStore.searching" class="state-block">
         <div class="inline-spinner"></div>
         <p>正在检索知识库…</p>
       </div>
-      <div v-else-if="results.length === 0" class="state-block">
-        {{ searched ? '未检索到相关内容，试试调整关键词或先索引知识库' : '输入关键词开始检索' }}
-      </div>
+      <EmptyState v-else-if="!searchError && results.length === 0" :title="searched ? '本次没有命中资料' : '输入关键词开始检索'" :description="searched ? '可调整关键词、重新索引或补充资料。' : '检索成功后才会显示实际返回的资料片段。'" icon="search" inline />
       <div v-else class="result-list">
         <div v-for="(item, idx) in results" :key="item.chunk_id" class="result-item">
           <div class="result-head">
@@ -89,21 +85,21 @@
     <section class="kb-card">
       <div class="card-head">
         <div>
-          <h3>证据融合</h3>
-          <span class="card-desc">已确认 {{ selectedChunkIds.size }} 条；仅将已选片段作为课件依据</span>
+          <h3>把手选片段用于生成</h3>
+          <span class="card-desc">已选择 {{ selectedChunkIds.size }} 条。系统会根据所选片段整理参考内容；生成前可在主界面核对返回结果。</span>
         </div>
         <button
           class="primary-btn"
           :disabled="!query.trim() || materialStore.searching || hasConfirmedEmptySearch || selectedChunkIds.size === 0"
           @click="handleFuseEvidence"
         >
-          {{ hasConfirmedEmptySearch ? '暂无证据可融合' : '生成证据包' }}
+          {{ hasConfirmedEmptySearch ? '暂无片段可选' : '形成参考内容' }}
         </button>
       </div>
 
       <div v-if="hasConfirmedEmptySearch" class="evidence-warning" role="status">
         <strong>本次检索没有命中资料</strong>
-        <span>系统不会生成空证据包。请调整关键词、上传资料或先完成知识库索引。</span>
+        <span>请调整关键词、补充资料或重新索引。</span>
       </div>
 
       <div v-if="materialStore.searching" class="state-block">
@@ -117,7 +113,7 @@
             <span class="label">检索问题</span>
             <span class="value">{{ latestPacket.query }}</span>
             <button class="bind-btn" @click="handleBind">
-              {{ boundNodeRef ? `已绑定：${boundNodeRef}` : '绑定到当前内容' }}
+              {{ boundNodeRef ? '再次采用到当前草稿' : '再次采用这组片段' }}
             </button>
           </div>
           <div class="synth-context">
@@ -133,7 +129,7 @@
           </div>
         </div>
       </template>
-      <div v-else class="state-block">输入关键词并点击「生成证据包」，将检索结果融合为可引用的证据</div>
+      <div v-else class="state-block">检索并选择片段后，再形成课件参考内容</div>
     </section>
 
     <!-- ============ 证据包历史 ============ -->
@@ -167,6 +163,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useMaterialStore } from '../../stores/materialStore'
 import { intentStorageKey } from '../../stores/intentStore'
 import { useCoursewareProjectStore } from '../../stores/coursewareProjectStore'
+import EmptyState from '../common/EmptyState.vue'
+import ErrorState from '../common/ErrorState.vue'
 
 
 const props = defineProps({
@@ -193,6 +191,7 @@ const projectStore = useCoursewareProjectStore()
 const query = ref('')
 const topK = ref(10)
 const searched = ref(false)
+const searchError = ref('')
 const currentPage = ref(1)
 const selectedChunkIds = ref(new Set())
 const pageOffset = computed(() => (currentPage.value - 1) * topK.value)
@@ -211,7 +210,7 @@ const latestPacket = computed(() => {
   return String(latest.query || '').trim() === query.value.trim() ? latest : null
 })
 const citations = computed(() => latestPacket.value?.packet?.citations || [])
-const hasConfirmedEmptySearch = computed(() => searched.value && !materialStore.searching && results.value.length === 0)
+const hasConfirmedEmptySearch = computed(() => searched.value && !materialStore.searching && !searchError.value && results.value.length === 0)
 
 const fmtTime = (iso) => {
   if (!iso) return ''
@@ -222,7 +221,7 @@ const fmtTime = (iso) => {
 const handleIndexKnowledge = async () => {
   const result = await materialStore.indexKnowledgeBase({ sessionId: props.sessionId })
   if (result) {
-    emit('toast', `知识库索引完成，入库 ${result.chunk_count} 个切片`)
+    emit('toast', `索引请求返回 ${result.chunk_count} 段内容；请通过检索确认是否命中`)
   } else {
     emit('toast', '知识库索引失败，请检查后端服务')
   }
@@ -231,6 +230,7 @@ const handleIndexKnowledge = async () => {
 const handleSearch = async () => {
   if (!query.value.trim()) return
   searched.value = true
+  searchError.value = ''
   currentPage.value = 1
   selectedChunkIds.value = new Set()
   await runSearch()
@@ -240,11 +240,11 @@ const handlePageSizeChange = () => {
   if (searched.value) void handleSearch()
 }
 
-const runSearch = () => materialStore.searchRag({
-  query: query.value,
-  topK: topK.value,
-  offset: pageOffset.value
-})
+const runSearch = async () => {
+  const results = await materialStore.searchRag({ query: query.value, topK: topK.value, offset: pageOffset.value })
+  searchError.value = materialStore.error || ''
+  return results
+}
 
 const changePage = async (delta) => {
   const target = currentPage.value + delta
@@ -296,7 +296,9 @@ const handleFuseEvidence = async () => {
     selectedChunkIds: [...selectedChunkIds.value]
   })
   if (packet) {
-    emit('toast', '证据包已生成，可绑定到当前内容')
+    // Store 已写入 S3 交接缓存；同时通知 S2 主界面持久化教师手选的结果，
+    // 避免重新进入 S2 时自动检索覆盖手动选择。
+    handleBind()
   } else {
     emit('toast', materialStore.error || '证据融合失败，请先索引知识库')
   }
@@ -311,9 +313,7 @@ const handleBind = () => {
     createdAt: packet.createdAt,
     nodeRef: props.boundNodeRef || ''
   })
-  emit('toast', props.boundNodeRef
-    ? `证据已绑定到 ${props.boundNodeRef}`
-    : '证据包已输出，可传递给 S3 生成环节')
+  emit('toast', '本次参考内容已更新，请在主界面核对')
 }
 </script>
 

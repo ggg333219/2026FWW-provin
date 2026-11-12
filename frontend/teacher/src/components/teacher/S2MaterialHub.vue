@@ -5,7 +5,7 @@
       <div class="card-head">
         <div>
           <h3>资料上传</h3>
-          <span class="card-desc">支持 PPT / PDF / DOCX / 视频 / 音频 / 图片，上传后自动解析为切片</span>
+          <span class="card-desc">支持 PPT、PDF、Word、视频、音频和图片。上传后可在下方查看解析结果。</span>
         </div>
         <span class="stat-badge">{{ materialStore.materials.length }} 份素材</span>
       </div>
@@ -37,7 +37,7 @@
         <template v-else>
           <div class="uploading-box">
             <div class="spinner"></div>
-            <p class="drop-title">正在上传解析…</p>
+            <p class="drop-title">正在上传资料…</p>
           </div>
         </template>
       </div>
@@ -49,16 +49,16 @@
     <section v-if="activeParseTasks.length > 0" class="hub-card">
       <div class="card-head">
         <div>
-          <h3>解析任务</h3>
-          <span class="card-desc">解析状态机：uploaded → parsing → done / failed</span>
+          <h3>资料处理进度</h3>
+          <span class="card-desc">此处显示上传后文本提取的结果；可检索状态请看上方“本次依据准备”。</span>
         </div>
       </div>
       <div class="task-list">
         <div v-for="task in activeParseTasks" :key="task.taskId" class="task-row">
           <span class="task-file">{{ task.fileName }}</span>
           <span class="task-status" :class="task.status">{{ statusText(task.status) }}</span>
-          <span v-if="task.chunkCount > 0" class="task-count">{{ task.chunkCount }} chunks</span>
-          <span v-if="task.error" class="task-error" :title="task.error">解析失败</span>
+          <span v-if="task.chunkCount > 0" class="task-count">提取 {{ task.chunkCount }} 段内容</span>
+          <span v-if="task.error" class="task-error" :title="task.error">{{ task.error }}</span>
         </div>
       </div>
     </section>
@@ -67,8 +67,8 @@
     <section class="hub-card">
       <div class="card-head">
         <div>
-          <h3>素材与切片预览</h3>
-          <span class="card-desc">勾选素材后在右侧查看 ChunkSchema 切片</span>
+          <h3>已上传资料与提取内容</h3>
+          <span class="card-desc">勾选仅控制右侧的片段预览，不限制自动检索或课件生成使用的资料。</span>
         </div>
         <button
           v-if="materialStore.hasSelection"
@@ -104,7 +104,7 @@
                 <p class="material-meta">
                   {{ item.source || '未标注来源' }}
                   <template v-if="item.fileSize"> · {{ formatSize(item.fileSize) }}</template>
-                  <template v-if="item.chunks && item.chunks.length"> · {{ item.chunks.length }} chunks</template>
+                  <template v-if="item.chunks && item.chunks.length"> · 提取 {{ item.chunks.length }} 段</template>
                 </p>
               </div>
             </div>
@@ -124,16 +124,13 @@
                   <span class="chunk-seq">#{{ chunk.seqIndex != null ? chunk.seqIndex + 1 : '—' }}</span>
                   <span v-if="chunk.pageStart" class="chunk-loc">第 {{ chunk.pageStart }}<template v-if="chunk.pageEnd && chunk.pageEnd !== chunk.pageStart">-{{ chunk.pageEnd }}</template> 页</span>
                   <span v-else-if="chunk.timeStart != null" class="chunk-loc">{{ fmtTime(chunk.timeStart) }} - {{ fmtTime(chunk.timeEnd) }}</span>
-                  <span v-if="chunk.relevanceScore != null" class="chunk-score" :class="{ hot: chunk.relevanceScore >= 0.9 }">
-                    相关度 {{ (chunk.relevanceScore * 100).toFixed(0) }}
-                  </span>
                 </div>
                 <p class="chunk-content">{{ chunk.content }}</p>
               </div>
             </div>
           </template>
           <div v-else class="state-block">
-            {{ materialStore.hasSelection ? '所选素材暂无切片，请等待解析完成' : '勾选素材以查看切片预览' }}
+            {{ materialStore.hasSelection ? '所选资料暂无提取内容，请查看解析状态' : '勾选资料以查看提取的内容片段' }}
           </div>
         </div>
       </div>
@@ -189,12 +186,12 @@ const activeParseTasks = computed(() => materialStore.parseTasks)
 const typeLabel = (type) => typeMap[type] || '素材'
 
 const statusText = (status) => {
-  const map = { processing: '解析中', done: '完成', failed: '失败', pending: '等待' }
+  const map = { processing: '解析中', done: '解析完成', failed: '解析失败', pending: '等待解析' }
   return map[status] || status
 }
 
 const parseStatusText = (status) => {
-  const map = { uploaded: '已上传', parsing: '解析中', done: '已完成', failed: '失败' }
+  const map = { uploaded: '已上传，待解析', parsing: '解析中', done: '解析完成', failed: '解析失败' }
   return map[status] || status || '已上传'
 }
 
@@ -326,7 +323,7 @@ async function uploadOne(file) {
       fileContents: fileText ? { [pathHint]: fileText } : undefined
     })
     const realTaskId = parseResp?.data?.task_id
-    if (!realTaskId) throw new Error('解析任务创建响应缺少 task_id')
+    if (!realTaskId) throw new Error('资料处理任务启动失败，请重试')
     materialStore.updateParseTask(taskId, { taskId: realTaskId })
 
     // 步骤3：轮询解析状态

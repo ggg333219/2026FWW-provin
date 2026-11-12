@@ -20,7 +20,7 @@
       </select>
       <select v-if="scope === 'node' || scope === 'page'" v-model="targetNodeId">
         <option value="" disabled>选择目标节点</option>
-        <option v-for="node in nodes" :key="node.node_id" :value="node.node_id">{{ node.title || node.node_id }}</option>
+        <option v-for="node in nodes" :key="node.node_id" :value="node.node_id">{{ node.title || '未命名章节' }}</option>
       </select>
       <button class="apply" :disabled="!packet || (!selectedIds.size && scope !== 'none') || ((scope === 'node' || scope === 'page') && !targetNodeId)" @click="$emit('apply', { scope, nodeId: targetNodeId, selectedIds: [...selectedIds] })">应用所选证据</button>
     </div>

@@ -113,14 +113,14 @@
             <div v-else-if="activeTab === 'version'" class="tab-container">
               <div class="version-panel-inline">
                 <div class="vp-toolbar">
-                  <input
+                  <details class="vp-legacy-open"><summary>按编号打开旧课件</summary><input
                     v-model="versionGenId"
                     type="text"
-                    placeholder="输入 Generation ID"
+                    placeholder="旧课件编号"
                     class="vp-gen-input"
                     @keyup.enter="loadVersionData"
-                  />
-                  <button class="vp-btn vp-btn-primary" :disabled="versionStore.loading" @click="loadVersionData">
+                  /></details>
+                  <button class="vp-btn vp-btn-primary" :disabled="versionStore.loading || !versionGenId.trim()" @click="loadVersionData">
                     {{ versionStore.loading ? '加载中...' : '加载版本' }}
                   </button>
                 </div>
@@ -130,7 +130,7 @@
                   <div class="vp-card">
                     <h4>版本历史 ({{ versionStore.versionCount }})</h4>
                     <div v-if="versionStore.loading" class="vp-empty">加载中...</div>
-                    <div v-else-if="versionStore.versions.length === 0" class="vp-empty">输入 Generation ID 加载版本</div>
+                    <div v-else-if="versionStore.versions.length === 0" class="vp-empty">当前没有可查看的版本</div>
                     <div v-else class="vp-list">
                       <div v-for="v in versionStore.versions" :key="v.id" class="vp-row" :class="{ locked: v.locked }">
                         <strong>v{{ v.version }}</strong>
@@ -158,6 +158,7 @@
                         <button class="vp-btn vp-btn-sm vp-btn-warn" :disabled="versionStore.loading" @click="handleLock">🔒 锁定最新版本</button>
                       </div>
                       <!-- 修改指令 -->
+                      <details class="vp-legacy-modify"><summary>旧版高级修改</summary>
                       <div class="vp-action-divider"></div>
                       <div class="vp-action-row">
                         <select v-model="changeType" class="vp-select">
@@ -186,6 +187,7 @@
                           提交修改到后端
                         </button>
                       </div>
+                      </details>
                     </div>
                   </div>
                   <!-- 导出 -->
@@ -506,7 +508,7 @@ const handleGenerateAIScript = async () => {
       intent: intentStore.intentSummary || undefined,
       evidence_packet: evidence
     })
-    if (!task.task_id) throw new Error('未返回生成任务 ID')
+    if (!task.task_id) throw new Error('课件生成任务启动失败，请重试')
 
     generationStore.setGenerateProgress(40, '正在生成课件节点')
     const status = await generationStore.waitForCoursewareGeneration(task.task_id, {

@@ -27,7 +27,7 @@
         <div v-if="!nodeStats.length" class="empty-tip">暂无数据</div>
         <div v-else class="mastery-list">
           <div v-for="node in topNodes" :key="node.nodeId" class="mastery-row">
-            <span class="mastery-title">{{ node.title || node.nodeId }}</span>
+             <span class="mastery-title">{{ node.title || '未命名知识点' }}</span>
             <div class="mastery-bar-track">
               <div
                 class="mastery-bar-fill"
@@ -51,7 +51,7 @@
               v-for="n in insights.reteachNodes.slice(0, 5)"
               :key="n.nodeId"
               class="insight-tag tag-warn"
-            >{{ n.title || n.nodeId }}</span>
+             >{{ n.title || '未命名知识点' }}</span>
           </div>
           <div v-if="insights.prerequisiteGaps?.length" class="insight-group">
             <strong>前置知识缺口:</strong>

@@ -228,7 +228,7 @@
         <template v-else>
           <div class="confirmed-banner">
             <svg viewBox="0 0 24 24"><path d="M5 12.5l4 4L19 7"/></svg>
-            <span><b>教学意图已确认</b><small>{{ store.intentId }}</small></span>
+            <span><b>教学意图已确认</b></span>
           </div>
           <button class="next-button" @click="goNext">
             <span>进入 S3 · 自动检索并生成</span>
@@ -893,9 +893,8 @@ button { -webkit-tap-highlight-color: transparent; }
 .intent-footer > p span.ready { background: var(--color-success); box-shadow: 0 0 0 3px var(--color-success-soft); }
 .confirmed-banner { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); padding: var(--space-3); border: 1px solid var(--color-primary-border); border-radius: var(--radius-control); color: var(--color-primary); background: var(--color-primary-soft); }
 .confirmed-banner > svg { width: 18px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2; }
-.confirmed-banner b, .confirmed-banner small { display: block; }
+.confirmed-banner b { display: block; }
 .confirmed-banner b { font-size: var(--text-2xs); }
-.confirmed-banner small { margin-top: 2px; color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--text-2xs); overflow-wrap: anywhere; }
 
 @keyframes tip-bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-3px); opacity: 1; } }
 

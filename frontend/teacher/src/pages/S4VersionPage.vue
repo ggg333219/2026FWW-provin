@@ -16,14 +16,14 @@
       <div class="page-body">
         <!-- 工具栏 -->
         <div class="toolbar">
-          <input
+          <details v-if="!route.query.project_id" class="legacy-version-open"><summary>按编号打开旧课件</summary><input
             v-model="genIdInput"
             type="text"
-            placeholder="Generation ID（项目版本可自动加载）"
+            placeholder="旧课件编号"
             class="gen-id-input"
             @keyup.enter="loadData"
-          />
-          <button class="btn btn-primary" :disabled="versionStore.loading" @click="loadData">
+          /></details>
+          <button class="btn btn-primary" :disabled="versionStore.loading || (!route.query.project_id && !genIdInput.trim())" @click="loadData">
             {{ versionStore.loading ? '加载中...' : '加载版本' }}
           </button>
         </div>
@@ -108,9 +108,10 @@
                 </div>
 
                 <!-- 修改指令 -->
-                <div v-if="!projectStore.projectId" class="action-divider"></div>
-                <h4 v-if="!projectStore.projectId">修改指令</h4>
-                <div v-if="!projectStore.projectId" class="action-row">
+                <details v-if="!route.query.project_id && !projectStore.projectId" class="legacy-modify"><summary>旧版高级修改</summary>
+                <div class="action-divider"></div>
+                <h4>修改指令</h4>
+                <div class="action-row">
                   <select v-model="changeType" class="action-select" :disabled="versionStore.isCurrentLocked">
                     <option value="update_node">更新节点</option>
                     <option value="add_node">新增节点</option>
@@ -123,7 +124,7 @@
                 </div>
 
                 <!-- 待处理列表 -->
-                <div v-if="!projectStore.projectId && versionStore.pendingChanges.length > 0" class="change-mini-list">
+                <div v-if="versionStore.pendingChanges.length > 0" class="change-mini-list">
                   <div v-for="c in versionStore.pendingChanges" :key="c.id" class="change-mini-row">
                     <span class="change-type-badge">{{ c.type }}</span>
                     <span class="change-target">{{ c.target }}</span>
@@ -150,6 +151,7 @@
                     提交修改到后端
                   </button>
                 </div>
+                </details>
               </div>
             </div>
           </section>
@@ -197,7 +199,7 @@
               :key="node.node_id"
               class="node-preview-card"
             >
-              <strong>{{ node.title || node.node_id }}</strong>
+              <strong>{{ node.title || '未命名章节' }}</strong>
               <small v-if="node.node_type">{{ node.node_type }}</small>
               <p>{{ (node.summary || node.content || '').slice(0, 80) }}...</p>
             </div>
@@ -207,7 +209,7 @@
         <section v-if="versionStore.currentVersionDetail" class="evidence-trace section-card">
           <div class="trace-head"><div><h3>证据追溯</h3><p>当前版本共有 {{ evidenceTrace.length }} 个引用关系，按节点定位来源。</p></div><router-link :to="{ name: 'S3Studio', query: { project_id: route.query.project_id, generation_id: genIdInput } }">返回 S3 调整证据</router-link></div>
           <div v-if="!evidenceTrace.length" class="empty-tip">当前版本未记录证据引用</div>
-          <div v-else class="trace-list"><article v-for="item in evidenceTrace" :key="`${item.nodeId}:${item.chunkId}`"><div><b>{{ item.nodeTitle }}</b><span>{{ item.chunkId }}</span></div><p>{{ item.source || '来源切片已绑定，可在资料与证据中心查看原文。' }}</p></article></div>
+          <div v-else class="trace-list"><article v-for="item in evidenceTrace" :key="`${item.nodeId}:${item.chunkId}`"><div><b>{{ item.nodeTitle }}</b></div><p>{{ item.source || '已关联参考资料，可在资料与证据中心查看原文。' }}</p></article></div>
         </section>
       </div>
     </div>
@@ -298,7 +300,7 @@ const evidenceTrace = computed(() => {
   ].map((item) => [item.chunk_id, item.text_snippet || item.content || item.source_ref || '']))
   return nodes.flatMap((node) => [...new Set([...(node.citation_refs || []), ...(node.source_chunk_ids || [])])].map((chunkId) => ({
     nodeId: node.node_id,
-    nodeTitle: node.title || node.node_id,
+    nodeTitle: node.title || '未命名章节',
     chunkId,
     source: sourceMap.get(chunkId) || '',
   })))

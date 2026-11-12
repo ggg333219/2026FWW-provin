@@ -4,8 +4,8 @@
       <header class="page-head">
         <div class="page-head__text">
           <p class="page-head__eyebrow">课件生成流程 · 可选环节</p>
-          <h1 class="page-head__title">资料与证据中心</h1>
-          <p class="page-head__desc">保留资料上传与解析；系统会依据 S1 教学意图自动检索，并把证据包绑定到整份 PPT 草稿。</p>
+          <h1 class="page-head__title">准备教学依据</h1>
+          <p class="page-head__desc">上传参考资料，查看处理结果与实际找到的内容，再决定是否带着这些依据生成课件。资料是可选的。</p>
         </div>
         <button v-if="isMockModeActive" class="ds-tag ds-tag--warning mock-exit-btn" type="button" @click="exitMockMode">
           <span class="ds-status-dot"></span>⚠ Mock 模式 · 点击退出
@@ -19,18 +19,18 @@
 
       <!-- S2 是可选补充入口；主流程已改为 S1 → S3。 -->
       <footer class="next-step-bar">
-        <p class="next-step-hint">资料为可选补充；没有绑定证据时，也可以选择仅依据 S1 教学意图生成。</p>
+        <p class="next-step-hint">进入生成前，请核对“本次找到的参考内容”；即使已上传资料，也可能没有检索到可用片段。</p>
         <button class="ds-btn ds-btn--primary ds-btn--lg next-step-btn" type="button" :disabled="navigatingToS3" @click="requestContinue">
           {{ navigatingToS3 ? '跳转中…' : '下一步：进入 S3 生成 →' }}
         </button>
         <div v-if="showNoEvidenceConfirm" class="ds-notice ds-notice--warning continue-confirm" role="alert">
           <div>
-            <strong>当前还没有绑定可用证据</strong>
-            <p>可以继续上传资料，系统会自动重新检索；也可以明确选择无资料生成。后者将仅依据 S1 教学意图生成。</p>
+            <strong>本次没有可带入生成的参考内容</strong>
+            <p>可以重试检索或补充资料；也可以明确选择仅按教学意图生成。上传或解析完成本身不代表检索已命中。</p>
           </div>
           <div class="continue-actions">
             <button class="ds-btn ds-btn--secondary ds-btn--sm" type="button" @click="showNoEvidenceConfirm = false">继续补充资料</button>
-            <button class="ds-btn ds-btn--secondary ds-btn--sm" type="button" @click="confirmWithoutEvidence">确认无资料生成</button>
+            <button class="ds-btn ds-btn--secondary ds-btn--sm" type="button" @click="confirmWithoutEvidence">仅按教学意图生成</button>
           </div>
         </div>
       </footer>

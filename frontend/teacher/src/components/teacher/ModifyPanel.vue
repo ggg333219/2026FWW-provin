@@ -1,9 +1,9 @@
 <template>
   <div class="modify-panel" v-if="modifyStore.projectId">
     <div class="panel-header">
-      <span class="panel-title">🤖 AI 修改 PPT</span>
+      <span class="panel-title">{{ scope === 'page' ? 'AI 修改本页' : 'AI 修改整套课件' }}</span>
       <span class="version-badge">{{ modifyStore.versionLabel }}</span>
-      <div class="undo-redo">
+      <div v-if="scope === 'global'" class="undo-redo">
         <button class="icon-btn" :disabled="!modifyStore.canUndo || modifyStore.modifying"
           @click="handleUndo" title="撤销">↩️</button>
         <button class="icon-btn" :disabled="!modifyStore.canRedo || modifyStore.modifying"
@@ -15,7 +15,7 @@
       当前页 —— 对话里说「这页 / 本页 / 当前页」时的所指。
       不选就退回「按指令里的页号或标题定位」，与加这条之前完全一致。
     -->
-    <div v-if="editableNodes.length" class="active-page-bar">
+    <div v-if="showPagePicker && editableNodes.length" class="active-page-bar">
       <span class="apb-label">当前页</span>
       <select
         class="apb-select"
@@ -37,7 +37,7 @@
 
     <!-- 快捷指令 -->
     <div class="quick-chips">
-      <button v-for="chip in modifyStore.quickChips" :key="chip.label"
+      <button v-for="chip in visibleChips" :key="chip.label"
         class="chip-btn" :disabled="modifyStore.modifying"
         @click="modifyStore.applyQuickChip(chip)">
         {{ chip.label }}
@@ -77,7 +77,7 @@
       <span v-if="modifyStore.pendingConfirmation.candidates?.length">
         将影响：{{ modifyStore.pendingConfirmation.candidates.map((item) => `第${item.page_number}页${item.role || item.element_type}`).join('、') }}
       </span>
-      <button type="button" class="confirm-btn" @click="handleConfirm">确认并执行</button>
+      <button type="button" class="confirm-btn" :disabled="modifyStore.modifying || !!modifyStore.pendingTaskId" @click="handleConfirm">确认并执行</button>
     </div>
 
     <!-- 输入区 -->
@@ -87,13 +87,13 @@
         :disabled="modifyStore.modifying"
         @keydown.enter.exact.prevent="handleSend"
         class="modify-input"></textarea>
-      <button class="send-btn" :disabled="!modifyStore.canSend"
+      <button class="send-btn" :disabled="!modifyStore.canSend || !!modifyStore.pendingTaskId || (scope === 'page' && !targetNodeId)"
         @click="handleSend">
-        {{ modifyStore.modifying ? '⏳' : '发送' }}
+        {{ modifyStore.modifying ? '执行中…' : '提交并立即应用' }}
       </button>
     </div>
 
-    <section v-if="editableNodes.length" class="live-preview" aria-label="页面列表">
+    <section v-if="showPagePicker && editableNodes.length" class="live-preview" aria-label="页面列表">
       <div class="preview-head">
         <strong>页面</strong>
         <span>点一行即选中，对话里就能说「这页」</span>
@@ -115,7 +115,7 @@
     </section>
 
     <!-- 版本时间线（C7，展开后显示） -->
-    <details v-if="modifyStore.versionHistory.length > 0" class="version-timeline">
+    <details v-if="scope === 'global' && modifyStore.versionHistory.length > 0" class="version-timeline">
       <summary>📜 修改历史（{{ modifyStore.versionHistory.length }} 条）</summary>
       <button v-for="v in modifyStore.versionHistory" :key="v.version_no" type="button"
         class="timeline-item" @click="previewVersion(v)">
@@ -158,6 +158,9 @@ const messagesEl = ref(null)
 const selectedVersion = ref(null)
 const props = defineProps({
   includeSpecialPages: { type: Boolean, default: true },
+  scope: { type: String, default: 'global' },
+  targetNodeId: { type: String, default: '' },
+  showPagePicker: { type: Boolean, default: false },
 })
 const emit = defineEmits(['style-request', 'applied'])
 const liveNodes = computed(() => generationStore.currentScriptNodes?.length
@@ -231,10 +234,20 @@ const materializeSpecialPages = (source) => {
   return result
 }
 const editableNodes = computed(() => materializeSpecialPages(liveNodes.value))
+const visibleChips = computed(() => props.scope === 'page' ? [
+  { label: '精简文字', text: '精简本页文字，保留关键知识点' },
+  { label: '增加示意图', text: '为本页增加合适的示意图说明' },
+  { label: '优化排版', text: '优化本页排版层次' },
+  { label: '调整配色', text: '调整本页配色，使重点更清晰' },
+] : [
+  { label: '统一版式', text: '统一整套课件的排版风格' },
+  { label: '调整配色', text: '调整整套课件的配色' },
+  { label: '调整顺序', text: '调整指定页面的顺序' },
+])
 const isRecentlyModified = (node) => modifyStore.recentlyModifiedIds.includes(node.node_id)
 // 选中页时直接教老师说「这页」—— 这是最短的一句指令
 const inputPlaceholder = computed(() => modifyStore.activeNodeId
-  ? '例如：这页减少文字，加一个生活案例'
+  ? '例如：这页减少文字，加一个生活案例；提交后会立即应用'
   : '例如：第三页减少文字，增加一个生活案例')
 const isActiveNode = (node) => !!node?.node_id && node.node_id === modifyStore.activeNodeId
 const toggleActiveNode = (node) => {
@@ -302,11 +315,21 @@ async function applyResult({ allNodes, modifiedNodes, intent, instruction, prese
 }
 
 async function handleSend() {
+  if (modifyStore.modifying || modifyStore.pendingTaskId) return
+  if (props.scope === 'page' && !props.targetNodeId) return
+  if (props.scope === 'page' && props.targetNodeId) modifyStore.setActiveNode(props.targetNodeId)
+  if (props.scope === 'global') modifyStore.setActiveNode('')
+  const submittedText = modifyStore.inputText
   await modifyStore.sendModify(nodesForApi(), applyResult)
+  if (modifyStore.error && !modifyStore.inputText) modifyStore.inputText = modifyStore.lastFailedInstruction || submittedText
   scrollToBottom()
 }
 
 async function handleConfirm() {
+  if (modifyStore.modifying || modifyStore.pendingTaskId) return
+  if (props.scope === 'page' && !props.targetNodeId) return
+  if (props.scope === 'page' && props.targetNodeId) modifyStore.setActiveNode(props.targetNodeId)
+  if (props.scope === 'global') modifyStore.setActiveNode('')
   await modifyStore.confirmPending(nodesForApi(), applyResult)
   scrollToBottom()
 }
