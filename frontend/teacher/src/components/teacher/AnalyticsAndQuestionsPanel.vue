@@ -27,7 +27,7 @@
         <div v-if="!nodeStats.length" class="empty-tip">暂无数据</div>
         <div v-else class="mastery-list">
           <div v-for="node in topNodes" :key="node.nodeId" class="mastery-row">
-            <span class="mastery-title">{{ node.title || node.nodeId }}</span>
+             <span class="mastery-title">{{ node.title || '未命名知识点' }}</span>
             <div class="mastery-bar-track">
               <div
                 class="mastery-bar-fill"
@@ -51,7 +51,7 @@
               v-for="n in insights.reteachNodes.slice(0, 5)"
               :key="n.nodeId"
               class="insight-tag tag-warn"
-            >{{ n.title || n.nodeId }}</span>
+             >{{ n.title || '未命名知识点' }}</span>
           </div>
           <div v-if="insights.prerequisiteGaps?.length" class="insight-group">
             <strong>前置知识缺口:</strong>
@@ -206,7 +206,7 @@ function masteryLevel(score) {
 .insight-summary { margin: 0 0 10px; line-height: 1.5; color: #607a71; }
 .insight-group { margin-bottom: 8px; }
 .insight-group strong { display: block; font-size: 12px; color: #607a71; margin-bottom: 4px; }
-.insight-tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; margin: 2px 4px 2px 0; }
+.insight-tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; margin: 2px 4px 2px 0; }
 .tag-warn { background: #fef3c7; color: #92400e; }
 .tag-info { background: #e0f2fe; color: #0369a1; }
 

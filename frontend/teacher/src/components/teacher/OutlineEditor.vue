@@ -3,9 +3,6 @@
     <!-- 大纲头部信息 -->
     <div class="outline-header">
       <div class="outline-meta">
-        <span class="outline-id" v-if="outlineStore.outline_id">
-          大纲 ID：{{ outlineStore.outline_id }}
-        </span>
         <span class="outline-version" v-if="outlineStore.outline_version">
           v{{ outlineStore.outline_version }}
         </span>
@@ -21,10 +18,10 @@
           v-if="outlineStore.canEdit"
           class="btn btn-sm"
           :disabled="outlineStore.reviseLoading"
-          @click="showReviseInput = true"
+          @click="openRevisionDialog"
           title="发送指令让 AI 修改大纲"
         >
-          {{ outlineStore.reviseLoading ? 'AI 修订中...' : '🤖 AI 修订' }}
+          {{ outlineStore.reviseLoading ? 'AI 修订中...' : 'AI 调整大纲' }}
         </button>
         <button
           v-if="outlineStore.canEdit"
@@ -291,27 +288,14 @@
       :change-summary="outlineStore.changeSummary"
       :pending-nodes="outlineStore.pendingRevision?.nodes || []"
       :error-message="outlineStore.reviseError"
+      :message="reviseMessage"
+      :submitted="revisionSubmitted"
+      @update:message="reviseMessage = $event"
+      @submit="handleSendRevise"
       @apply="handleApplyRevision"
+      @continue="handleContinueRevision"
       @cancel="handleCancelRevision"
     />
-
-    <!-- AI 修订输入弹窗 -->
-    <div v-if="showReviseDialog" class="dialog-overlay" style="display:none"><!-- 利用 OutlineRevisionDialog --></div>
-
-    <!-- 修订指令输入（集成在 OutlineRevisionDialog 之前） -->
-    <div v-if="showReviseInput" class="revise-input-bar">
-      <input
-        v-model="reviseMessage"
-        class="revise-text-input"
-        placeholder="例如：增加一个生活案例，把课堂练习放到快速排序之后"
-        @keyup.enter="handleSendRevise"
-        autofocus
-      />
-      <button class="btn btn-primary" @click="handleSendRevise" :disabled="!reviseMessage.trim()">
-        发送修订
-      </button>
-      <button class="btn btn-outline" @click="showReviseInput = false">取消</button>
-    </div>
   </div>
 </template>
 
@@ -350,9 +334,9 @@ const route = useRoute()
 const hasUsableEvidence = computed(() => isEvidencePacketUsable(props.evidencePacket))
 
 const showReviseDialog = ref(false)
-const showReviseInput = ref(false)
 const reviseMessage = ref('')
 const revisingDialogLoading = ref(false) // 对话框内 AI 正在生成修订
+const revisionSubmitted = ref(false)
 const newKeyPoints = ref({}) // { [node_id]: input value }
 const draggedNodeId = ref('')
 const dragOverIndex = ref(-1)
@@ -402,7 +386,7 @@ watch(
 async function handleGenerateOutline() {
   if (!props.ready) return
   if (!props.sessionId) {
-    const message = '缺少 session_id，请先完成 S1 意图理解'
+    const message = '缺少教学会话，请先完成 S1 教学意图确认'
     outlineStore.error = message
     emit('error', message)
     return
@@ -546,11 +530,17 @@ async function handleConfirm() {
   }
 }
 
+function openRevisionDialog() {
+  outlineStore.reviseError = ''
+  reviseMessage.value = ''
+  revisionSubmitted.value = false
+  showReviseDialog.value = true
+}
+
 async function handleSendRevise() {
   const msg = reviseMessage.value.trim()
-  if (!msg) return
-  showReviseInput.value = false
-  showReviseDialog.value = true
+  if (!msg || revisingDialogLoading.value) return
+  revisionSubmitted.value = true
   revisingDialogLoading.value = true
   try {
     await outlineStore.reviseOutline(msg)
@@ -562,6 +552,7 @@ async function handleSendRevise() {
 }
 
 async function handleApplyRevision() {
+  if (revisingDialogLoading.value) return
   try {
     await outlineStore.applyRevision()
     showReviseDialog.value = false
@@ -571,10 +562,20 @@ async function handleApplyRevision() {
   }
 }
 
+async function handleContinueRevision() {
+  await handleApplyRevision()
+  if (!outlineStore.pendingRevision) {
+    revisionSubmitted.value = false
+    showReviseDialog.value = true
+  }
+}
+
 function handleCancelRevision() {
+  if (revisingDialogLoading.value) return
   outlineStore.discardRevision()
   showReviseDialog.value = false
   reviseMessage.value = ''
+  revisionSubmitted.value = false
 }
 </script>
 
@@ -587,15 +588,18 @@ function handleCancelRevision() {
 
 /* 头部 */
 .outline-header {
+  position: sticky;
+  top: calc(var(--topbar-height) + var(--shell-gutter));
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 10px;
   padding: 12px 16px;
-  background: #f8fbf9;
-  border: 1px solid #e2ece6;
-  border-radius: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
 }
 .outline-meta {
   display: flex;
@@ -703,7 +707,7 @@ function handleCancelRevision() {
   background: none;
   border: 1px solid #c6ded6;
   border-radius: 4px;
-  font-size: 10px;
+  font-size: 12px;
   color: #5ca68f;
   cursor: pointer;
   padding: 1px 4px;
@@ -735,7 +739,7 @@ function handleCancelRevision() {
   cursor: pointer;
 }
 .node-type-badge {
-  font-size: 11px;
+  font-size: 12px;
   background: #e2ece6;
   color: #5ca68f;
   padding: 2px 8px;
@@ -778,13 +782,13 @@ function handleCancelRevision() {
   gap: 6px;
   flex-wrap: wrap;
 }
-.kp-label { font-size: 11px; color: #94a3b8; white-space: nowrap; line-height: 22px; }
+.kp-label { font-size: 12px; color: #94a3b8; white-space: nowrap; line-height: 22px; }
 .kp-tags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .kp-tag {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 12px;
   background: #e8f5f0;
   color: #2f605a;
   padding: 2px 8px;
@@ -802,7 +806,7 @@ function handleCancelRevision() {
 }
 .kp-remove:hover { opacity: 1; }
 .kp-add-input {
-  font-size: 11px;
+  font-size: 12px;
   border: none;
   background: transparent;
   outline: none;
@@ -811,7 +815,7 @@ function handleCancelRevision() {
   padding: 2px 4px;
 }
 .kp-tag-static {
-  font-size: 11px;
+  font-size: 12px;
   background: #e8f5f0;
   color: #2f605a;
   padding: 2px 8px;
@@ -841,7 +845,7 @@ function handleCancelRevision() {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
 }
 .plan-fields input[type="number"] {
@@ -849,11 +853,11 @@ function handleCancelRevision() {
   padding: 2px 5px;
   border: 1px solid #c6ded6;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 12px;
   outline: none;
 }
 .plan-fields select {
-  font-size: 11px;
+  font-size: 12px;
   border: 1px solid #c6ded6;
   border-radius: 5px;
   padding: 2px 4px;
@@ -872,7 +876,7 @@ function handleCancelRevision() {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
 }
 .duration-input {
@@ -880,7 +884,7 @@ function handleCancelRevision() {
   padding: 2px 6px;
   border: 1px solid #c6ded6;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 12px;
   text-align: center;
   outline: none;
 }
@@ -943,26 +947,6 @@ function handleCancelRevision() {
 .btn-primary:hover:not(:disabled) { background: #1e4a44; }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* 修订输入条 */
-.revise-input-bar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 10px 14px;
-  background: #f0f5f2;
-  border: 1px solid #c6ded6;
-  border-radius: 10px;
-}
-.revise-text-input {
-  flex: 1;
-  padding: 6px 10px;
-  border: 1px solid #c6ded6;
-  border-radius: 8px;
-  font-size: 13px;
-  outline: none;
-}
-.revise-text-input:focus { border-color: #5ca68f; }
 
 /* 过渡动画 */
 .node-list-enter-active,

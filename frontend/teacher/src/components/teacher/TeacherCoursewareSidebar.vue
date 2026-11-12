@@ -237,7 +237,7 @@ const fileTypeClass = (fileType) => {
 }
 
 .rail-btn span {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
 }
@@ -399,7 +399,7 @@ const fileTypeClass = (fileType) => {
   border-radius: 999px;
   border: 1px solid #cbd5e1;
   text-align: center;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   color: #334155;
   background: #f8fafc;
@@ -436,7 +436,7 @@ const fileTypeClass = (fileType) => {
 }
 
 .published-tag {
-  font-size: 11px;
+  font-size: 12px;
   color: #5ca68f;
   background: rgba(92, 166, 143, 0.16);
   border: 1px solid rgba(92, 166, 143, 0.35);

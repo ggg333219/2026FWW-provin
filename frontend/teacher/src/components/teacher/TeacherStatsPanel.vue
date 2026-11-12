@@ -69,7 +69,7 @@
             <h5>薄弱知识点 Top3</h5>
             <ul>
               <li v-for="(item, idx) in weakTop3" :key="item.nodeId || idx">
-                <strong>TOP{{ idx + 1 }} · {{ item.title || item.nodeId }}</strong>
+                <strong>TOP{{ idx + 1 }} · {{ item.title || '未命名知识点' }}</strong>
                 <span>掌握度 {{ Math.round(Number(item.masteryScore || 0)) }}% · 错误率 {{ Math.round(Number(item.errorRate || 0) * 1000) / 10 }}%</span>
               </li>
               <li v-if="weakTop3.length === 0" class="empty-row">暂无薄弱知识点数据</li>
@@ -127,7 +127,7 @@
             <span>掌握度</span>
           </div>
           <div class="row" v-for="item in filteredNodeStats" :key="item.nodeId">
-            <span>{{ item.title || item.nodeId }}</span>
+            <span>{{ item.title || '未命名知识点' }}</span>
             <span>{{ item.questionCount || item.dialogueCount || 0 }}</span>
             <span>{{ Number(item.stayTime || 0).toFixed(1) }}</span>
             <span>{{ Math.round(Number(item.errorRate || 0) * 1000) / 10 }}%</span>
@@ -165,7 +165,7 @@
             <span>掌握度</span>
           </div>
           <div class="row" v-for="item in filteredNodeStats" :key="item.nodeId + '-m'">
-            <span>{{ item.title || item.nodeId }}</span>
+            <span>{{ item.title || '未命名知识点' }}</span>
             <span>{{ item.questionCount || item.dialogueCount || 0 }}</span>
             <span>{{ Number(item.stayTime || 0).toFixed(1) }}</span>
             <span>{{ Math.round(Number(item.errorRate || 0) * 1000) / 10 }}%</span>
@@ -231,7 +231,7 @@
             <span>提问</span>
           </div>
           <div class="row row--four" v-for="item in mistakeHeavyNodes" :key="item.nodeId + '-e'">
-            <span>{{ item.title || item.nodeId }}</span>
+            <span>{{ item.title || '未命名知识点' }}</span>
             <span>{{ Math.round(Number(item.errorRate || 0) * 1000) / 10 }}%</span>
             <span>{{ Math.round(Number(item.masteryScore || 0)) }}%</span>
             <span>{{ item.questionCount || 0 }}</span>

@@ -113,14 +113,14 @@
             <div v-else-if="activeTab === 'version'" class="tab-container">
               <div class="version-panel-inline">
                 <div class="vp-toolbar">
-                  <input
+                  <details class="vp-legacy-open"><summary>按编号打开旧课件</summary><input
                     v-model="versionGenId"
                     type="text"
-                    placeholder="输入 Generation ID"
+                    placeholder="旧课件编号"
                     class="vp-gen-input"
                     @keyup.enter="loadVersionData"
-                  />
-                  <button class="vp-btn vp-btn-primary" :disabled="versionStore.loading" @click="loadVersionData">
+                  /></details>
+                  <button class="vp-btn vp-btn-primary" :disabled="versionStore.loading || !versionGenId.trim()" @click="loadVersionData">
                     {{ versionStore.loading ? '加载中...' : '加载版本' }}
                   </button>
                 </div>
@@ -130,7 +130,7 @@
                   <div class="vp-card">
                     <h4>版本历史 ({{ versionStore.versionCount }})</h4>
                     <div v-if="versionStore.loading" class="vp-empty">加载中...</div>
-                    <div v-else-if="versionStore.versions.length === 0" class="vp-empty">输入 Generation ID 加载版本</div>
+                    <div v-else-if="versionStore.versions.length === 0" class="vp-empty">当前没有可查看的版本</div>
                     <div v-else class="vp-list">
                       <div v-for="v in versionStore.versions" :key="v.id" class="vp-row" :class="{ locked: v.locked }">
                         <strong>v{{ v.version }}</strong>
@@ -158,6 +158,7 @@
                         <button class="vp-btn vp-btn-sm vp-btn-warn" :disabled="versionStore.loading" @click="handleLock">🔒 锁定最新版本</button>
                       </div>
                       <!-- 修改指令 -->
+                      <details class="vp-legacy-modify"><summary>旧版高级修改</summary>
                       <div class="vp-action-divider"></div>
                       <div class="vp-action-row">
                         <select v-model="changeType" class="vp-select">
@@ -186,6 +187,7 @@
                           提交修改到后端
                         </button>
                       </div>
+                      </details>
                     </div>
                   </div>
                   <!-- 导出 -->
@@ -506,7 +508,7 @@ const handleGenerateAIScript = async () => {
       intent: intentStore.intentSummary || undefined,
       evidence_packet: evidence
     })
-    if (!task.task_id) throw new Error('未返回生成任务 ID')
+    if (!task.task_id) throw new Error('课件生成任务启动失败，请重试')
 
     generationStore.setGenerateProgress(40, '正在生成课件节点')
     const status = await generationStore.waitForCoursewareGeneration(task.task_id, {
@@ -897,7 +899,7 @@ onMounted(async () => {
 .vp-row.locked { border-left: 3px solid #eab308; background: #fffdf0; }
 .vp-row strong { color: #5ca68f; min-width: 32px; }
 .vp-row span { flex: 1; color: #334155; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vp-row small { font-size: 11px; color: #94a3b8; }
+.vp-row small { font-size: 12px; color: #94a3b8; }
 .vp-lock { font-size: 12px; }
 .vp-actions { display: flex; flex-direction: column; gap: 8px; }
 .vp-action-row { display: flex; gap: 8px; align-items: center; }
@@ -914,9 +916,9 @@ onMounted(async () => {
 .vp-input { flex: 1; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; background: #fff; max-width: 130px; }
 .vp-change-mini { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
 .vp-change-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: #f8fafc; border-radius: 6px; font-size: 12px; }
-.c-badge { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: #edf5f2; color: #2f605a; white-space: nowrap; }
+.c-badge { font-size: 12px; padding: 1px 6px; border-radius: 999px; background: #edf5f2; color: #2f605a; white-space: nowrap; }
 .c-target { flex: 1; color: #334155; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.c-status { font-size: 10px; padding: 1px 6px; border-radius: 999px; }
+.c-status { font-size: 12px; padding: 1px 6px; border-radius: 999px; }
 .c-status.pending { background: #fef3c7; color: #92400e; }
 .c-status.applied { background: #d1fae5; color: #065f46; }
 .c-status.rejected { background: #fee2e2; color: #991b1b; }

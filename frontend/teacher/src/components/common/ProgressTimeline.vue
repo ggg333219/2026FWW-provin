@@ -52,7 +52,7 @@ defineProps({
 .timeline-step__dot {
   width: 20px; height: 20px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0; font-size: 10px; font-weight: 600;
+  flex-shrink: 0; font-size: 12px; font-weight: 600;
   border: 2px solid #e2e8f0; background: #fff; color: #94a3b8;
   margin-top: 2px; position: relative; z-index: 1;
 }
@@ -70,7 +70,7 @@ defineProps({
   display: flex; flex-direction: column; gap: 2px;
 }
 .timeline-step__label { font-size: 13px; font-weight: 500; color: #1e293b; }
-.timeline-step__detail { font-size: 11px; color: #94a3b8; }
+.timeline-step__detail { font-size: 12px; color: #94a3b8; }
 .timeline-step--done .timeline-step__label { color: #065f46; }
 .timeline-step--active .timeline-step__label { color: #2d5f58; font-weight: 600; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }

@@ -1508,7 +1508,7 @@ function cleanDisplayText(value) {
 }
 
 .toolbar-label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;

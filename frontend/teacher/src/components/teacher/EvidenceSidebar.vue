@@ -20,7 +20,7 @@
       </select>
       <select v-if="scope === 'node' || scope === 'page'" v-model="targetNodeId">
         <option value="" disabled>选择目标节点</option>
-        <option v-for="node in nodes" :key="node.node_id" :value="node.node_id">{{ node.title || node.node_id }}</option>
+        <option v-for="node in nodes" :key="node.node_id" :value="node.node_id">{{ node.title || '未命名章节' }}</option>
       </select>
       <button class="apply" :disabled="!packet || (!selectedIds.size && scope !== 'none') || ((scope === 'node' || scope === 'page') && !targetNodeId)" @click="$emit('apply', { scope, nodeId: targetNodeId, selectedIds: [...selectedIds] })">应用所选证据</button>
     </div>
@@ -91,5 +91,110 @@ function clearSelection() { selectedIds.value = new Set(); emitSelection() }
 </script>
 
 <style scoped>
-.evidence-sidebar{position:fixed;top:118px;left:20px;bottom:20px;width:300px;z-index:11;display:flex;flex-direction:column;gap:12px;padding:14px;border:1px solid #dce9e3;border-radius:14px;background:#fff;box-shadow:0 12px 34px rgba(30,72,60,.1);overflow:auto}.evidence-sidebar header{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.evidence-sidebar header div{display:grid;gap:3px}.evidence-sidebar strong{color:#24483e}.evidence-sidebar small{font-size:11px;color:#7b8d86}.evidence-sidebar a{font-size:12px;color:#28735f;text-decoration:none}.search-row{display:flex;gap:6px}.search-row input{min-width:0;flex:1;padding:8px;border:1px solid #cbded6;border-radius:8px}.search-row button,.scope-card button{border:1px solid #297761;border-radius:8px;background:#297761;color:#fff;padding:7px 10px;cursor:pointer}.search-row button:disabled,.scope-card button:disabled{opacity:.45;cursor:not-allowed}.scope-card{display:grid;gap:7px;padding:10px;border-radius:10px;background:#f3f8f6}.scope-card label{font-size:12px;font-weight:700;color:#42675d}.scope-card select{padding:7px;border:1px solid #cbddd6;border-radius:7px;background:#fff}.empty{padding:18px 8px;text-align:center;color:#82928c;font-size:12px;line-height:1.6}.evidence-list{display:grid;gap:8px}.select-tools{display:flex;justify-content:flex-end;gap:6px}.select-tools button{border:0;background:transparent;color:#28735f;font-size:11px;cursor:pointer}.evidence-list article{padding:10px;border:1px solid #e0ebe6;border-radius:10px;background:#fcfefd;transition:.16s}.evidence-list article.selected{border-color:#72ad9b;background:#f1faf6;box-shadow:inset 3px 0 #28735f}.evidence-check{display:flex;align-items:center;gap:7px;cursor:pointer}.evidence-check input{accent-color:#28735f}.evidence-list p{margin:7px 0;font-size:12px;line-height:1.55;color:#4c625b}.evidence-meta{display:flex;gap:6px;align-items:center;min-width:0;font-size:11px;color:#26715f}.evidence-meta b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.search-mask{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center;border-radius:14px;background:rgba(255,255,255,.94);color:#31594d}.search-mask small{color:#7b8d86}.spinner{width:28px;height:28px;border:3px solid #d9ebe4;border-top-color:#28735f;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1400px){.evidence-sidebar{position:static;width:auto;max-height:430px;margin-bottom:14px}}
+.evidence-sidebar {
+  position: sticky;
+  top: calc(var(--topbar-height) + var(--shell-gutter));
+  z-index: var(--z-sticky);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+  max-height: calc(100dvh - var(--topbar-height) - var(--space-10));
+  overflow: auto;
+}
+.evidence-sidebar header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
+.evidence-sidebar header div { display: grid; gap: var(--space-1); }
+.evidence-sidebar strong { color: var(--text-primary); font-size: var(--text-sm); }
+.evidence-sidebar small { font-size: var(--text-2xs); color: var(--text-tertiary); }
+.evidence-sidebar a { font-size: var(--text-2xs); color: var(--color-primary); text-decoration: none; }
+.evidence-sidebar a:hover { text-decoration: underline; }
+.search-row { display: flex; gap: var(--space-2); }
+.search-row input {
+  min-width: 0;
+  flex: 1;
+  min-height: 34px;
+  padding: var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface);
+  font-size: var(--text-2xs);
+}
+.search-row input:focus { outline: none; border-color: var(--color-primary); box-shadow: var(--shadow-focus); }
+.search-row button,
+.scope-card button {
+  min-height: 34px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-control);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+.search-row button:hover:not(:disabled),
+.scope-card button:hover:not(:disabled) { background: var(--color-primary-hover); }
+.search-row button:disabled,
+.scope-card button:disabled { opacity: 0.48; cursor: not-allowed; }
+.scope-card { display: grid; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-sm); background: var(--bg-subtle); }
+.scope-card label { font-size: var(--text-2xs); font-weight: var(--weight-semibold); color: var(--text-secondary); }
+.scope-card select {
+  min-height: 34px;
+  padding: var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface);
+  font-size: var(--text-2xs);
+}
+.empty { padding: var(--space-5) var(--space-2); text-align: center; color: var(--text-tertiary); font-size: var(--text-2xs); line-height: var(--leading-relaxed); }
+.evidence-list { display: grid; gap: var(--space-2); }
+.select-tools { display: flex; justify-content: flex-end; gap: var(--space-2); }
+.select-tools button { border: 0; background: transparent; color: var(--color-primary); font-size: var(--text-2xs); cursor: pointer; }
+.select-tools button:hover { text-decoration: underline; }
+.evidence-list article {
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  transition: border-color var(--duration-fast) var(--ease-standard),
+              background var(--duration-fast) var(--ease-standard);
+}
+.evidence-list article.selected { border-color: var(--color-primary-border); background: var(--color-primary-soft); box-shadow: inset 3px 0 var(--color-primary); }
+.evidence-check { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; font-size: var(--text-2xs); }
+.evidence-check input { accent-color: var(--color-primary); }
+.evidence-list p { margin: var(--space-2) 0; font-size: var(--text-2xs); line-height: var(--leading-relaxed); color: var(--text-secondary); }
+.evidence-meta { display: flex; gap: var(--space-2); align-items: center; min-width: 0; font-size: var(--text-2xs); color: var(--color-primary); }
+.evidence-meta b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  text-align: center;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+}
+.search-mask small { color: var(--text-tertiary); font-size: var(--text-2xs); }
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--brand-100);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: ev-spin 0.8s linear infinite;
+}
+@keyframes ev-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 0.01ms; } }
 </style>

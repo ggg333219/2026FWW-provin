@@ -10,30 +10,19 @@
         <span v-if="asyncActivity.progress != null" class="async-progress">{{ asyncActivity.progress }}%</span>
       </div>
       <!-- 页面头部 -->
-      <div class="page-header">
-        <div>
-          <h2>S3 课件生成</h2>
-          <p>大纲编辑 → 内容生成 → 页面预览</p>
+      <header class="page-head">
+        <div class="page-head__text">
+          <p class="page-head__eyebrow">课件生成流程</p>
+          <h1 class="page-head__title">S3 课件生成</h1>
+          <p class="page-head__desc">规划大纲 → 生成讲稿和页面 → 审阅课件</p>
         </div>
-        <div class="page-header-right">
-          <button v-if="projectStore.projectId" class="save-state" :class="projectStore.saveState" aria-live="polite" @click="projectStore.saveNow(draftSnapshot())">{{ projectStore.saveLabel || '保存草稿' }}</button>
-          <button v-if="generationStore.currentScriptNodes.length" class="save-version" :disabled="saveVersionState === 'saving'" @click="handleSaveNewVersion">{{ saveVersionState === 'saving' ? '正在保存版本…' : (lastSavedVersion ? `已保存 v${lastSavedVersion}` : '保存新版本') }}</button>
-          <div class="step-pills">
-            <router-link :to="{ name: 'S1Intent', query: { project_id: projectStore.projectId } }" class="pill"
-              >S1 意图</router-link
-            >
-            <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }" class="pill"
-              >S2 资料</router-link
-            >
-            <span class="pill active">S3 生成</span>
-            <button type="button" class="pill" @click="goToS4">S4 版本</button>
-            <router-link :to="{ name: 'Middle' }" class="pill back-pill"
-              >返回中间页</router-link
-            >
-          </div>
+        <div class="page-head__actions">
+          <button v-if="projectStore.projectId" class="ds-btn ds-btn--secondary ds-btn--sm save-state" :class="projectStore.saveState" aria-live="polite" type="button" @click="projectStore.saveNow(draftSnapshot())">{{ projectStore.saveLabel || '保存草稿' }}</button>
+          <button v-if="generationStore.currentScriptNodes.length" class="ds-btn ds-btn--secondary ds-btn--sm save-version" type="button" :disabled="saveVersionState === 'saving'" @click="handleSaveNewVersion">{{ saveVersionState === 'saving' ? '正在保存版本…' : (lastSavedVersion ? `已保存 v${lastSavedVersion}` : '保存新版本') }}</button>
         </div>
-      </div>
-      <div v-if="genError && currentPhase !== 'generating'" class="error-bar" role="alert">{{ genError }}</div>
+      </header>
+      <StepNav current="s3" :project-id="projectStore.projectId" :action-keys="['s4']" @step-action="onStepAction" />
+      <div v-if="genError && currentPhase !== 'content'" class="error-bar" role="alert">{{ genError }}</div>
 
       <!-- 模式提示条 -->
       <div
@@ -44,9 +33,12 @@
         <div>
           <strong>当前为无参考资料生成模式</strong>
           <span>本次内容仅依据 S1 教学意图生成，不会伪造资料引用。</span>
+          <span v-if="evidenceBootstrapState === 'error'" role="alert">{{ evidenceBootstrapError }}</span>
         </div>
+        <button class="ds-btn ds-btn--secondary ds-btn--sm" type="button" :disabled="evidenceBootstrapState === 'loading' || materialStore.searching" @click="reconnectKnowledgeBase">{{ evidenceBootstrapState === 'loading' ? '正在检索…' : '重新检索本地知识库' }}</button>
         <router-link :to="{ name: 'S2Material', query: { project_id: projectStore.projectId } }">返回补充资料</router-link>
       </div>
+      <div v-if="knowledgeReconnectNotice" class="ds-notice ds-notice--info" role="status">{{ knowledgeReconnectNotice }}</div>
 
       <div v-if="evidenceBootstrapState === 'error' && requiresAutomaticEvidence" class="evidence-gate" role="alert">
         <div>
@@ -68,46 +60,15 @@
       </div>
 
       <!-- S3 阶段指示器 -->
-      <div class="phase-tabs" role="tablist" aria-label="课件生成步骤">
-        <button
-          class="phase-tab"
-          :class="{ active: currentPhase === 'outline' }"
-          role="tab" :aria-selected="currentPhase === 'outline'"
-          @click="currentPhase = 'outline'"
-        >
-          📋 大纲编辑
-        </button>
-        <button
-          class="phase-tab"
-          :class="{ active: currentPhase === 'content' }"
-          role="tab" :aria-selected="currentPhase === 'content'"
-          @click="currentPhase = 'content'"
-          :disabled="!outlineStore.isConfirmed"
-        >
-          📝 内容生成
-        </button>
-        <button
-          class="phase-tab"
-          :class="{ active: currentPhase === 'generating' }"
-          @click="currentPhase = 'generating'"
-          :disabled="!contentStore.hasContent"
-        >
-          ⚙️ 全流程生成
-        </button>
-        <button
-          class="phase-tab"
-          :class="{ active: currentPhase === 'pages' }"
-          role="tab" :aria-selected="currentPhase === 'pages'"
-          @click="currentPhase = 'pages'"
-          :disabled="!generationStore.lastGenId"
-        >
-          📄 页面管理
-        </button>
-        <button class="phase-tab" :class="{ active: currentPhase === 'style' }" role="tab" :aria-selected="currentPhase === 'style'" :disabled="!generationStore.lastGenId" @click="currentPhase = 'style'">🎨 PPT 样式</button>
-      </div>
+      <S3StageNav :phase="currentPhase" :outline-confirmed="outlineStore.isConfirmed" :review-ready="hasReviewContent" @select="currentPhase = $event" />
 
+      <!-- 参考依据按需展开；AI 修改只在主动点击后挂载到模态窗口。 -->
+      <div class="s3-workbench" :class="{ 's3-workbench--review': currentPhase === 'review' }">
       <!-- ==================== 大纲阶段 ==================== -->
       <!-- ==================== 大纲阶段 ==================== -->
+      <div v-if="currentPhase !== 'review'" class="s3-assistant-col">
+      <details class="s3-tool" :open="currentPhase !== 'review'">
+        <summary>参考依据</summary>
       <EvidenceSidebar
         :packet="evidencePacket"
         :nodes="generationStore.currentScriptNodes.length ? generationStore.currentScriptNodes : outlineStore.nodes"
@@ -119,14 +80,15 @@
         @apply="handleEvidenceApply"
         @selection-change="handleEvidenceSelection"
       />
-      <!-- C6: AI 修改对话面板（右侧浮动；projectId 绑定后显示） -->
-      <ModifyPanel
-        class="s3-ai-panel"
-        :include-special-pages="currentPhase !== 'outline' || !!generationStore.lastGenId"
-        @style-request="handleStyleRequest"
-        @applied="handleModifyApplied"
-      />
+      </details>
+      </div>
       <div v-if="currentPhase === 'outline'" class="phase-panel">
+        <section class="outline-brief ds-card">
+          <h2>{{ outlineStore.title || intentStore.intentSummary?.topic || '课程大纲' }}</h2>
+          <p>预计课时：{{ intentStore.intentSummary?.duration_minutes ? `${intentStore.intentSummary.duration_minutes} 分钟` : '尚未设置' }}</p>
+          <p>教学目标：{{ intentStore.intentSummary?.expected_outcomes?.length ? intentStore.intentSummary.expected_outcomes.join('；') : '请在大纲中核对教学目标' }}</p>
+          <p>状态：{{ outlineStore.isConfirmed ? '大纲已确认；修改结构需按现有流程重新确认和生成下游内容' : '待确认' }}</p>
+        </section>
         <OutlineEditor
           :session-id="intentStore.sessionId"
           :intent-id="intentStore.intentId"
@@ -143,6 +105,11 @@
           @node-deleted="handleOutlineNodeDeleted"
           @error="handleError"
         />
+        <details v-if="outlineStore.nodes.length" class="outline-references">
+          <summary>查看章节关联的资料</summary>
+          <ul><li v-for="node in outlineStore.nodes" :key="node.node_id"><strong>{{ node.title || '未命名章节' }}</strong><span>{{ outlineNodeSources(node) }}</span></li></ul>
+          <p>关联资料表示已有来源记录，不代表章节内容已逐句核实。</p>
+        </details>
         <div v-if="genError" class="error-bar" role="alert">
           {{ genError }}
         </div>
@@ -154,38 +121,34 @@
         <div class="content-info-bar">
           <div class="content-info-left">
             <span class="gen-label">大纲</span>
-            <span class="gen-value"
-              >{{ outlineStore.outline_id }} v{{
-                outlineStore.outline_version
-              }}</span
-            >
+            <span class="gen-value">{{ outlineStore.isConfirmed ? '已确认' : '待确认' }}{{ outlineStore.outline_version ? ` · v${outlineStore.outline_version}` : '' }}</span>
             <span class="gen-label" style="margin-left: 12px">节点数</span>
             <span class="gen-value">{{ outlineStore.nodes.length }}</span>
           </div>
           <div class="content-info-right">
             <button
               v-if="
-                !contentStore.isGenerating && contentStore.status === 'idle'
+                !contentStore.isGenerating && ['idle', 'error'].includes(contentStore.status)
               "
               class="btn btn-primary"
               :disabled="!outlineStore.isConfirmed"
               @click="handleStartContentGeneration"
             >
-              📝 生成全部节点讲稿
+              {{ contentStore.status === 'error' ? '重试生成讲稿' : '生成课件内容' }}
             </button>
             <button
               v-if="contentStore.status === 'done'"
-              class="btn btn-primary"
+              class="btn btn-outline"
               @click="goToGeneratingPhase"
             >
-              继续生成页面 →
+              {{ showPageGeneration ? '高级设置已展开' : '查看页面生成高级设置' }}
             </button>
           </div>
         </div>
 
         <!-- 内容生成进度 -->
         <div
-          v-if="contentStore.isGenerating || contentStore.progress_pct > 0"
+          v-if="contentStore.isGenerating"
           class="gen-progress-panel"
         >
           <div class="progress-bar-wrap">
@@ -195,7 +158,7 @@
             ></div>
           </div>
           <div class="progress-text">
-            <span>{{ Math.round(contentStore.progress_pct) }}%</span>
+            <span>{{ contentStore.current_node_id ? `正在处理第 ${outlineStore.nodes.findIndex(node => node.node_id === contentStore.current_node_id) + 1} 节` : '讲稿生成中' }}</span>
             <span>{{ contentStore.progressText }}</span>
           </div>
         </div>
@@ -286,16 +249,6 @@
           </div>
         </div>
 
-        <div v-if="editScriptNodeId" class="content-script-editor" role="dialog" aria-label="手工编辑讲稿">
-          <label for="content-script-text">编辑「{{ editScriptNodeTitle }}」讲稿</label>
-          <textarea id="content-script-text" v-model="editScriptDraft" rows="10" class="content-script-textarea" />
-          <div class="node-actions">
-            <button class="btn btn-primary" :disabled="!editScriptDraft.trim() || scriptSaving" @click="saveEditedNodeScript">{{ scriptSaving ? '保存中…' : '保存讲稿' }}</button>
-            <button class="btn btn-outline" :disabled="scriptSaving" @click="cancelEditNodeScript">取消</button>
-          </div>
-          <div v-if="scriptSaveError" class="content-modify-error" role="alert">{{ scriptSaveError }}</div>
-        </div>
-
         <div v-if="modifyNodeId" class="content-modify-bar" role="dialog" aria-label="AI 修改节点">
           <div class="content-modify-title">修改第 {{ modifyNodeOrder }} 节内容</div>
           <input
@@ -323,19 +276,17 @@
         <div v-if="outlineStore.nodes.length === 0" class="pages-empty">
           大纲中暂无节点，请先在大纲编辑中添加节点
         </div>
-      </div>
-
-      <!-- ==================== 内容生成阶段（全流程） ==================== -->
-      <div v-else-if="currentPhase === 'generating'" class="phase-panel">
+        <!-- 讲稿生成完成后，才开放原有页面生成调用。 -->
+        <section v-if="contentStore.status === 'done' || generationStore.lastTaskId" class="page-generation">
+        <div class="section-heading"><h3>生成课件页面</h3><span>讲稿 → 页面，按原顺序执行</span></div>
+        <button class="btn btn-primary" :disabled="pageGenerationActive || !canStartPageGeneration(contentStore.status)" @click="handleStartGeneration">{{ pageGenerationActive ? '页面生成中…' : genError ? '重试生成课件页面' : '生成课件页面' }}</button>
+        <details class="generation-advanced" :open="showPageGeneration" @toggle="showPageGeneration = $event.target.open">
+          <summary>高级设置：生成范围与页面策略</summary>
         <!-- 生成控制栏 -->
         <div class="gen-control-bar">
           <div class="gen-info">
             <span class="gen-label">大纲</span>
-            <span class="gen-value"
-              >{{ outlineStore.outline_id }} v{{
-                outlineStore.outline_version
-              }}</span
-            >
+            <span class="gen-value">{{ outlineStore.isConfirmed ? '已确认' : '待确认' }}{{ outlineStore.outline_version ? ` · v${outlineStore.outline_version}` : '' }}</span>
             <span class="gen-label" style="margin-left: 12px">生成范围</span>
             <select v-model="generationScope" class="gen-mode-select">
               <option value="content_only">仅生成内容（沿用已确认大纲）</option>
@@ -347,38 +298,23 @@
               <option value="page_parallel">全页面并行生成</option>
             </select>
           </div>
-          <div class="gen-actions">
-            <button
-              class="btn btn-primary"
-              :disabled="generationStore.isGenerating"
-              @click="handleStartGeneration"
-            >
-              {{ generationStore.isGenerating ? "生成中..." : "🚀 开始生成" }}
-            </button>
-          </div>
         </div>
+        </details>
 
         <!-- 进度展示 -->
-        <div
-          v-if="
-            generationStore.isGenerating || generationStore.generateProgress > 0
-          "
-          class="gen-progress-panel" role="progressbar" aria-label="课件生成进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="generationStore.generateProgress"
-        >
-          <div class="progress-bar-wrap">
-            <div
-              class="progress-bar-fill"
-              :style="{ width: generationStore.generateProgress + '%' }"
-            ></div>
-          </div>
-          <div class="progress-text">
-            <span>{{ generationStore.generateProgress }}%</span>
-            <span>{{ generationStore.generateStageText }}</span>
-          </div>
+        <div v-if="pageGenerationActive || genError" class="page-task-panel" :role="genError ? 'alert' : 'status'" aria-live="polite">
+          <h4>当前任务：生成课件页面</h4>
+          <ol class="page-task-steps">
+            <li><span>大纲确认</span><strong>{{ outlineStore.isConfirmed ? '已确认' : '待确认' }}</strong></li>
+            <li><span>讲稿生成</span><strong>{{ contentStore.status === 'done' ? '已完成' : contentStore.isGenerating ? '进行中' : '未完成' }}</strong></li>
+            <li><span>页面生成</span><strong>{{ genError ? '失败' : pageTaskStatusText }}</strong></li>
+          </ol>
+          <p v-if="pageGenerationActive">{{ generationStore.generateStageText || '任务正在执行，可查看已生成的讲稿。' }}</p>
+          <p v-else-if="genError">{{ genError }}。请核对错误后使用上方“重试生成课件页面”。</p>
+          <p v-if="pageGenerationActive">页面生成完成并加载预览后，可进入审阅。</p>
         </div>
 
         <!-- 错误展示 -->
-        <div v-if="genError" class="error-bar" role="alert">{{ genError }}</div>
 
         <!-- 生成的节点树预览 -->
         <div
@@ -398,33 +334,6 @@
           </div>
         </div>
 
-        <!-- HTML5 预览区 -->
-        <div v-if="generationStore.previewHtml" class="preview-section">
-          <div class="preview-toolbar">
-            <span>📺 HTML5 预览</span>
-            <button class="btn btn-sm" @click="openPreviewWindow">
-              新窗口打开
-            </button>
-          </div>
-          <!--
-            走 srcdoc 而不是 data: URL：srcdoc 继承父源，父页面才拿得到 contentDocument，
-            局部修改后可以只把变了的页原地换掉（见 utils/previewPatch.js）。
-            sandbox 保持 allow-same-origin，去掉它这条链路就断了。
-          -->
-          <iframe
-            v-if="previewSrcDoc"
-            ref="previewFrameEl"
-            :srcdoc="previewSrcDoc"
-            class="preview-frame"
-            sandbox="allow-scripts allow-same-origin"
-            title="课件预览"
-            @load="previewFrameReady = true"
-          ></iframe>
-          <div v-else class="preview-placeholder">
-            预览将在生成完成后自动加载
-          </div>
-        </div>
-
         <!-- 无参考资料提示 -->
         <div v-if="!hasEvidence" class="no-evidence-hint">
           ⚠️ 当前无参考资料，内容将基于 S1 意图自动生成。
@@ -435,36 +344,38 @@
 
         <!-- 生成完成后操作 -->
         <div
-          v-if="generationStore.generateProgress === 100"
+          v-if="hasReviewContent && !generationStore.isGenerating && !genError"
           class="gen-complete-actions"
         >
-          <button class="btn btn-outline" @click="currentPhase = 'pages'">
-            管理生成页面
-          </button>
-          <button class="btn btn-primary" @click="goToS4">
-            下一步：版本管理 →
+          <button class="btn btn-primary" @click="currentPhase = 'review'">
+            进入课件审阅
           </button>
         </div>
+        </section>
       </div>
 
-      <div v-else-if="currentPhase === 'style'" class="phase-panel style-panel">
-        <h3>只调整呈现，不改教学事实</h3>
-        <p>样式设置不会触发 RAG 检索，也不会修改大纲、引用或生成内容。</p>
-        <label>全局模板 <select v-model="templateId"><option value="default">默认教学模板</option><option value="deck-swiss-edu">瑞士教育风</option></select></label>
-        <label>配色 <select v-model="palette"><option value="classic">经典青绿</option><option value="klein-blue">克莱因蓝</option></select></label>
-        <label>版式 <select v-model="layoutMode"><option value="balanced">图文均衡</option><option value="visual">视觉优先</option><option value="text">内容优先</option></select></label>
-        <label>字体 <select v-model="fontFamily"><option value="system">系统默认</option><option value="source-han">思源黑体</option><option value="serif">中文宋体</option></select></label>
-        <label>信息密度 <select v-model="density"><option value="comfortable">舒展</option><option value="compact">紧凑</option><option value="minimal">极简</option></select></label>
-        <div class="style-ai-hint">也可以在右侧直接告诉 AI：“整体换成简洁商务风”或“这一页改成左图右文”。样式调整只改呈现字段，不重新检索资料。</div>
-        <div class="style-actions"><button class="btn btn-outline" @click="projectStore.saveNow(draftSnapshot())">保存样式草稿</button><button class="btn btn-primary" :disabled="generationStore.previewLoading" @click="applyPresentationStyle">{{ generationStore.previewLoading ? '正在刷新…' : '应用并刷新预览' }}</button></div>
-      </div>
-
-      <!-- ==================== 页面管理阶段 ==================== -->
-      <div v-else-if="currentPhase === 'pages'" class="phase-panel">
+      <!-- 审阅：预览为主，页面列表与修改工具围绕当前页面。 -->
+      <div v-else-if="currentPhase === 'review'" class="phase-panel review-panel">
+        <section class="review-preview preview-section">
+          <div class="preview-toolbar"><strong>课件页面预览</strong><div class="review-toolbar-actions">
+            <button class="btn btn-sm" :disabled="!activeReviewNode?.node_id || !projectStore.projectId" @click="openPageModify(activeReviewNode)">AI 修改本页</button>
+            <button class="btn btn-sm" :disabled="!activeReviewNode || !contentStore.nodesContent[activeReviewNode.node_id]" @click="handleEditNodeScript(activeReviewNode.node_id)">编辑讲稿</button>
+            <button class="btn btn-sm" @click="reviewTool = 'style'">调整样式</button>
+            <button class="btn btn-sm" @click="reviewTool = 'interactive'">互动内容</button>
+            <button class="btn btn-sm" @click="reviewTool = 'evidence'">参考依据</button>
+            <button class="btn btn-sm" @click="reviewTool = 'script'">查看讲稿</button>
+            <button class="btn btn-sm" :disabled="!projectStore.projectId" @click="openGlobalModify">AI 修改整套课件</button>
+            <button class="btn btn-sm" @click="openPreviewWindow">新窗口打开</button>
+          </div></div>
+          <div class="review-primary-actions"><button class="btn btn-outline" :disabled="saveVersionState === 'saving'" @click="handleSaveNewVersion">{{ saveVersionState === 'saving' ? '正在保存版本…' : '保存新版本' }}</button><button class="btn btn-primary" @click="goToS4">下一步：版本管理与导出 →</button></div>
+          <iframe v-if="previewSrcDoc" ref="previewFrameEl" :srcdoc="previewSrcDoc" class="preview-frame" sandbox="allow-scripts allow-same-origin" title="课件预览" @load="previewFrameReady = true; scrollPreviewToActivePage()"></iframe>
+          <div v-else class="preview-placeholder">正在恢复预览；可刷新生成状态</div>
+          <p class="review-selection">{{ activePageLabel ? `当前选择：${activePageLabel}` : '先在左侧选择一页，再使用“AI 修改本页”。' }}</p>
+        </section>
+        <div class="review-pages">
+          <h3>课件页面</h3>
+          <button class="btn btn-sm" @click="loadGenerationStatus">刷新页面状态</button>
         <div class="pages-control-bar">
-          <div class="pages-info">
-            <span>Generation ID：{{ generationStore.lastGenId }}</span>
-          </div>
           <div class="pages-actions">
             <button class="btn btn-sm" @click="loadGenerationStatus">
               🔄 刷新状态
@@ -491,8 +402,9 @@
           >
             <div class="page-item-left">
               <span class="page-order">第 {{ page.page_order }} 页</span>
-              <span class="page-node">{{ page.title || page.node_title || `关联节点：${page.node_id}` }}</span>
+              <span class="page-node">{{ page.title || page.node_title || '未命名页面' }}</span>
               <span v-if="modifyStore.recentlyModifiedIds.includes(page.node_id)" class="changed-badge">已修改</span>
+              <small class="page-evidence-state">{{ pageEvidenceStatus(page) }}</small>
             </div>
             <div class="page-item-right">
               <span class="page-status-badge">{{
@@ -528,9 +440,34 @@
         </div>
 
         <div v-else class="pages-empty">暂无页面数据，请先生成内容</div>
+        </div>
+        <div v-if="reviewTool" class="review-drawer-backdrop" @click="reviewTool = ''"></div>
+        <aside v-if="reviewTool" class="review-drawer" role="dialog" aria-modal="true" :aria-label="reviewToolTitle" @keydown.esc.prevent="reviewTool = ''">
+          <header class="review-drawer-header"><h3>{{ reviewToolTitle }}</h3><button type="button" class="ds-btn ds-btn--ghost ds-btn--sm" aria-label="关闭工具抽屉" @click="reviewTool = ''">关闭</button></header>
+          <section v-if="reviewTool === 'style'" class="style-panel">
+          <h3>只调整呈现，不改教学事实</h3>
+          <p>样式设置不会触发 RAG 检索，也不会修改大纲、引用或生成内容。</p>
+          <label>全局模板 <select v-model="templateId"><option value="default">默认教学模板</option><option value="deck-swiss-edu">瑞士教育风</option></select></label>
+          <label>配色 <select v-model="palette"><option value="classic">经典青绿</option><option value="klein-blue">克莱因蓝</option></select></label>
+          <label>版式 <select v-model="layoutMode"><option value="balanced">图文均衡</option><option value="visual">视觉优先</option><option value="text">内容优先</option></select></label>
+          <label>字体 <select v-model="fontFamily"><option value="system">系统默认</option><option value="source-han">思源黑体</option><option value="serif">中文宋体</option></select></label>
+          <label>信息密度 <select v-model="density"><option value="comfortable">舒展</option><option value="compact">紧凑</option><option value="minimal">极简</option></select></label>
+          <div class="style-ai-hint">需要 AI 调整时可使用预览工具栏的“AI 修改本页”或“AI 修改整套课件”。</div>
+          <div class="style-actions"><button class="btn btn-outline" @click="projectStore.saveNow(draftSnapshot())">保存样式草稿</button><button class="btn btn-primary" :disabled="generationStore.previewLoading" @click="applyPresentationStyle">{{ generationStore.previewLoading ? '正在刷新…' : '应用并刷新预览' }}</button></div>
+          </section>
+          <section v-if="reviewTool === 'script'" class="review-script-tool">
+          <p v-if="!activeReviewNode">先从页面列表选择一页。</p>
+          <template v-else>
+            <strong>{{ activeReviewNode.title || activeReviewNode.node_title }}</strong>
+            <p class="review-script">{{ contentStore.nodesContent[activeReviewNode.node_id]?.script || activeReviewNode.script || '当前页暂无讲稿' }}</p>
+            <button v-if="contentStore.nodesContent[activeReviewNode.node_id]" class="btn btn-sm" @click="handleEditNodeScript(activeReviewNode.node_id)">编辑讲稿</button>
+            <button v-if="contentStore.nodesContent[activeReviewNode.node_id]" class="btn btn-sm" @click="handleModifyNode(activeReviewNode.node_id)">AI 修改讲稿</button>
+          </template>
+          <div v-if="modifyNodeId" class="content-modify-bar" role="dialog" aria-label="AI 修改讲稿"><input v-model="modifyMessage" class="content-modify-input" placeholder="描述希望修改的讲稿内容" @keyup.enter="submitModifyNode" /><button class="btn btn-primary" :disabled="!modifyMessage.trim() || contentStore.modifying || scriptSaving" @click="submitModifyNode">发送修改</button><button class="btn btn-outline" @click="cancelModifyNode">取消</button><div v-if="contentStore.modifyError" class="content-modify-error" role="alert">{{ contentStore.modifyError }}</div></div>
+          </section>
 
         <!-- 互动资源入口 -->
-        <div v-if="generationStore.lastGenId || interactiveNodes.length" class="interactive-section">
+          <section v-if="reviewTool === 'interactive'" class="interactive-section">
           <h4>🎮 互动资源管理</h4>
           <p class="interactive-hint">
             从大纲中标记为互动的节点可在此生成 HTML5 互动资源
@@ -598,16 +535,39 @@
             </div>
             <iframe :src="interactivePreviewUrl" class="interactive-preview-frame" sandbox="allow-scripts allow-same-origin allow-forms" title="HTML5 互动资源预览"></iframe>
           </div>
-        </div>
+          </section>
+          <section v-if="reviewTool === 'evidence'" class="review-evidence-tool">
+            <EvidenceSidebar :packet="evidencePacket" :nodes="generationStore.currentScriptNodes.length ? generationStore.currentScriptNodes : outlineStore.nodes" :searching="materialStore.searching" :default-query="intentStore.intentSummary?.topic || ''" :selected-evidence-ids="selectedEvidenceIds" :selection-initialized="evidenceSelectionInitialized" @search="handleEvidenceSearch" @apply="handleEvidenceApply" @selection-change="handleEvidenceSelection" />
+          </section>
+        </aside>
+      </div>
+      </div><!-- /.s3-workbench -->
+      <div v-if="editScriptNodeId" class="s3-modify-overlay" @click.self="cancelEditNodeScript" @keydown.esc.prevent="cancelEditNodeScript">
+        <section class="s3-modify-dialog script-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="script-edit-title">
+          <header class="s3-modify-header"><div><h2 id="script-edit-title">编辑讲稿</h2><p>当前章节：{{ editScriptNodeTitle }}</p></div><button type="button" class="ds-btn ds-btn--ghost ds-btn--sm" :disabled="scriptSaving" @click="cancelEditNodeScript">关闭</button></header>
+          <div class="script-edit-body"><label for="script-edit-text">讲稿内容</label><textarea id="script-edit-text" v-model="editScriptDraft" class="content-script-textarea" rows="12" autofocus /><div v-if="scriptSaveError" class="content-modify-error" role="alert">{{ scriptSaveError }}</div></div>
+          <footer class="script-edit-footer"><button class="btn btn-outline" :disabled="scriptSaving" @click="cancelEditNodeScript">取消</button><button class="btn btn-primary" :disabled="!editScriptDraft.trim() || scriptSaving" @click="saveEditedNodeScript">{{ scriptSaving ? '保存中…' : '保存讲稿' }}</button></footer>
+        </section>
+      </div>
+      <div v-if="modifyDialog" class="s3-modify-overlay" @click.self="closeModifyDialog" @keydown.esc.prevent="closeModifyDialog">
+        <section class="s3-modify-dialog" role="dialog" aria-modal="true" aria-labelledby="s3-modify-title">
+          <header class="s3-modify-header"><div><h2 id="s3-modify-title">{{ modifyDialog.scope === 'page' ? 'AI 修改本页' : 'AI 修改整套课件' }}</h2><p>{{ modifyDialog.scope === 'page' ? `当前对象：第 ${modifyDialog.pageOrder} 页 · ${modifyDialog.title}` : '当前对象：整套课件' }}</p></div><button type="button" class="ds-btn ds-btn--ghost ds-btn--sm" :disabled="modifyStore.modifying" aria-label="关闭 AI 修改窗口" @click="closeModifyDialog">关闭</button></header>
+          <p class="s3-modify-notice">提交后现有服务会立即更新课件草稿和版本；关闭窗口不会撤销已执行的修改。{{ modifyDialog.scope === 'page' ? '如指令涉及其他页面，实际修改范围以服务返回为准。' : '' }}</p>
+          <p v-if="modifyStore.pendingTaskId" class="s3-modify-notice">修改任务仍可能在后台执行，关闭窗口不代表取消任务。</p>
+          <ModifyPanel :scope="modifyDialog.scope" :target-node-id="modifyDialog.nodeId" :include-special-pages="true" @style-request="handleStyleRequest" @applied="handleModifyApplied" />
+        </section>
       </div>
     </div>
   </AppShell>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import AppShell from "../components/layout/AppShell.vue";
+import StepNav from "../components/common/StepNav.vue";
+import S3StageNav from "../components/teacher/S3StageNav.vue";
+import { resolveS3Phase, canStartPageGeneration } from "../utils/s3Phase";
 import OutlineEditor from "../components/teacher/OutlineEditor.vue";
 import ModifyPanel from "../components/teacher/ModifyPanel.vue";
 import EvidenceSidebar from "../components/teacher/EvidenceSidebar.vue";
@@ -650,8 +610,15 @@ const route = useRoute();
 const router = useRouter();
 const isVersionFork = computed(() => Boolean(route.query.from_rollback_version || route.query.editable_outline));
 
-// 阶段：outline | generating | pages
+// UI 阶段：outline | content | review；旧阶段在恢复入口统一映射。
 const currentPhase = ref("outline");
+const reviewTool = ref("");
+const reviewToolTitle = computed(() => ({ style: '调整样式', interactive: '互动内容', evidence: '参考依据', script: '讲稿查看与修改' })[reviewTool.value] || '审阅工具');
+const showPageGeneration = ref(false);
+const pageTaskStatus = ref('idle');
+const pageGenerationActive = computed(() => generationStore.isGenerating || ['pending', 'processing', 'generating'].includes(pageTaskStatus.value));
+const pageTaskStatusText = computed(() => ({ pending: '等待处理', processing: '处理中', generating: '生成中', done: '已完成', completed: '已完成', success: '已完成', failed: '失败', error: '失败' })[pageTaskStatus.value] || (generationStore.isGenerating ? '处理中' : '未开始'));
+const modifyDialog = ref(null);
 const generationMode = ref("");
 const generateMode = ref("page_incremental");
 const generationScope = ref("content_only");
@@ -675,10 +642,56 @@ const activePageLabel = computed(() => {
   return `第 ${page.page_order || index + 1} 页${title ? ` · ${title}` : ""}`;
 });
 const isActivePage = (page) => !!page?.node_id && page.node_id === modifyStore.activeNodeId;
+const activeReviewNode = computed(() => generationPages.value.find(isActivePage) || null);
+const hasReviewContent = computed(() =>
+  generationStore.currentScriptNodes.length > 0 && Boolean(generationStore.previewHtml)
+  && !['pending', 'processing', 'generating', 'failed', 'error'].includes(pageTaskStatus.value)
+  && !contentStore.isGenerating && contentStore.status !== 'error'
+  && !generationStore.isGenerating && !genError.value,
+);
 const selectPage = (page) => {
+  if (modifyDialog.value) return;
   // 再点一次取消选中 —— 取消后指令里的显式页号（「第三页」）仍然照常生效
   modifyStore.setActiveNode(isActivePage(page) ? "" : page.node_id);
+  void nextTick(scrollPreviewToActivePage);
 };
+function openPageModify(page) {
+  if (!page?.node_id || modifyStore.modifying || !projectStore.projectId) return;
+  if (modifyStore.activeNodeId && modifyStore.activeNodeId !== page.node_id) {
+    modifyStore.pendingClarification = null;
+    modifyStore.pendingConfirmation = null;
+    modifyStore.confirmationReady = false;
+  }
+  modifyStore.setActiveNode(page.node_id);
+  modifyDialog.value = {
+    scope: 'page', nodeId: String(page.node_id), pageId: String(page.page_id || page.node_id),
+    pageOrder: Number(page.page_order || 1), title: page.title || page.node_title || '未命名页面',
+  };
+}
+function openGlobalModify() {
+  if (modifyStore.modifying || !projectStore.projectId) return;
+  if (modifyStore.activeNodeId) {
+    modifyStore.pendingClarification = null;
+    modifyStore.pendingConfirmation = null;
+    modifyStore.confirmationReady = false;
+  }
+  modifyStore.setActiveNode('');
+  modifyDialog.value = { scope: 'global', nodeId: '', pageId: '', pageOrder: 0, title: '' };
+}
+function closeModifyDialog() {
+  if (modifyStore.modifying) return;
+  modifyDialog.value = null;
+}
+function scrollPreviewToActivePage() {
+  const nodeId = modifyStore.activeNodeId;
+  if (!nodeId) return;
+  try {
+    const pages = [...(previewFrameEl.value?.contentDocument?.querySelectorAll('[data-node-id]') || [])];
+    pages.find(element => element.getAttribute('data-node-id') === nodeId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch {
+    // iframe 未加载时仍保留页面列表选择。
+  }
+}
 const templateId = ref("default");
 const palette = ref("classic");
 const layoutMode = ref("balanced");
@@ -697,6 +710,7 @@ const initializing = ref(true);
 const outlineReady = ref(false);
 const evidenceBootstrapState = ref("idle");
 const evidenceBootstrapError = ref("");
+const knowledgeReconnectNotice = ref("");
 // Every new outline needs the S2 evidence handoff unless the teacher explicitly
 // chose the intent-only path. Older links do not carry auto_evidence=1.
 const requiresAutomaticEvidence = computed(() =>
@@ -719,7 +733,7 @@ const asyncActivity = computed(() => {
     };
   }
   if (materialStore.searching) return { title: "正在检索资料与证据", detail: "正在从知识库筛选并融合可追溯引用。" };
-  if (generationStore.isGenerating) return { title: "正在生成课件内容", detail: generationStore.generateStageText || "AI 正在逐页生成，请保持当前页面打开。", progress: generationStore.generateProgress || 0 };
+  if (generationStore.isGenerating) return { title: "正在生成课件页面", detail: generationStore.generateStageText || "AI 正在逐页生成，请保持当前页面打开。" };
   if (interactiveStore.loading) return { title: "正在生成互动内容", detail: "正在构建可预览的 HTML5 互动资源。" };
   if (regeneratingPageId.value) return { title: "正在重新生成当前页面", detail: "其他页面不会受到影响。" };
   return null;
@@ -807,6 +821,7 @@ onMounted(async () => {
 	try {
 	let restoredGenerationNodes = false;
 	let restoredProjectOutline = false;
+  let legacyPhase = String(route.query.phase || '');
   // 恢复 S1 会话/意图（刷新或直接进入 S3 时 store 内存为空，
   // 不恢复会导致 sessionId 缺失 → AI 生成大纲被 "缺少 session_id" 拦截）
   const projectId = String(route.query.project_id || projectStore.projectId || projectStore.restoreActiveId() || '');
@@ -855,6 +870,7 @@ onMounted(async () => {
       }
       // 兼容旧版后端曾直接保存的节点数组，避免历史课件刷新后变成空白。
       if (Array.isArray(savedDraft)) savedDraft = { generation: { nodes: savedDraft } };
+      if (!legacyPhase) legacyPhase = String(savedDraft?.phase || savedDraft?.current_phase || '');
       // 保存版本时后端把草稿写成 canonical snapshot（content 数组）。刷新 S3 时
       // 仍须把这批节点恢复为生成结果，否则已保存的翻卡素材会从页面状态中消失。
       if (savedDraft && !savedDraft.generation && Array.isArray(savedDraft.content)) {
@@ -885,8 +901,22 @@ onMounted(async () => {
         contentStore.content_id = savedDraft.content.content_id || "";
         contentStore.nodesContent = savedDraft.content.nodes;
         contentStore.editedNodeIds = Array.isArray(savedDraft.content.edited_node_ids) ? savedDraft.content.edited_node_ids : [];
-        contentStore.status = savedDraft.content.status === "done" ? "done" : "idle";
+        contentStore.status = ['done', 'pending', 'generating', 'error'].includes(savedDraft.content.status) ? savedDraft.content.status : 'idle';
+        contentStore.progress_pct = Number(savedDraft.content.progress_pct) || 0;
+        contentStore.current_node_id = savedDraft.content.current_node_id || '';
+        contentStore.total_nodes = Number(savedDraft.content.total_nodes) || outlineStore.nodes.length;
+        contentStore.completed_nodes = Number(savedDraft.content.completed_nodes) || 0;
+        contentStore.error = savedDraft.content.error || '';
         contentStore._persist();
+        if (contentStore.isGenerating && contentStore.content_id) {
+          await contentStore.pollStatus();
+          if (contentStore.isGenerating) contentStore._startPolling();
+        } else if (contentStore.status === 'error' && contentStore.content_id) {
+          await contentStore.pollStatus();
+        } else if (contentStore.isGenerating) {
+          contentStore.status = 'error';
+          contentStore.error = '讲稿任务记录缺失，请重新生成';
+        }
       } else {
         // 保存版本后的 canonical 草稿把 content 存为节点数组，仍允许回到内容层编辑讲稿。
         const scriptNodes = Array.isArray(savedDraft?.content)
@@ -903,6 +933,8 @@ onMounted(async () => {
         }
       }
       if (savedDraft?.generation) {
+        pageTaskStatus.value = savedDraft.generation.status || 'idle';
+        if (['failed', 'error'].includes(pageTaskStatus.value)) genError.value = savedDraft.generation.error || '课件页面生成失败，请在内容阶段重试';
         if (savedDraft.generation.generation_id) generationStore.setLastGenId(savedDraft.generation.generation_id);
         if (savedDraft.generation.task_id) generationStore.setLastTaskId(savedDraft.generation.task_id);
         if (Array.isArray(savedDraft.generation.nodes) && savedDraft.generation.nodes.length) {
@@ -917,7 +949,6 @@ onMounted(async () => {
           }));
           modifyStore.syncActiveNode(restoredNodes.map((node) => node.node_id));
           restoredGenerationNodes = restoredNodes.length > 0;
-          if (restoredGenerationNodes) currentPhase.value = "pages";
         }
       }
       if (savedDraft?.evidence_packet) evidencePacket.value = savedDraft.evidence_packet;
@@ -957,16 +988,27 @@ onMounted(async () => {
       genError.value = error?.message || "恢复版本大纲失败";
     }
   }
-  if (!restoredGenerationNodes && restoredProjectOutline && outlineStore.isConfirmed) {
-    currentPhase.value = contentStore.hasContent ? "content" : "generating";
-  }
+  if (!restoredGenerationNodes && restoredProjectOutline && outlineStore.isConfirmed) currentPhase.value = 'content';
   // 恢复最近生成记录
   if (projectStore.projectId) generationStore.restoreLastGenId();
   if (generationStore.lastGenId) {
     interactiveStore.setGenerationId(generationStore.lastGenId);
+    // 旧草稿可能只有 task_id 和节点，先查询真实任务状态，再决定能否进入审阅。
+    if (restoredGenerationNodes && generationStore.lastTaskId && pageTaskStatus.value === 'idle') {
+      try {
+        const response = await teacherV1Api.generation.getGenerationStatus(generationStore.lastTaskId);
+        const task = response?.data || response || {};
+        pageTaskStatus.value = task.status || 'idle';
+        if (['failed', 'error'].includes(pageTaskStatus.value)) genError.value = task.error || '课件页面生成失败，请在内容阶段重试';
+      } catch (error) {
+        pageTaskStatus.value = 'error';
+        genError.value = error?.message || '生成任务状态暂时无法确认';
+      }
+    }
     // 项目草稿已经包含完整节点时直接使用，避免全局缓存中的旧 task_id
     // 覆盖当前课件的恢复结果。
-    if (!restoredGenerationNodes) await loadGenerationStatus();
+    if (!restoredGenerationNodes || ['pending', 'processing', 'generating'].includes(pageTaskStatus.value)) await loadGenerationStatus();
+    if (['pending', 'processing', 'generating'].includes(pageTaskStatus.value)) void resumePageGeneration();
   }
   if (restoredGenerationNodes) {
     // 草稿中的节点是 AI 修订后的权威内容，刷新时用 inline 节点重建预览，
@@ -988,7 +1030,13 @@ onMounted(async () => {
       nodes: outlineStore.nodes,
     });
   }
-  if (route.query.phase === "outline") currentPhase.value = "outline";
+  currentPhase.value = resolveS3Phase(legacyPhase || (restoredGenerationNodes ? 'pages' : 'content'), {
+    outlineConfirmed: outlineStore.isConfirmed,
+    contentStatus: contentStore.status,
+    taskStatus: pageTaskStatus.value,
+    hasPreview: Boolean(generationStore.previewHtml),
+    hasNodes: generationStore.currentScriptNodes.length > 0,
+  });
   if (isVersionFork.value) {
     // 历史版本分支复用已有大纲与证据，不因进入 S3 重新检索或生成。
     outlineReady.value = true;
@@ -1034,10 +1082,14 @@ function buildGenerationInstructionSet(evidence, mode) {
   };
 }
 
+watch(currentPhase, () => { reviewTool.value = ''; });
 watch(() => [outlineStore.nodes, generationStore.currentScriptNodes, templateId.value, palette.value, layoutMode.value, fontFamily.value, density.value], () => projectStore.scheduleSave(draftSnapshot()), { deep: true });
 watch(() => contentStore.nodesContent, () => {
   if (!initializing.value) projectStore.scheduleSave(draftSnapshot());
 }, { deep: true });
+watch(() => [contentStore.status, contentStore.content_id, contentStore.error, pageTaskStatus.value], () => {
+  if (!initializing.value) projectStore.scheduleSave(draftSnapshot());
+});
 watch(() => generationStore.currentScriptNodes, (nodes) => {
   if (!Array.isArray(nodes) || !nodes.length) return;
   generationPages.value = nodes.map((node, index) => {
@@ -1141,6 +1193,20 @@ function statusLabel(status) {
   );
 }
 
+function pageEvidenceStatus(page) {
+  const refs = [...(page?.citation_refs || []), ...(page?.source_chunk_ids || [])].filter(Boolean);
+  if (refs.length) return `有关联资料（${new Set(refs).size} 处），内容待核对`;
+  return generationMode.value === 'without_evidence' ? '仅依据教学意图' : '资料关联待核对';
+}
+
+function outlineNodeSources(node) {
+  const refs = [...(node?.citation_refs || []), ...(node?.source_chunk_ids || [])].filter(Boolean);
+  if (!refs.length) return '暂无章节级资料关联';
+  const chunks = selectedEvidencePacket.value?.relevant_chunks || [];
+  const sources = [...new Set(refs.map(id => chunks.find(chunk => chunk.chunk_id === id)?.source_ref).filter(Boolean))];
+  return sources.length ? `${sources.join('、')} · 待核对` : `${new Set(refs).size} 处引用关联 · 来源待核对`;
+}
+
 // 大纲创建完成
 function handleOutlineCreated({ outline_id, outline_version }) {
   deletedOutlineNodeIds.value = [];
@@ -1242,6 +1308,7 @@ function withEditedScripts(nodes) {
 function handleEditNodeScript(nodeId) {
   const current = contentStore.nodesContent[nodeId];
   if (!current) return;
+  reviewTool.value = '';
   cancelModifyNode();
   editScriptNodeId.value = nodeId;
   editScriptDraft.value = current.script ?? current.lecture_script ?? "";
@@ -1270,6 +1337,7 @@ async function persistScriptRevision(nodeId, script) {
   await projectStore.saveNow(snapshot);
   contentStore.saveNodeScript(nodeId, script);
   syncScriptToGeneratedNodes(nodeId, script);
+  if (revisedNodes.length) { needsVersionSave.value = true; saveVersionState.value = 'idle'; }
   if (generationStore.currentScriptNodes.length) {
     await generationStore.renderCoursewarePreview(
       outlineStore.title || intentStore.intentSummary?.topic || "课件预览", { genId: "" },
@@ -1332,7 +1400,8 @@ async function submitModifyNode() {
 
 // 从 content 阶段跳转到 generating 阶段
 function goToGeneratingPhase() {
-  currentPhase.value = "generating";
+  showPageGeneration.value = true;
+  currentPhase.value = 'content';
 }
 
 // AI 修订成功后立即刷新右侧 PPT 预览，并把最新节点写入项目草稿。
@@ -1346,13 +1415,20 @@ async function handleModifyApplied({ allNodes = [] } = {}) {
       outlineStore.title || intentStore.intentSummary?.topic || "课件预览",
       { genId: "" },
     );
-    if (generationStore.previewHtml) currentPhase.value = "generating";
+    if (generationStore.previewHtml) currentPhase.value = 'review';
+    needsVersionSave.value = true;
+    saveVersionState.value = 'idle';
   }
   await projectStore.saveNow(draftSnapshot());
 }
 
 // 开始生成内容
 async function handleStartGeneration() {
+  if (pageGenerationActive.value) return;
+  if (!canStartPageGeneration(contentStore.status)) {
+    handleError('请先完成讲稿生成，再生成课件页面');
+    return;
+  }
   if (generationScope.value === "content_only" && (!outlineStore.outline_id || !outlineStore.isConfirmed)) {
     handleError("请先确认大纲");
     return;
@@ -1362,6 +1438,7 @@ async function handleStartGeneration() {
     return;
   }
   genError.value = "";
+  pageTaskStatus.value = 'pending';
   generationStore.setGenerating(true);
   generationStore.setGenerateProgress(5, "准备生成环境");
 
@@ -1399,7 +1476,7 @@ async function handleStartGeneration() {
 
     const task = resp?.data || resp || {};
   const taskId = task.task_id || task.generation_id;
-    if (!taskId) throw new Error("未返回生成任务 ID");
+    if (!taskId) throw new Error("页面生成任务启动失败，请重试");
     generationStore.setLastTaskId(taskId);
 
     // 记录 generation_id
@@ -1416,6 +1493,7 @@ async function handleStartGeneration() {
       // 提前超时后任务虽在后端完成，页面却永远收不到结果。
       maxAttempts: 4500,
     });
+    pageTaskStatus.value = status.status;
 
     // 加载生成状态（页面列表）
     await loadGenerationStatus();
@@ -1430,8 +1508,10 @@ async function handleStartGeneration() {
     );
 
     generationStore.setGenerateProgress(100, "生成完成");
+    if (hasReviewContent.value) currentPhase.value = 'review';
   } catch (err) {
     genError.value = err?.message || "生成失败，请重试";
+    pageTaskStatus.value = 'error';
     generationStore.setGenerateProgress(0, "生成失败");
   } finally {
     generationStore.setGenerating(false);
@@ -1445,6 +1525,12 @@ async function loadGenerationStatus() {
   try {
     const resp = await teacherV1Api.generation.getGenerationStatus(taskId);
     const data = resp?.data || resp || {};
+    pageTaskStatus.value = data.status || 'idle';
+    if (!['failed', 'error'].includes(pageTaskStatus.value)) genError.value = '';
+    if (['failed', 'error'].includes(pageTaskStatus.value)) {
+      genError.value = data.error || '课件页面生成失败，请在内容阶段重试';
+      currentPhase.value = 'content';
+    }
     const nodes = withEditedScripts(filterDeletedOutlineNodes(data.nodes, deletedOutlineNodeIds.value));
 
     // 状态轮询既用于展示页面列表，也用于刷新/恢复 S3 编辑状态。
@@ -1462,7 +1548,6 @@ async function loadGenerationStatus() {
       );
       generationStore.setGenerateProgress(100, '生成完成');
       generationStore.setGenerating(false);
-      currentPhase.value = 'pages';
       await generationStore.renderCoursewarePreview(
         outlineStore.title || intentStore.intentSummary?.topic || '课件预览',
         { genId: '' },
@@ -1471,6 +1556,7 @@ async function loadGenerationStatus() {
       });
       bindEvidenceToWholeDraft();
       projectStore.scheduleSave(draftSnapshot(), 0);
+      if (generationStore.previewHtml) currentPhase.value = 'review';
     }
 
     generationPages.value = nodes.map((node, index) => ({
@@ -1481,6 +1567,25 @@ async function loadGenerationStatus() {
     }));
   } catch (err) {
     console.warn("[S3StudioPage] 加载生成状态失败", err);
+    pageTaskStatus.value = 'error';
+    genError.value = `无法获取课件任务状态：${err?.message || '请稍后重试'}`;
+    currentPhase.value = 'content';
+  }
+}
+
+async function resumePageGeneration() {
+  const taskId = generationStore.lastTaskId;
+  if (!taskId) return;
+  generationStore.setGenerating(true);
+  currentPhase.value = 'content';
+  try {
+    await generationStore.waitForCoursewareGeneration(taskId, { intervalMs: 800, maxAttempts: 4500 });
+    await loadGenerationStatus();
+  } catch (error) {
+    pageTaskStatus.value = 'error';
+    genError.value = error?.message || '页面生成恢复失败，请检查任务状态';
+  } finally {
+    generationStore.setGenerating(false);
   }
 }
 
@@ -1494,6 +1599,8 @@ async function handleRegeneratePage(page) {
       { reason: "教师手动重试", mode: "ai" },
     );
     await loadGenerationStatus();
+    needsVersionSave.value = true;
+    saveVersionState.value = 'idle';
   } catch (err) {
     handleError("重生成失败: " + (err?.message || ""));
   } finally {
@@ -1618,7 +1725,7 @@ async function applyPresentationStyle() {
     { genId: "" },
   );
   projectStore.scheduleSave(draftSnapshot(), 0);
-  currentPhase.value = "style";
+  currentPhase.value = 'review';
 }
 
 async function handleStyleRequest({ instruction = '', presentation = {} } = {}) {
@@ -1636,7 +1743,7 @@ async function handleStyleRequest({ instruction = '', presentation = {} } = {}) 
     if (/图|视觉|visual/.test(text)) layoutMode.value = 'visual';
     if (/文字|内容优先/.test(text)) layoutMode.value = 'text';
   }
-  currentPhase.value = 'style';
+  currentPhase.value = 'review';
   await applyPresentationStyle();
 }
 
@@ -1651,7 +1758,7 @@ async function handleEvidenceSearch(query) {
   }
 }
 
-function adoptEvidencePacket(packet) {
+function adoptEvidencePacket(packet, { bindToDraft = true } = {}) {
   evidencePacket.value = packet;
   selectedEvidenceIds.value = evidenceIds(packet);
   evidenceSelectionInitialized.value = true;
@@ -1660,7 +1767,7 @@ function adoptEvidencePacket(packet) {
   if (typeof window !== "undefined") {
     window.localStorage.setItem(`fuww_s2_generation_mode:${intentStore.sessionId}`, generationMode.value);
   }
-  bindEvidenceToWholeDraft();
+  if (bindToDraft) bindEvidenceToWholeDraft();
 }
 
 function bindEvidenceToWholeDraft() {
@@ -1686,9 +1793,9 @@ function discardPlaceholderOutline() {
   if (isPlaceholderOutline(outlineStore.nodes)) outlineStore.reset();
 }
 
-async function ensureAutomaticEvidence() {
+async function ensureAutomaticEvidence({ bindToDraft = true } = {}) {
   if (isEvidencePacketUsable(evidencePacket.value)) {
-    adoptEvidencePacket(evidencePacket.value);
+    adoptEvidencePacket(evidencePacket.value, { bindToDraft });
     discardPlaceholderOutline();
     projectStore.scheduleSave(draftSnapshot(), 0);
     evidenceBootstrapState.value = "ready";
@@ -1714,7 +1821,7 @@ async function ensureAutomaticEvidence() {
       },
     });
     if (isEvidencePacketUsable(packet)) {
-      adoptEvidencePacket(packet);
+      adoptEvidencePacket(packet, { bindToDraft });
       discardPlaceholderOutline();
       evidenceBootstrapState.value = "ready";
       await projectStore.saveNow(draftSnapshot()).catch(() => {});
@@ -1733,6 +1840,17 @@ async function ensureAutomaticEvidence() {
 async function retryAutomaticEvidence() {
   const ready = await ensureAutomaticEvidence();
   if (ready) outlineReady.value = true;
+}
+
+async function reconnectKnowledgeBase() {
+  if (evidenceBootstrapState.value === 'loading' || materialStore.searching) return;
+  knowledgeReconnectNotice.value = '';
+  const hasExistingOutput = Boolean(outlineStore.outline_id || generationStore.currentScriptNodes.length);
+  const ready = await ensureAutomaticEvidence({ bindToDraft: !hasExistingOutput });
+  if (ready) {
+    outlineReady.value = true;
+    if (hasExistingOutput) knowledgeReconnectNotice.value = '已取得本地知识库的参考片段，可供后续生成使用。已有大纲和页面不会自动改写或补上引用。';
+  }
 }
 
 function continueWithIntentOnly() {
@@ -1906,6 +2024,11 @@ async function goToS4() {
   router.push({ name: "S4Version", query: { project_id: projectStore.projectId, generation_id: generationStore.lastGenId } });
 }
 
+/** 流程条上的「版本与导出」仍需先保存版本，不能直接跳路由。 */
+function onStepAction(key) {
+  if (key === "s4") void goToS4();
+}
+
 function handleError(msg) {
   genError.value = msg;
   console.warn("[S3StudioPage]", msg);
@@ -1916,48 +2039,156 @@ function handleError(msg) {
 .s3-page {
   display: flex;
   flex-direction: column;
-  padding: 20px 380px 20px 340px;
-  min-height: calc(100vh - 140px);
-  overflow: hidden;
-  background:
-    radial-gradient(
-      circle at 86% -15%,
-      rgba(175, 221, 203, 0.2),
-      transparent 30%
-    ),
-    linear-gradient(180deg, #fcfefd 0%, #f7faf8 100%);
+  gap: var(--space-4);
+  padding: var(--space-6);
+  min-height: calc(100dvh - var(--topbar-height) - var(--shell-gutter) * 2);
+  background: var(--bg-page);
 }
-.studio-loading{position:fixed;inset:82px 20px 20px;z-index:30;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;border-radius:22px;background:rgba(248,252,250,.96);backdrop-filter:blur(8px);color:#27594e}.studio-loading strong{margin-top:14px;font-size:18px}.studio-loading p{margin:7px 0;color:#70857d;font-size:13px}.studio-spinner{width:42px;height:42px;border:4px solid #d8ebe4;border-top-color:#28735f;border-radius:50%;animation:studio-spin .8s linear infinite}@keyframes studio-spin{to{transform:rotate(360deg)}}
-.async-activity{position:fixed;top:92px;left:50%;z-index:40;display:flex;align-items:center;gap:11px;min-width:min(440px,calc(100vw - 40px));box-sizing:border-box;padding:12px 16px;border:1px solid #bcdcd0;border-radius:14px;background:rgba(249,253,251,.97);box-shadow:0 14px 38px rgba(26,75,60,.18);color:#28594c;transform:translateX(-50%);backdrop-filter:blur(10px)}.async-activity>div{display:grid;gap:2px;flex:1}.async-activity strong{font-size:13px}.async-activity small{color:#718880;font-size:11px}.async-spinner{width:22px;height:22px;flex:0 0 auto;border:3px solid #d6e9e1;border-top-color:#28735f;border-radius:50%;animation:studio-spin .75s linear infinite}.async-progress{font-size:12px;font-weight:700;color:#28735f}
-.page-header {
+.studio-loading {
+  position: fixed;
+  inset: var(--topbar-height) var(--shell-gutter) var(--shell-gutter);
+  z-index: var(--z-overlay);
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  text-align: center;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--color-primary);
+  box-shadow: var(--shadow-md);
 }
-.page-header h2 {
-  margin: 0;
-  font-size: 22px;
-  color: #111827;
-}
-.page-header p {
-  margin: 6px 0 0;
-  font-size: 14px;
-  color: #607a71;
-}
-.page-header-right {
+.studio-loading strong { font-size: var(--text-lg); }
+.studio-loading p { color: var(--text-secondary); font-size: var(--text-xs); }
+.studio-spinner { width: 36px; height: 36px; border: 3px solid var(--brand-100); border-top-color: var(--color-primary); border-radius: 50%; animation: studio-spin .8s linear infinite; }
+@keyframes studio-spin { to { transform: rotate(360deg); } }
+.async-activity {
+  position: fixed;
+  top: calc(var(--topbar-height) + var(--space-4));
+  left: 50%;
+  z-index: calc(var(--z-overlay) + 1);
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  gap: var(--space-3);
+  min-width: min(440px, calc(100vw - 40px));
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-primary-border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  transform: translateX(-50%);
 }
+.async-activity > div { display: grid; gap: 2px; flex: 1; }
+.async-activity strong { font-size: var(--text-xs); }
+.async-activity small { color: var(--text-tertiary); font-size: var(--text-2xs); }
+.async-spinner { width: 20px; height: 20px; flex: 0 0 auto; border: 3px solid var(--brand-100); border-top-color: var(--color-primary); border-radius: 50%; animation: studio-spin .75s linear infinite; }
+.async-progress { font-size: var(--text-2xs); font-weight: var(--weight-semibold); color: var(--color-primary); font-variant-numeric: tabular-nums; }
+
+/* 三栏工作区：栅格列 + sticky，替代原来的 position:fixed 与让位 padding */
+.s3-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-areas: "main assistant";
+  gap: var(--space-4);
+  align-items: start;
+  flex: 1;
+  min-height: 0;
+}
+.s3-workbench > .phase-panel { grid-area: main; min-width: 0; }
+.s3-workbench > .s3-assistant-col { grid-area: assistant; width: 320px; min-width: 0; display: grid; gap: var(--space-3); }
+/* Vue 的 v-if 占位是注释节点，CSS :empty 会忽略注释 —— 正好用来收起空列 */
+.s3-workbench > .s3-assistant-col:empty { display: none; }
+.s3-tool, .review-tool { min-width: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); }
+.s3-tool > summary, .review-tool > summary { padding: var(--space-3); cursor: pointer; color: var(--text-primary); font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.s3-tool :deep(.evidence-sidebar) { position: static; width: 100%; max-height: 460px; overflow: auto; }
+.review-toolbar-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.s3-modify-overlay { position: fixed; inset: 0; z-index: calc(var(--z-overlay) + 2); display: grid; place-items: center; padding: var(--space-4); background: rgb(17 31 27 / 55%); }
+.s3-modify-dialog { width: min(720px, 100%); max-height: min(88dvh, 880px); display: flex; flex-direction: column; overflow: auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); box-shadow: var(--shadow-md); }
+.s3-modify-header { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); padding: var(--space-4); border-bottom: 1px solid var(--border-subtle); }
+.s3-modify-header h2 { margin: 0; font-size: var(--text-md); }
+.s3-modify-header p { margin: var(--space-1) 0 0; color: var(--text-secondary); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.s3-modify-notice { margin: var(--space-3) var(--space-4) 0; color: var(--text-secondary); font-size: var(--text-xs); line-height: var(--leading-relaxed); }
+.s3-modify-dialog :deep(.modify-panel) { width: 100%; max-width: none; min-width: 0; border: 0; background: transparent; }
+.script-edit-dialog { overflow: hidden; }
+.script-edit-body { display: grid; gap: var(--space-2); min-height: 0; padding: var(--space-4); overflow: auto; }
+.script-edit-body label { color: var(--text-primary); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
+.script-edit-body .content-script-textarea { min-height: 260px; max-height: 55dvh; overflow: auto; }
+.script-edit-footer { display: flex; justify-content: flex-end; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border-subtle); background: var(--bg-surface); }
+.page-task-panel { display: grid; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--color-primary-border); border-radius: var(--radius-md); background: var(--color-primary-soft); }
+.page-task-panel h4, .page-task-panel p { margin: 0; }
+.page-task-panel p { color: var(--text-secondary); font-size: var(--text-xs); }
+.page-task-steps { display: grid; gap: var(--space-2); margin: 0; padding-left: var(--space-5); }
+.page-task-steps li { padding-left: var(--space-1); font-size: var(--text-xs); }
+.page-task-steps li strong { margin-left: var(--space-3); color: var(--color-primary); }
+.s3-workbench--review { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'main'; }
+.review-primary-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
+.review-drawer-backdrop { position: fixed; inset: 0; z-index: calc(var(--z-overlay) + 1); background: rgb(17 31 27 / 45%); }
+.review-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: calc(var(--z-overlay) + 2); width: min(480px, 100vw); box-sizing: border-box; padding: var(--space-4); overflow: auto; background: var(--bg-surface); box-shadow: var(--shadow-md); }
+.review-drawer-header { position: sticky; top: calc(-1 * var(--space-4)); z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }
+.review-drawer-header h3 { margin: 0; font-size: var(--text-md); }
+.review-drawer .style-panel { max-width: none; padding: var(--space-3) 0; border: 0; }
+.review-drawer .interactive-section { max-width: none; padding: var(--space-3) 0; border: 0; }
+.review-drawer :deep(.evidence-sidebar) { position: static; width: 100%; max-height: none; }
+.review-script-tool { padding: var(--space-3) 0; }
+.page-generation { display: grid; gap: var(--space-4); margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--border-subtle); }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.section-heading h3 { margin: 0; color: var(--text-primary); }
+.section-heading span { color: var(--text-secondary); font-size: var(--text-xs); }
+.generation-advanced { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: var(--space-3); }
+.generation-advanced > summary { cursor: pointer; color: var(--text-secondary); font-size: var(--text-xs); }
+.phase-panel.review-panel { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--space-4); align-items: start; }
+.review-preview { grid-column: 2; grid-row: 1; min-width: 0; padding: var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-surface); }
+.review-preview .preview-frame { height: min(68vh, 760px); }
+.review-pages { grid-column: 1; grid-row: 1 / span 4; display: grid; align-content: start; gap: var(--space-3); min-width: 0; max-height: 75vh; overflow: auto; }
+.review-pages h3 { margin: 0; font-size: var(--text-sm); }
+.review-pages .page-item { display: grid; }
+.review-pages .pages-control-bar { display: none; }
+.review-tool, .review-finish { grid-column: 2; padding: var(--space-3); }
+.review-script { white-space: pre-wrap; max-height: 240px; overflow: auto; font-size: var(--text-xs); }
+.page-evidence-state, .review-selection { color: var(--text-secondary); font-size: var(--text-2xs); }
+.outline-brief { padding: var(--space-4); margin-bottom: var(--space-4); }
+.outline-brief h2 { margin: 0 0 var(--space-2); font-size: var(--text-md); }
+.outline-brief p { margin: var(--space-1) 0; color: var(--text-secondary); font-size: var(--text-xs); }
+.outline-references { margin-top: var(--space-4); padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: var(--text-xs); }
+.outline-references summary { cursor: pointer; }
+.outline-references ul { display: grid; gap: var(--space-2); padding: 0; list-style: none; }
+.outline-references li { display: flex; gap: var(--space-3); justify-content: space-between; }
+.outline-references p, .outline-references span { color: var(--text-secondary); }
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+.page-head__eyebrow {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  color: var(--color-primary);
+}
+.page-head__title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--text-primary);
+}
+.page-head__desc {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.page-head__actions { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
 .page-body {
   flex: 1;
 }
 .evidence-warning {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
@@ -1969,9 +2200,9 @@ function handleError(msg) {
   color: #7c4a15;
 }
 .evidence-warning div {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
+  display: grid;
+  flex: 1 1 320px;
+  gap: 4px;
   min-width: 0;
 }
 .evidence-warning strong {
@@ -2013,37 +2244,6 @@ function handleError(msg) {
 }
 .version-branch-banner span { color: #617c73; }
 
-/* 阶段选项卡 */
-.phase-tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 14px;
-  border-bottom: 2px solid #e2ece6;
-}
-.phase-tab {
-  padding: 8px 18px;
-  border: none;
-  background: none;
-  font-size: 13px;
-  font-weight: 500;
-  color: #607a71;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -2px;
-  transition: all 0.15s;
-}
-.phase-tab:hover:not(:disabled) {
-  color: #2f605a;
-}
-.phase-tab.active {
-  color: #2f605a;
-  border-bottom-color: #2f605a;
-}
-.phase-tab:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 /* 阶段面板 */
 .phase-panel {
   display: flex;
@@ -2051,31 +2251,45 @@ function handleError(msg) {
   gap: 14px;
 }
 
-.s3-ai-panel { position: fixed; top: 118px; right: 20px; bottom: 20px; width: 340px; z-index: 12; box-shadow: 0 12px 34px rgba(30, 72, 60, .12); border: 1px solid #dce9e3; border-radius: 14px; overflow: hidden; }
-.style-ai-hint { padding: 12px; border-radius: 10px; background: #f1f8f5; color: #45685e; font-size: 13px; line-height: 1.6; }
-@media (max-width: 1400px) { .s3-page { padding-left: 20px; } }
-@media (max-width: 1100px) { .s3-page { padding-right: 20px; } .s3-ai-panel { position: static; width: auto; min-height: 420px; margin-bottom: 14px; } }
-@media (max-width: 700px) {
-  .s3-page { padding: 14px 12px; overflow: visible; }
-  .page-header { flex-direction: column; }
-  .page-header-right { width: 100%; justify-content: flex-start; }
-  .step-pills { width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
-  .pill { flex: 0 0 auto; }
-  .phase-tabs { overflow-x: auto; }
-  .phase-tab { flex: 0 0 auto; padding: 8px 12px; }
+.s3-ai-panel { background: var(--bg-surface); }
+.style-ai-hint { padding: var(--space-3); border-radius: var(--radius-sm); background: var(--color-primary-soft); color: var(--text-secondary); font-size: var(--text-xs); line-height: var(--leading-relaxed); }
+
+/* 统一断点：1280 / 1024 / 768；不再用 1400 / 1100 / 700 让位 padding */
+@media (max-width: 1279px) {
+  .s3-workbench {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "main" "assistant";
+  }
+  .s3-workbench > .s3-assistant-col { width: 100%; }
+  .s3-workbench :deep(.s3-ai-panel) { position: static; max-height: 480px; }
+}
+@media (max-width: 1023px) {
+  .s3-workbench {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "main" "assistant";
+  }
+  .s3-workbench > :deep(.evidence-sidebar) { position: static; max-height: 420px; }
+  .s3-workbench :deep(.s3-ai-panel) { max-height: 480px; }
+  .phase-panel.review-panel { grid-template-columns: minmax(0, 1fr); }
+  .review-preview, .review-pages, .review-tool, .review-finish { grid-column: 1; grid-row: auto; }
+  .review-pages { max-height: 320px; }
+}
+@media (max-width: 767px) {
+  .s3-page { padding: var(--space-4); gap: var(--space-3); }
+  .page-head { flex-direction: column; align-items: flex-start; }
+  .page-head__actions { flex-wrap: wrap; }
   .evidence-warning { align-items: flex-start; flex-direction: column; }
-  .evidence-warning div { align-items: flex-start; flex-direction: column; gap: 4px; }
-  .s3-ai-panel { min-height: 520px; }
-  .style-panel { padding: 16px; }
+  .evidence-warning div { align-items: flex-start; flex-direction: column; gap: var(--space-1); }
+  .style-panel { padding: var(--space-4); }
   .style-actions,.gen-complete-actions { flex-direction: column; }
   .style-actions button,.gen-complete-actions button { width: 100%; }
   .preview-frame { height: 360px; }
   .page-item { align-items: flex-start; flex-direction: column; }
   .page-item-right { width: 100%; justify-content: flex-end; }
 }
-.save-state { border: 1px solid #bdd8cb; border-radius: 999px; padding: 6px 10px; background: #fff; color: #42675d; font-size: 12px; cursor: pointer; }
-.save-state.saving { color: #996a14; }.save-state.error { color: #b42318; }
-.save-version { border: 1px solid #2f605a; border-radius: 999px; padding: 6px 11px; background: #2f605a; color: #fff; font-size: 12px; cursor: pointer; }.save-version:disabled{opacity:.55;cursor:not-allowed}
+.save-state.saving { color: var(--color-warning); border-color: var(--color-warning-border); }
+.save-state.error { color: var(--color-danger); border-color: var(--color-danger-border); }
+.save-version:disabled { opacity: 0.48; cursor: not-allowed; }
 .style-panel { max-width: 680px; padding: 22px; border: 1px solid #dce9e3; border-radius: 14px; background: #fff; }
 .style-panel h3 { margin: 0; color: #24483e; }.style-panel p { color: #667b73; font-size: 13px; }
 .style-panel label { display: grid; gap: 6px; margin-top: 14px; color: #365e52; font-size: 13px; font-weight: 600; }
@@ -2192,6 +2406,8 @@ function handleError(msg) {
 }
 .preview-toolbar {
   display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
   justify-content: space-between;
   align-items: center;
   font-size: 13px;
@@ -2291,7 +2507,7 @@ function handleError(msg) {
   margin-bottom: 8px;
 }
 .node-order {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   color: #2f605a;
   background: #e8f5f0;
@@ -2304,7 +2520,7 @@ function handleError(msg) {
   color: #1e293b;
 }
 .node-badge {
-  font-size: 11px;
+  font-size: 12px;
   padding: 2px 8px;
   border-radius: 999px;
   font-weight: 600;
@@ -2366,7 +2582,7 @@ function handleError(msg) {
   margin-top: 8px;
 }
 .key-point-tag {
-  font-size: 11px;
+  font-size: 12px;
   background: #e8f5f0;
   color: #2f605a;
   padding: 2px 8px;
@@ -2472,7 +2688,7 @@ function handleError(msg) {
   border-radius: 999px;
   background: #24a36f;
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 @keyframes pageModified {
@@ -2508,7 +2724,7 @@ function handleError(msg) {
   gap: 8px;
 }
 .page-status-badge {
-  font-size: 11px;
+  font-size: 12px;
   padding: 2px 8px;
   border-radius: 999px;
   font-weight: 600;
@@ -2578,7 +2794,7 @@ function handleError(msg) {
   color: #1e293b;
 }
 .int-node-type {
-  font-size: 11px;
+  font-size: 12px;
   background: #e8f5f0;
   color: #2f605a;
   padding: 1px 6px;
@@ -2648,52 +2864,14 @@ function handleError(msg) {
   cursor: not-allowed;
 }
 
-/* 步骤导航 */
-.step-pills {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+/* 步骤导航已抽为公共组件 StepNav，流程条样式不再在此重复定义 */
+@media (max-width: 767px) {
+  .gen-control-bar { flex-direction: column; align-items: flex-start; }
 }
-.pill {
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
-  color: #5f7467;
-  background: #f0f5f2;
-  border: 1px solid #e2ece6;
-  border-radius: 999px;
-  padding: 6px 14px;
-  text-decoration: none;
-  transition: all 0.15s;
-}
-.pill:hover {
-  border-color: #5ca68f;
-  color: #2f605a;
-}
-.pill.active {
-  color: #fff;
-  background: #2f605a;
-  border-color: #2f605a;
-}
-
-@media (max-width: 760px) {
-  .page-header {
-    flex-direction: column;
-  }
-  .gen-control-bar {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  .phase-tabs {
-    overflow-x: auto;
-  }
-}
-.pill.back-pill {
-  background: #e8f0ed;
-  border-color: #c6d9d0;
-  color: #3d6b60;
-}
-.pill.back-pill:hover {
-  background: #d6e8e0;
+.s3-workbench--review { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'main'; }
+@media (max-width: 767px) {
+  .review-drawer { width: 100vw; }
+  .review-primary-actions > button { flex: 1 1 180px; }
+  .review-toolbar-actions { width: 100%; }
 }
 </style>

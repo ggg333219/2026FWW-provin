@@ -160,6 +160,7 @@ describe('S2 前端链路（mock）', () => {
 
   it('证据融合将教师确认的切片 ID 传给后端', async () => {
     const store = useMaterialStore()
+    store.activeSessionId = 's_selected'
     const evidence = vi.spyOn(teacherV1Api.rag, 'evidence').mockResolvedValueOnce({
       data: { evidence_packet: { relevant_chunks: [{ chunk_id: 'chosen', content: '已选资料内容' }], synthesized_context: '依据', citations: [] } }
     })
@@ -168,6 +169,20 @@ describe('S2 前端链路（mock）', () => {
 
     expect(packet).toBeTruthy()
     expect(evidence).toHaveBeenCalledWith(expect.objectContaining({ selectedChunkIds: ['chosen'] }))
+    expect(JSON.parse(window.localStorage.getItem('fuww_s2_evidence_packet:s_selected')).relevant_chunks[0].chunk_id).toBe('chosen')
+
+    // S3 从该会话缓存取得同一个证据包，并原样送入页面生成请求。
+    const s3Packet = JSON.parse(window.localStorage.getItem('fuww_s2_evidence_packet:s_selected'))
+    let generationBody
+    globalThis.fetch = vi.fn(async (_url, options) => {
+      generationBody = JSON.parse(options.body)
+      return new Response(JSON.stringify({ code: 200, data: { task_id: 'task_selected' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    })
+    await teacherV1Api.generation.createGeneration({ session_id: 's_selected', evidence_packet: s3Packet })
+    expect(generationBody.evidence_packet.relevant_chunks.map(item => item.chunk_id)).toEqual(['chosen'])
   })
 
   it('只有来源 ID 而没有原文的包不能触发大纲生成', () => {
