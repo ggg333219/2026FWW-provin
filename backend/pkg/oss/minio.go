@@ -114,6 +114,19 @@ func (m *MinioClient) UploadFile(ctx context.Context, objectName string, reader 
 	return fmt.Sprintf("%s://%s/%s/%s", scheme, m.endpoint, m.bucket, objectName), nil
 }
 
+// UploadFileReference 上传文件并返回供服务间传递的 MinIO 引用。
+// 与 UploadFile 返回的浏览器访问 URL 不同，minio:// 引用不会暴露内部
+// endpoint，AI Engine 可据此使用自己的容器网络配置下载文件。
+func (m *MinioClient) UploadFileReference(ctx context.Context, objectName string, reader io.Reader, size int64, contentType string) (string, error) {
+	_, err := m.client.PutObject(ctx, m.bucket, objectName, reader, size, minio.PutObjectOptions{
+		ContentType: contentType,
+	})
+	if err != nil {
+		return "", fmt.Errorf("upload failed: %w", err)
+	}
+	return fmt.Sprintf("minio://%s/%s", m.bucket, objectName), nil
+}
+
 // GetFileURL returns a direct public URL for the given object.
 func (m *MinioClient) GetFileURL(ctx context.Context, objectName string, expires time.Duration) (string, error) {
 	scheme := "http"

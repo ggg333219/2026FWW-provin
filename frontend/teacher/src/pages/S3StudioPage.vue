@@ -249,30 +249,6 @@
           </div>
         </div>
 
-        <div v-if="modifyNodeId" class="content-modify-bar" role="dialog" aria-label="AI 修改节点">
-          <div class="content-modify-title">修改第 {{ modifyNodeOrder }} 节内容</div>
-          <input
-            v-model="modifyMessage"
-            class="content-modify-input"
-            placeholder="例如：精简文字并增加一个生活案例"
-            autofocus
-            @keyup.enter="submitModifyNode"
-          />
-          <button
-            class="btn btn-primary"
-            :disabled="!modifyMessage.trim() || contentStore.modifying || scriptSaving"
-            @click="submitModifyNode"
-          >
-            {{ contentStore.modifying ? "AI 修改中..." : scriptSaving ? "保存中…" : "发送修改" }}
-          </button>
-          <button class="btn btn-outline" :disabled="contentStore.modifying || scriptSaving" @click="cancelModifyNode">
-            取消
-          </button>
-          <div v-if="contentStore.modifyError" class="content-modify-error" role="alert">
-            {{ contentStore.modifyError }}
-          </div>
-        </div>
-
         <div v-if="outlineStore.nodes.length === 0" class="pages-empty">
           大纲中暂无节点，请先在大纲编辑中添加节点
         </div>
@@ -463,7 +439,6 @@
             <button v-if="contentStore.nodesContent[activeReviewNode.node_id]" class="btn btn-sm" @click="handleEditNodeScript(activeReviewNode.node_id)">编辑讲稿</button>
             <button v-if="contentStore.nodesContent[activeReviewNode.node_id]" class="btn btn-sm" @click="handleModifyNode(activeReviewNode.node_id)">AI 修改讲稿</button>
           </template>
-          <div v-if="modifyNodeId" class="content-modify-bar" role="dialog" aria-label="AI 修改讲稿"><input v-model="modifyMessage" class="content-modify-input" placeholder="描述希望修改的讲稿内容" @keyup.enter="submitModifyNode" /><button class="btn btn-primary" :disabled="!modifyMessage.trim() || contentStore.modifying || scriptSaving" @click="submitModifyNode">发送修改</button><button class="btn btn-outline" @click="cancelModifyNode">取消</button><div v-if="contentStore.modifyError" class="content-modify-error" role="alert">{{ contentStore.modifyError }}</div></div>
           </section>
 
         <!-- 互动资源入口 -->
@@ -549,6 +524,45 @@
           <footer class="script-edit-footer"><button class="btn btn-outline" :disabled="scriptSaving" @click="cancelEditNodeScript">取消</button><button class="btn btn-primary" :disabled="!editScriptDraft.trim() || scriptSaving" @click="saveEditedNodeScript">{{ scriptSaving ? '保存中…' : '保存讲稿' }}</button></footer>
         </section>
       </div>
+      <div v-if="modifyNodeId" class="s3-modify-overlay" @click.self="cancelModifyNode" @keydown.esc.prevent="cancelModifyNode">
+        <section class="s3-modify-dialog script-ai-dialog" role="dialog" aria-modal="true" aria-labelledby="script-ai-title">
+          <header class="s3-modify-header">
+            <div>
+              <h2 id="script-ai-title">AI 修改讲稿</h2>
+              <p>当前章节：第 {{ modifyNodeOrder }} 节 · {{ modifyNodeTitle }}</p>
+            </div>
+            <button type="button" class="ds-btn ds-btn--ghost ds-btn--sm" :disabled="contentStore.modifying || scriptSaving" @click="cancelModifyNode">关闭</button>
+          </header>
+          <div class="script-ai-body">
+            <p class="s3-modify-notice">描述希望调整的内容，AI 返回结果后会立即写入当前讲稿并刷新预览。</p>
+            <label for="script-ai-message">修改要求</label>
+            <textarea
+              id="script-ai-message"
+              v-model="modifyMessage"
+              class="content-script-textarea script-ai-input"
+              rows="6"
+              maxlength="500"
+              placeholder="例如：精简文字并增加一个生活案例"
+              autofocus
+              @keydown.ctrl.enter.prevent="submitModifyNode"
+            />
+            <div class="script-ai-suggestions">
+              <button type="button" class="btn btn-outline btn-sm" :disabled="contentStore.modifying || scriptSaving" @click="modifyMessage = '精简讲稿，保留核心概念和关键步骤'">精简文字</button>
+              <button type="button" class="btn btn-outline btn-sm" :disabled="contentStore.modifying || scriptSaving" @click="modifyMessage = '补充一个贴近学生生活的案例'">增加案例</button>
+              <button type="button" class="btn btn-outline btn-sm" :disabled="contentStore.modifying || scriptSaving" @click="modifyMessage = '把表达改得更适合课堂讲解'">优化表达</button>
+            </div>
+            <div v-if="contentStore.modifyError" class="content-modify-error" role="alert">
+              {{ contentStore.modifyError }}
+            </div>
+          </div>
+          <footer class="script-edit-footer">
+            <button class="btn btn-outline" :disabled="contentStore.modifying || scriptSaving" @click="cancelModifyNode">取消</button>
+            <button class="btn btn-primary" :disabled="!modifyMessage.trim() || contentStore.modifying || scriptSaving" @click="submitModifyNode">
+              {{ contentStore.modifying ? 'AI 修改中…' : scriptSaving ? '保存中…' : '提交修改' }}
+            </button>
+          </footer>
+        </section>
+      </div>
       <div v-if="modifyDialog" class="s3-modify-overlay" @click.self="closeModifyDialog" @keydown.esc.prevent="closeModifyDialog">
         <section class="s3-modify-dialog" role="dialog" aria-modal="true" aria-labelledby="s3-modify-title">
           <header class="s3-modify-header"><div><h2 id="s3-modify-title">{{ modifyDialog.scope === 'page' ? 'AI 修改本页' : 'AI 修改整套课件' }}</h2><p>{{ modifyDialog.scope === 'page' ? `当前对象：第 ${modifyDialog.pageOrder} 页 · ${modifyDialog.title}` : '当前对象：整套课件' }}</p></div><button type="button" class="ds-btn ds-btn--ghost ds-btn--sm" :disabled="modifyStore.modifying" aria-label="关闭 AI 修改窗口" @click="closeModifyDialog">关闭</button></header>
@@ -597,6 +611,7 @@ const contentStore = useContentStore();
 const modifyNodeId = ref("");
 const modifyMessage = ref("");
 const modifyNodeOrder = computed(() => outlineStore.nodes.findIndex((node) => node.node_id === modifyNodeId.value) + 1);
+const modifyNodeTitle = computed(() => outlineStore.nodes.find((node) => node.node_id === modifyNodeId.value)?.title || "当前节点");
 const editScriptNodeId = ref("");
 const editScriptDraft = ref("");
 const editScriptNodeTitle = computed(() => outlineStore.nodes.find((node) => node.node_id === editScriptNodeId.value)?.title || "当前节点");
@@ -2115,6 +2130,11 @@ function handleError(msg) {
 .script-edit-body { display: grid; gap: var(--space-2); min-height: 0; padding: var(--space-4); overflow: auto; }
 .script-edit-body label { color: var(--text-primary); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
 .script-edit-body .content-script-textarea { min-height: 260px; max-height: 55dvh; overflow: auto; }
+.script-ai-dialog { width: min(640px, 100%); }
+.script-ai-body { display: grid; gap: var(--space-2); min-height: 0; padding: var(--space-4); overflow: auto; }
+.script-ai-body label { color: var(--text-primary); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
+.script-ai-input { min-height: 150px; max-height: 42dvh; resize: vertical; }
+.script-ai-suggestions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .script-edit-footer { display: flex; justify-content: flex-end; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border-subtle); background: var(--bg-surface); }
 .page-task-panel { display: grid; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--color-primary-border); border-radius: var(--radius-md); background: var(--color-primary-soft); }
 .page-task-panel h4, .page-task-panel p { margin: 0; }

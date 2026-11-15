@@ -137,7 +137,7 @@ func main() {
 
 	// ---- 4 Skill + KB 新处理器 ----
 	convHandler := handler.NewConversationHandler(aiClient)
-	parseHandler := handler.NewParseHandler(aiClient)
+	parseHandler := handler.NewParseHandler(aiClient, minioClient)
 	knowledgeHandler := handler.NewKnowledgeHandler(aiClient)
 	// S3 大纲：db 就绪的完整模式走 Postgres 持久化（OutlineService 属跨重启状态管理）。
 	if err := service.AutoMigrateOutline(db); err != nil {
@@ -233,7 +233,7 @@ func newBaseEngine(mode string) *gin.Engine {
 func runS1Standalone(mode string, preferredPort int, runtimeDir string, aiClient service.AIEngine) {
 	r := newBaseEngine(mode)
 	convHandler := handler.NewConversationHandler(aiClient)
-	parseHandler := handler.NewParseHandler(aiClient)
+	parseHandler := handler.NewParseHandler(aiClient, nil)
 	knowledgeHandler := handler.NewKnowledgeHandler(aiClient)
 	outlineService := service.NewOutlineService(aiClient)
 	outlineHandler := handler.NewOutlineHandler(outlineService)

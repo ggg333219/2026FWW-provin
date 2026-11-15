@@ -50,7 +50,15 @@ def validate_pptx(data: bytes) -> dict[str, Any]:
     slide_width = presentation.slide_width
     slide_height = presentation.slide_height
     edge_tolerance = 914400 * 0.02
+    continuation_slides: list[int] = []
     for slide_number, slide in enumerate(presentation.slides, start=1):
+        slide_text = "\n".join(
+            str(getattr(shape, "text", "") or "")
+            for shape in slide.shapes
+            if getattr(shape, "has_text_frame", False)
+        )
+        if "（续" in slide_text or "(续" in slide_text:
+            continuation_slides.append(slide_number)
         for shape in slide.shapes:
             left = shape.left
             top = shape.top
@@ -78,9 +86,16 @@ def validate_pptx(data: bytes) -> dict[str, Any]:
             if has_text and _may_overflow_text(shape):
                 findings.append(_finding(
                     "text_may_overflow", "warning",
-                    "Text may exceed its fixed text-box capacity; visual rendering was not checked.",
+                    "部分页面内容较多，可能超出单页排版范围。目前尚未完成视觉排版检查，导出后请重点检查相关页面。",
                     slide_number,
                 ))
+
+    if continuation_slides:
+        findings.append(_finding(
+            "continuation_pages", "warning",
+            "课件已导出，部分页面内容已延续至后续页面，请检查分页衔接及整体排版。",
+            continuation_slides[0],
+        ))
 
     return _report(findings, slide_count)
 

@@ -264,7 +264,16 @@ export const useMaterialStore = defineStore('material', {
           chunkIds
         })
         const result = resp?.data || null
-        if (!result || Number(result.chunk_count) <= 0) {
+        if (!result) {
+          throw new Error('知识库索引未写入任何切片')
+        }
+        const chunkCount = Number(result.chunk_count)
+        const status = String(result.status || '').toLowerCase()
+        if (chunkCount <= 0) {
+          if (['done', 'completed', 'success', 'indexed'].includes(status)) {
+            this.error = ''
+            return { ...result, no_new_chunks: true }
+          }
           throw new Error('知识库索引未写入任何切片')
         }
         return result
@@ -323,7 +332,7 @@ export const useMaterialStore = defineStore('material', {
         })
         const packet = resp?.data?.evidence_packet || null
         if (isEvidencePacketUsable(packet)) {
-          this.addEvidencePacket(params.query, packet)
+          this.addEvidencePacket(params.query, packet, params.sourceType || 'manual')
           return packet
         }
         this.error = 'RAG 未检索到可用证据，请调整关键词或先索引资料'
@@ -438,11 +447,12 @@ export const useMaterialStore = defineStore('material', {
     },
 
     /** 保存一个证据融合包 */
-    addEvidencePacket(query, packet) {
+    addEvidencePacket(query, packet, sourceType = 'manual') {
       this.evidencePackets.push({
         id: `ev_${Date.now()}`,
         query: String(query || ''),
         createdAt: new Date().toISOString(),
+        sourceType: sourceType === 'automatic' ? 'automatic' : 'manual',
         packet
       })
       // 持久化最新证据包到 localStorage，供 S3 生成环节读取（成员B：S2→S3 证据透传）

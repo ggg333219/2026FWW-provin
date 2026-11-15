@@ -14,6 +14,7 @@ from pptx.util import Inches, Pt
 import ai_engine.main as main_module
 import ai_engine.gen.version as version_module
 from ai_engine.gen.version import VersionManager
+from ai_engine.gen.export_quality import validate_pptx
 from ai_engine.main import app
 
 
@@ -266,8 +267,22 @@ def test_text_fit_warning_keeps_valid_pptx_downloadable(tmp_path, monkeypatch):
         assert result["status"] == "done"
         assert result["quality_report"]["status"] == "passed_with_warnings"
         assert result["quality_report"]["findings"][0]["code"] == "text_may_overflow"
+        assert "部分页面内容较多" in result["quality_report"]["findings"][0]["message"]
         assert result["download_url"]
         assert client.get(result["download_url"]).status_code == 200
+
+
+def test_continuation_slide_shows_teacher_facing_warning():
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1)).text = "排序算法（续 2）"
+    payload = BytesIO()
+    presentation.save(payload)
+
+    report = validate_pptx(payload.getvalue())
+
+    finding = next(item for item in report["findings"] if item["code"] == "continuation_pages")
+    assert finding["message"] == "课件已导出，部分页面内容已延续至后续页面，请检查分页衔接及整体排版。"
 
 
 def test_text_outside_slide_blocks_download(tmp_path, monkeypatch):

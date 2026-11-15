@@ -6,7 +6,7 @@
           <h2>本次依据准备</h2>
           <p>系统依据教学意图查找相关内容。资料列表中的勾选只用于查看片段，不限定自动检索范围。</p>
         </div>
-        <button class="ds-btn ds-btn--secondary ds-btn--sm" type="button" :disabled="autoEvidenceLoading || !automaticQuery" @click="refreshAutomaticEvidence({ force: true })">
+        <button class="ds-btn ds-btn--secondary ds-btn--sm" type="button" :disabled="autoEvidenceLoading || !automaticQuery" @click="refreshAutomaticEvidence({ indexMaterials: true, force: true })">
           {{ autoEvidenceLoading ? '处理中…' : '重新检索' }}
         </button>
       </div>
@@ -16,7 +16,7 @@
         <li><strong>检索结果</strong><span>{{ searchStatusText }}</span></li>
         <li><strong>页面关联</strong><span>进入 S3 后可为草稿或页面关联引用；此处不代表页面内容已核实</span></li>
       </ol>
-      <ErrorState v-if="autoEvidenceState === 'error'" title="资料检索未完成" :description="autoEvidenceError" retry-text="重试检索" inline @retry="refreshAutomaticEvidence({ force: true })" />
+      <ErrorState v-if="autoEvidenceState === 'error'" title="资料检索未完成" :description="autoEvidenceError" retry-text="重试检索" inline @retry="refreshAutomaticEvidence({ indexMaterials: true, force: true })" />
       <div v-else-if="autoEvidenceState === 'empty'" class="ds-notice ds-notice--warning">本次检索没有返回可用参考内容。可调整资料或检索词，也可在下方选择仅按教学意图生成。</div>
     </section>
 
@@ -137,7 +137,19 @@ const autoEvidenceState = ref('idle')
 const lastIndexResponse = ref(null)
 const indexRequestNote = ref('')
 const automaticQuery = computed(() => buildIntentEvidenceQuery(intentStore.intentSummary || {}))
-const activeEvidence = computed(() => [...boundEvidenceList.value].reverse().find(ev => isEvidencePacketUsable(ev.packet)) || null)
+const normalizeEvidenceEntry = (entry) => {
+  if (!entry || typeof entry !== 'object') return null
+  const inferredSource = entry.sourceType || (entry.nodeRef === '整份PPT草稿' ? 'automatic' : 'manual')
+  return {
+    ...entry,
+    sourceType: inferredSource === 'automatic' ? 'automatic' : 'manual',
+    sessionId: entry.sessionId || sessionId.value
+  }
+}
+const isManualEvidence = (entry) => entry?.sourceType !== 'automatic'
+const manualEvidence = computed(() => [...boundEvidenceList.value].reverse().find(ev => isManualEvidence(ev) && isEvidencePacketUsable(ev.packet)) || null)
+const currentAutomaticEvidence = computed(() => [...boundEvidenceList.value].reverse().find(ev => ev.sourceType === 'automatic' && ev.sessionId === sessionId.value && ev.query === automaticQuery.value && isEvidencePacketUsable(ev.packet)) || null)
+const activeEvidence = computed(() => manualEvidence.value || currentAutomaticEvidence.value)
 const referenceItems = computed(() => {
   const packet = activeEvidence.value?.packet
   const chunks = Array.isArray(packet?.relevant_chunks) ? packet.relevant_chunks : []
@@ -164,6 +176,7 @@ const indexStatusText = computed(() => {
 })
 const searchStatusText = computed(() => {
   if (autoEvidenceLoading.value && !materialStore.indexing) return '正在按教学意图检索'
+  if (autoEvidenceState.value === 'manual') return '当前采用教师手动确认的参考片段'
   if (autoEvidenceState.value === 'matched') return `当前采用 ${referenceItems.value.length} 条实际返回的参考片段`
   if (autoEvidenceState.value === 'empty') return '本次未返回可用片段'
   if (autoEvidenceState.value === 'error') return '检索或索引服务异常'
@@ -182,6 +195,8 @@ const handleBindEvidence = (payload) => {
     existing.packet = payload.packet
     existing.createdAt = payload.createdAt
     existing.nodeRef = payload.nodeRef || existing.nodeRef
+    existing.sourceType = 'manual'
+    existing.sessionId = sessionId.value
     boundEvidenceList.value.push(existing)
   } else {
     boundEvidenceList.value.push({
@@ -189,11 +204,13 @@ const handleBindEvidence = (payload) => {
       query: payload.query,
       packet: payload.packet,
       createdAt: payload.createdAt,
-      nodeRef: payload.nodeRef
+      nodeRef: payload.nodeRef,
+      sourceType: 'manual',
+      sessionId: sessionId.value
     })
   }
   persistEvidence()
-  autoEvidenceState.value = 'matched'
+  autoEvidenceState.value = 'manual'
   autoEvidenceError.value = ''
 }
 
@@ -201,9 +218,9 @@ const unbindEvidence = (id) => {
   boundEvidenceList.value = boundEvidenceList.value.filter((ev) => ev.id !== id)
   materialStore.clearEvidencePackets()
   const latest = activeEvidence.value
-  if (latest) materialStore.addEvidencePacket(latest.query, latest.packet)
+  if (latest) materialStore.addEvidencePacket(latest.query, latest.packet, latest.sourceType)
   persistEvidence()
-  autoEvidenceState.value = latest ? 'matched' : 'idle'
+  autoEvidenceState.value = latest ? (latest.sourceType === 'manual' ? 'manual' : 'matched') : 'idle'
 }
 
 const clearEvidence = () => {
@@ -276,26 +293,29 @@ async function refreshAutomaticEvidence({ indexMaterials = false, force = false 
   if (!query || autoEvidenceLoading.value) return null
   // 教师已手动挑选片段时，重进页面不自动覆盖其选择；显式点击重试才重新检索。
   if (!force && activeEvidence.value) {
-    autoEvidenceState.value = 'matched'
+    autoEvidenceState.value = activeEvidence.value.sourceType === 'manual' ? 'manual' : 'matched'
     return activeEvidence.value.packet
   }
   autoEvidenceLoading.value = true
   autoEvidenceError.value = ''
   autoEvidenceState.value = 'loading'
   try {
+    // 新 query 开始前，清理旧自动证据的 S3 交接；教师明确确认的手动证据保留。
+    const preservedManual = manualEvidence.value
+    materialStore.clearEvidencePackets()
+    if (preservedManual) {
+      materialStore.addEvidencePacket(preservedManual.query, preservedManual.packet, 'manual')
+    }
     if (indexMaterials && materialStore.allChunks.length) {
       lastIndexResponse.value = null
       indexRequestNote.value = ''
       const indexed = await materialStore.indexKnowledgeBase({ sessionId: sessionId.value })
       if (!indexed) {
-        if (materialStore.error === '知识库索引未写入任何切片') {
-          // 重复索引可能没有新增片段；是否有内容可用以随后真实检索为准。
-          indexRequestNote.value = '本次未新增片段；继续检索已有内容'
-        } else {
-          autoEvidenceError.value = materialStore.error || '知识库索引失败'
-          autoEvidenceState.value = 'error'
-          return null
-        }
+        autoEvidenceError.value = materialStore.error || '知识库索引失败'
+        autoEvidenceState.value = 'error'
+        return null
+      } else if (indexed.no_new_chunks) {
+        indexRequestNote.value = '本次未新增片段；继续检索已有内容'
       } else {
         lastIndexResponse.value = indexed
         indexRequestNote.value = ''
@@ -304,21 +324,29 @@ async function refreshAutomaticEvidence({ indexMaterials = false, force = false 
     const packet = await materialStore.generateEvidence({
       query,
       context: { intent: intentStore.intentSummary || {}, binding_scope: 'draft', auto_bind: true },
+      sourceType: 'automatic'
     })
     if (!isEvidencePacketUsable(packet)) {
       autoEvidenceError.value = materialStore.error || '知识库暂未返回可用证据'
       autoEvidenceState.value = materialStore.error?.startsWith('RAG 未检索到') ? 'empty' : 'error'
       return null
     }
+    if (preservedManual) {
+      // 自动检索结果仅作为新的自动记录展示，不覆盖教师已确认的手动交接。
+      materialStore.clearEvidencePackets()
+      materialStore.addEvidencePacket(preservedManual.query, preservedManual.packet, 'manual')
+    }
     boundEvidenceList.value = [{
       id: `ev_auto_${Date.now()}`,
       query,
       packet,
       createdAt: new Date().toISOString(),
+      sourceType: 'automatic',
       nodeRef: '整份PPT草稿',
+      sessionId: sessionId.value,
     }]
     persistEvidence()
-    autoEvidenceState.value = 'matched'
+    autoEvidenceState.value = preservedManual ? 'manual' : 'matched'
     showInlineToast('已找到可供课件生成参考的资料片段')
     return packet
   } catch (error) {
@@ -367,9 +395,13 @@ onMounted(async () => {
       if (evRaw) {
         const parsed = JSON.parse(evRaw)
         if (Array.isArray(parsed)) {
-          boundEvidenceList.value = parsed
+          boundEvidenceList.value = parsed.map(normalizeEvidenceEntry).filter(Boolean)
           const latest = activeEvidence.value?.packet
-          if (latest) window.localStorage.setItem(`fuww_s2_evidence_packet:${sessionId.value}`, JSON.stringify(latest))
+          materialStore.clearEvidencePackets()
+          if (activeEvidence.value) {
+            materialStore.addEvidencePacket(activeEvidence.value.query, activeEvidence.value.packet, activeEvidence.value.sourceType)
+            if (latest) window.localStorage.setItem(`fuww_s2_evidence_packet:${sessionId.value}`, JSON.stringify(latest))
+          }
         }
       }
     } catch {
