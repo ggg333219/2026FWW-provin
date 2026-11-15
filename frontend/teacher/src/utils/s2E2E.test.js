@@ -331,7 +331,7 @@ describe('S2 前端链路（mock）', () => {
     expect(store.allChunks).toHaveLength(0)
   })
 
-  it('chunk_count为零时索引失败，不报告成功', async () => {
+  it('chunk_count为零但后端返回完成时识别为重复索引，不阻断后续检索', async () => {
     const store = useMaterialStore()
     const upload = vi.spyOn(teacherV1Api.rag, 'knowledgeUpload').mockResolvedValueOnce({
       data: { task_id: 'kb_empty', status: 'done', chunk_count: 0 }
@@ -345,8 +345,34 @@ describe('S2 前端链路（mock）', () => {
       texts: [],
       chunkIds: []
     })
+    expect(result).toEqual(expect.objectContaining({ no_new_chunks: true }))
+    expect(store.error).toBe('')
+  })
+
+  it('chunk_count为零且没有成功状态时仍视为索引失败', async () => {
+    const store = useMaterialStore()
+    const upload = vi.spyOn(teacherV1Api.rag, 'knowledgeUpload').mockResolvedValueOnce({
+      data: { task_id: 'kb_empty_failed', status: 'failed', chunk_count: 0 }
+    })
+
+    const result = await store.indexKnowledgeBase({ sessionId: 'sess_empty_index_failed' })
+
+    expect(upload).toHaveBeenCalled()
     expect(result).toBe(null)
     expect(store.error).toContain('未写入任何切片')
+  })
+
+  it('自动证据带来源类型，手动证据保持默认手动来源', async () => {
+    const store = useMaterialStore()
+    const evidence = vi.spyOn(teacherV1Api.rag, 'evidence').mockResolvedValue({
+      data: { evidence_packet: { relevant_chunks: [{ chunk_id: 'auto-1', content: '自动片段' }], citations: [] } }
+    })
+
+    await store.generateEvidence({ query: '自动检索', sourceType: 'automatic' })
+    await store.generateEvidence({ query: '手动检索' })
+
+    expect(evidence).toHaveBeenCalledTimes(2)
+    expect(store.evidencePackets.map((item) => item.sourceType)).toEqual(['automatic', 'manual'])
   })
 
   it('PDF/二进制文件不产生乱码切片（%PDF 应回退为种子内容）', async () => {

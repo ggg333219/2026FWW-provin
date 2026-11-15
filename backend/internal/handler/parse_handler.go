@@ -11,15 +11,17 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"smart-teaching-backend/internal/service"
+	"smart-teaching-backend/pkg/oss"
 )
 
 // ParseHandler S2 多模态解析 — HTTP 处理器
 type ParseHandler struct {
-	aiClient service.AIEngine
+	aiClient  service.AIEngine
+	ossClient *oss.MinioClient
 }
 
-func NewParseHandler(aiClient service.AIEngine) *ParseHandler {
-	return &ParseHandler{aiClient: aiClient}
+func NewParseHandler(aiClient service.AIEngine, ossClient *oss.MinioClient) *ParseHandler {
+	return &ParseHandler{aiClient: aiClient, ossClient: ossClient}
 }
 
 // parseUploadDir 返回 S2 上传文件的落盘目录（Go 与 ai_engine 同机时引擎可直接读取）。
@@ -53,8 +55,7 @@ func sourceTypeFromName(name string) string {
 	}
 }
 
-// Upload POST /api/v1/parse/upload — 接收 multipart 文件，落盘到引擎可读目录，
-// 返回本地路径供 parse/process 使用（真实后端解析磁盘文件）。
+// Upload POST /api/v1/parse/upload — 接收 multipart 文件，返回供 parse/process 使用的文件引用。
 func (h *ParseHandler) Upload(c *gin.Context) {
 	sessionID := strings.TrimSpace(c.PostForm("session_id"))
 	file, err := c.FormFile("file")
@@ -62,19 +63,44 @@ func (h *ParseHandler) Upload(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "请选择文件: " + err.Error()})
 		return
 	}
-
-	// 会话子目录 + 时间戳前缀，避免同名文件互相覆盖
-	base := filepath.Join(parseUploadDir(), sanitizePathSegment(sessionID))
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建上传目录失败: " + err.Error()})
-		return
-	}
-	// 保留原始文件名便于引擎按扩展名推断类型，同时避免路径穿越
 	cleanName := sanitizePathSegment(filepath.Base(file.Filename))
 	if cleanName == "" || cleanName == "." {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "文件名非法"})
 		return
 	}
+
+	// 会话子目录 + 时间戳前缀，避免同名文件互相覆盖。
+	// 正常部署中后端与 AI Engine 位于不同容器，必须使用共享 MinIO
+	// 引用，不能把后端容器的 /tmp 路径直接交给 AI Engine。
+	if h.ossClient != nil {
+		src, err := file.Open()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "打开上传文件失败: " + err.Error()})
+			return
+		}
+		defer src.Close()
+		objectName := filepath.ToSlash(filepath.Join("s2-parse", sanitizePathSegment(sessionID), fmt.Sprintf("%d_%s", time.Now().UnixNano(), cleanName)))
+		ref, err := h.ossClient.UploadFileReference(c.Request.Context(), objectName, src, file.Size, file.Header.Get("Content-Type"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "上传解析文件到对象存储失败: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
+			"file_path":   ref,
+			"file_name":   file.Filename,
+			"file_size":   file.Size,
+			"source_type": sourceTypeFromName(file.Filename),
+		}})
+		return
+	}
+
+	// 无 MinIO 的 S1 轻量模式仍使用本地临时文件。
+	base := filepath.Join(parseUploadDir(), sanitizePathSegment(sessionID))
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "创建上传目录失败: " + err.Error()})
+		return
+	}
+	// 保留原始文件名便于引擎按扩展名推断类型，同时避免路径穿越。
 	dest := filepath.Join(base, fmt.Sprintf("%d_%s", time.Now().UnixNano(), cleanName))
 
 	// 统一路径分隔符为前斜杠，确保 JSON 序列化时不会产生无效的 \U 转义序列
